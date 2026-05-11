@@ -1,4 +1,4 @@
-/world/
-node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
 *.log
-.DS_Store
