@@ -33,10 +33,3 @@ export function readState(worldRoot: string): WorldState {
   if (!existsSync(path)) throw new Error(`no state.json at ${path}`)
   return JSON.parse(readFileSync(path, 'utf8')) as WorldState
 }
-
-export function touchState(worldRoot: string, patch: Partial<WorldState>): WorldState {
-  const cur = readState(worldRoot)
-  const next: WorldState = { ...cur, ...patch, updated_at: new Date().toISOString() }
-  writeState(worldRoot, next)
-  return next
-}

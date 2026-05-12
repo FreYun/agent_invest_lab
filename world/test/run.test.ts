@@ -113,3 +113,36 @@ test('runWorld fails fast when a quotes.json is missing', async () => {
   if (existsSync(P.stateFile(worldRoot))) assert.equal(readState(worldRoot).status, 'failed')
   cleanup()
 })
+
+test('runWorld: a bot whose process exits mid-chat is recorded dead and the run still finishes', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1', 'bot7'], dates: ['2024-03-14', '2024-03-15'] })
+  const start = (botId: string, _argv: string[]) => BotServer.start(botId, {
+    argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+    readyTimeoutMs: 5000,
+    env: botId === 'bot7' ? { STUB_CHAT_MODE: 'exit' } : {},
+  })
+  await runWorld({ worldRoot, config, runId: 'rdead', startBotServer: start })
+  assert.equal(readState(worldRoot).status, 'done')
+  // bot1 ok on both days
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-15', 'bot1'), 'utf8')).status, 'ok')
+  // bot7 dead on day1 (process exits during chat); day2 also dead (disabled)
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-14', 'bot7'), 'utf8')).status, 'dead')
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-15', 'bot7'), 'utf8')).status, 'dead')
+  cleanup()
+})
+
+test('runWorld aborts (status=aborted) when a STOP sentinel is present', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15', '2024-03-18'] })
+  // 在 runWorld 之前就把 STOP 哨兵放好（直接写 P.stopFile 路径）
+  const stopPath = P.stopFile(worldRoot, 'rstop')
+  mkdirSync(dirname(stopPath), { recursive: true })
+  writeFileSync(stopPath, 'stop\n')
+  await runWorld({ worldRoot, config, runId: 'rstop', startBotServer: stubStartBotServer })
+  const st = readState(worldRoot)
+  assert.equal(st.status, 'aborted')
+  // 循环在第一次迭代顶部就发现 STOP → cursor 停在 0，没有任何当天产物
+  assert.equal(st.cursor, 0)
+  assert.equal(existsSync(P.sentFile(worldRoot, 'rstop', '2024-03-14', 'bot1')), false)
+  cleanup()
+})

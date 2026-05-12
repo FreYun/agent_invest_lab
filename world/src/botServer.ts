@@ -34,7 +34,6 @@ export class BotServer {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly client: JsonRpcStdioClient
   private _alive = true
-  private exitHandlers: ((code: number | null) => void)[] = []
 
   private constructor(botId: string, child: ChildProcessWithoutNullStreams, client: JsonRpcStdioClient, onLog?: (l: string) => void) {
     this.botId = botId
@@ -45,7 +44,7 @@ export class BotServer {
     // stdout close fires before the child 'exit' event; mark alive=false early so
     // that callers see it flipped when any pending request rejects due to stream close.
     child.stdout.on('close', () => { this._alive = false })
-    child.on('exit', (code) => { this._alive = false; for (const h of this.exitHandlers) h(code) })
+    child.on('exit', () => { this._alive = false })
   }
 
   static async start(botId: string, opts: BotServerOptions): Promise<BotServer> {
@@ -64,8 +63,6 @@ export class BotServer {
   }
 
   get alive(): boolean { return this._alive }
-
-  onExit(handler: (code: number | null) => void): void { this.exitHandlers.push(handler) }
 
   async ping(): Promise<{ pong: boolean; bot_id: string; workspace: string; model: string }> {
     return this.client.request('ping', {})

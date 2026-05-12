@@ -49,7 +49,6 @@ interface SetupResult {
   tradingDates: string[]
   memory: MemoryServerHandle
   bots: { botId: string; server: BotServer }[]
-  getCurrentDate: () => string
   currentDateRef: { value: string }
 }
 
@@ -104,7 +103,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     throw err
   }
 
-  return { tradingDates, memory, bots, getCurrentDate, currentDateRef }
+  return { tradingDates, memory, bots, currentDateRef }
 }
 
 interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string }
@@ -132,6 +131,17 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
     writeStatus(s)
     return s
   }
+}
+
+/** Write artifacts for a bot whose chat we deliberately skipped (it was disabled by an earlier timeout/dead). */
+function writeSkippedDeadBot(worldRoot: string, runId: string, date: string, message: string, b: { botId: string; server: BotServer }): DayBotStatus {
+  const dir = P.botDayDir(worldRoot, runId, date, b.botId)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(P.sentFile(worldRoot, runId, date, b.botId), message)
+  const now = new Date().toISOString()
+  const s: DayBotStatus = { bot: b.botId, status: 'dead', ms: 0, error: 'disabled after a prior timeout/dead' }
+  writeFileSync(P.statusFile(worldRoot, runId, date, b.botId), JSON.stringify({ status: s.status, started_at: now, finished_at: now, error: s.error }, null, 2) + '\n')
+  return s
 }
 
 interface DaySummary { date: string; bots: DayBotStatus[] }
@@ -178,6 +188,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   const dates = setupRes.tradingDates
   const days: DaySummary[] = []
   const perBotTimeoutMs = config.perBotTimeoutSeconds * 1000
+  // 一旦某个 bot 在某天 timeout/dead，它的 server 可能还在处理上一天的请求（research-loop-ts 不串行化），
+  // 之后的每一天都直接记 dead、不再向它发 chat。
+  const brokenBots = new Set<string>()
   let aborted = false
   const onSigint = (): void => { aborted = true; log(worldRoot, runId, 'SIGINT received — will abort after current day') }
   process.on('SIGINT', onSigint)
@@ -195,8 +208,10 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       const statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
         const message = renderDailyMessage({ worldRoot, date, isFirstDay, quotesPath: quotesAbs, journalRelPath: JOURNAL_REL })
+        if (brokenBots.has(b.botId)) return writeSkippedDeadBot(worldRoot, runId, date, message, b)
         return chatOneBot(worldRoot, runId, date, message, perBotTimeoutMs, b)
       })
+      for (const s of statuses) { if (s.status === 'timeout' || s.status === 'dead') brokenBots.add(s.bot) }
       days.push({ date, bots: statuses })
       log(worldRoot, runId, `day ${date} done: ${statuses.map(s => `${s.bot}=${s.status}`).join(' ')}`)
       const st = readState(worldRoot)

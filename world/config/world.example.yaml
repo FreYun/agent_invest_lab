@@ -28,9 +28,10 @@ per_bot_timeout_seconds: 1200
 # 给 research-loop-ts 用的 rl-config 基底；默认相对本文件 → ../config/trading-rl-config.base.json
 # rl_config_base: /path/to/trading-rl-config.base.json
 
-# research-loop-ts 的 openclaw_dir（用于解析模型 API key 等）。保持默认即可；
-# 若想让 bot 的 session 存档也隔离，指向一个你自建了 openclaw.json 的影子目录。
+# research-loop-ts 的 openclaw_dir：控制 bot 的 session/事件/brief 存档写到哪（不影响模型 API key 解析——
+# 那读的是硬编码的 /home/rooot/.openclaw/openclaw.json）。默认指向真实 .openclaw 目录；
+# 想让回测的 session 存档也隔离，可指向一个空目录（API key 仍能解析）。
 # rl_openclaw_dir: /home/rooot/.openclaw
 
 # 影子 workspace 从 workspace-botN 复制哪些条目（默认见 src/config.ts DEFAULT_SHADOW_INCLUDE）
-# shadow_include: [IDENTITY.md, SOUL.md, AGENTS.md, USER.md, METHODOLOGY.md, RESEARCH.md, MEMORY.md, EQUIPPED_SKILLS.md, TOOLS.md, skills, config]
+# shadow_include: [IDENTITY.md, SOUL.md, AGENTS.md, USER.md, METHODOLOGY.md, RESEARCH.md, MEMORY.md, EQUIPPED_SKILLS.md, TOOLS.md, skills]

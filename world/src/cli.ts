@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { loadWorldConfig } from './config.ts'
 import { runWorld, resumeWorld, requestStop } from './run.ts'
@@ -46,6 +46,16 @@ async function cmdRun(args: CliArgs): Promise<number> {
   if (stateExists(worldRoot)) {
     const st = readState(worldRoot)
     if (st.status === 'running') { process.stderr.write(`run: a run "${st.run_id}" is already running (status=running). Use "world resume" or "world stop" first.\n`); return 2 }
+    // 归档上一个（非运行中的）run 的 state，再让本次 run 覆盖 worldRoot/state.json
+    try {
+      const oldStatePath = P.stateFile(worldRoot)
+      const oldRunDir = P.runDir(worldRoot, st.run_id)
+      const prevPath = join(oldRunDir, 'state.json.prev')
+      if (!existsSync(prevPath)) {
+        mkdirSync(oldRunDir, { recursive: true })
+        copyFileSync(oldStatePath, prevPath)
+      }
+    } catch { /* 归档失败不阻塞本次 run */ }
   }
   const config = loadWorldConfig(args.config)
   const runId = args.runId ?? deriveRunId()

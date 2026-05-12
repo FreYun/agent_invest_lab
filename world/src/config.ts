@@ -5,7 +5,7 @@ import { parse as parseYaml } from 'yaml'
 export const DEFAULT_SHADOW_INCLUDE = [
   'IDENTITY.md', 'SOUL.md', 'AGENTS.md', 'USER.md',
   'METHODOLOGY.md', 'RESEARCH.md', 'MEMORY.md',
-  'EQUIPPED_SKILLS.md', 'TOOLS.md', 'skills', 'config',
+  'EQUIPPED_SKILLS.md', 'TOOLS.md', 'skills',
 ]
 
 export interface WorldConfig {
