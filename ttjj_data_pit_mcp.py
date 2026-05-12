@@ -172,3 +172,375 @@ def _pit_wrap(result: dict, cutoff: date, as_of_label: str, *, generic_filter: b
 
 def _err(e: Exception) -> dict[str, Any]:
     return {"error": "request_error", "message": str(e)}
+
+
+# ===========================================================================
+#  基金 — 有日期参数
+# ===========================================================================
+
+@_mcp.tool()
+def fund_nav(
+    as_of_date: str,
+    fund_codes: list[str],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """基金净值历史（时点版：只返回 as_of_date 当天及之前；end_date 会被裁剪到 as_of_date）。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"fund_codes": fund_codes}
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/fund/nav", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def fund_index_return(
+    as_of_date: str,
+    fund_codes: list[str],
+    trade_date: Optional[str] = None,
+    period_codes: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """基金指数超额收益（时点版）。period_codes: 00近一周/01近一月/02近三月/03近一年/05近两年/06近三年。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("trade_date", trade_date, cutoff)):
+        return e
+    try:
+        d: dict = {"fund_codes": fund_codes, "trade_date": trade_date or cutoff.isoformat()}
+        if period_codes:
+            d["period_codes"] = period_codes
+        return _pit_wrap(_post("/api/fund/index-return", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def fund_bonus(as_of_date: str, fund_code: str, date: Optional[str] = None) -> dict[str, Any]:
+    """基金分红记录（时点版）。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("date", date, cutoff)):
+        return e
+    try:
+        return _pit_wrap(_post("/api/fund/bonus", {"fund_code": fund_code, "date": date or cutoff.isoformat()}),
+                         cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def fund_abnormal_movement(
+    as_of_date: str,
+    fund_code: str,
+    start_date: Optional[str] = None,
+    direction: Optional[str] = None,
+) -> dict[str, Any]:
+    """基金异动检测（时点版）。direction: '大涨' 或 '跳水'。注意 as_of_date 之后的异动不会返回。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"fund_code": fund_code}
+        if start_date:
+            d["start_date"] = start_date
+        if direction:
+            d["direction"] = direction
+        return _pit_wrap(_post("/api/fund/abnormal-movement", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+# ===========================================================================
+#  市场 / 商品 / 债券
+# ===========================================================================
+
+@_mcp.tool()
+def market_index_quote(
+    as_of_date: str,
+    market: str,
+    symbols: list[str],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """指数行情（时点版）。market 必须小写: cn/hk/us。港股可传中文名如 '恒生指数'。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"market": market, "symbols": symbols}
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/market/index-quote", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def commodity_market(
+    as_of_date: str,
+    symbols: Optional[list[str]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """商品行情（时点版）。symbols 可传中文如 '黄金', '原油'。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {}
+        if symbols:
+            d["symbols"] = symbols
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/commodity/market", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def bond_yield_curve(as_of_date: str, date: Optional[str] = None) -> dict[str, Any]:
+    """国债收益率曲线（时点版）。不传 date 则取 as_of_date 当天的曲线。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("date", date, cutoff)):
+        return e
+    try:
+        return _pit_wrap(_post("/api/bond/yield-curve", {"date": date or cutoff.isoformat()}),
+                         cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+# ===========================================================================
+#  股票
+# ===========================================================================
+
+@_mcp.tool()
+def stock_market(
+    as_of_date: str,
+    stock_codes: list[str],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    trade_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """股票行情（时点版）：行情记录[] + 市值记录[] + 估值记录[] + 股息率记录[]。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    if (e := _reject_if_future("trade_date", trade_date, cutoff)):
+        return e
+    try:
+        d: dict = {"stock_codes": stock_codes}
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        if trade_date:
+            d["trade_date"] = trade_date
+        return _pit_wrap(_post("/api/stock/market", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def stock_capital_flow(
+    as_of_date: str,
+    stock_codes: list[str],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """股票资金流向（时点版）：资金流记录[] + 北向持股记录[] + 超大单资金记录[]。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"stock_codes": stock_codes}
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/stock/capital-flow", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def stock_ownership(
+    as_of_date: str,
+    stock_codes: list[str],
+    report_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """股权结构（时点版）：股东记录[] + 股本结构记录[] + 股权分配记录[]。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("report_date", report_date, cutoff)):
+        return e
+    try:
+        return _pit_wrap(
+            _post("/api/stock/ownership", {"stock_codes": stock_codes, "report_date": report_date or cutoff.isoformat()}),
+            cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def stock_financial_quality(
+    as_of_date: str,
+    stock_codes: list[str],
+    trade_date: Optional[str] = None,
+    d_type: str = "TTM",
+) -> dict[str, Any]:
+    """财务质量（时点版）：盈利能力记录[] + 收益质量记录[] 等。d_type: TTM/ANNUAL/QUARTERLY。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("trade_date", trade_date, cutoff)):
+        return e
+    try:
+        return _pit_wrap(
+            _post("/api/stock/financial-quality",
+                  {"stock_codes": stock_codes, "d_type": d_type, "trade_date": trade_date or cutoff.isoformat()}),
+            cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def stock_alpha(
+    as_of_date: str,
+    stock_codes: list[str],
+    trade_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """Alpha 因子（时点版）：一致预期记录[] + Barra暴露记录[] 等。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("trade_date", trade_date, cutoff)):
+        return e
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"stock_codes": stock_codes}
+        if trade_date:
+            d["trade_date"] = trade_date
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/stock/alpha", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def stock_events(
+    as_of_date: str,
+    stock_codes: list[str],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """股票事件（时点版）：停复牌记录[] + SUE记录[]。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"stock_codes": stock_codes}
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/stock/events", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+# ===========================================================================
+#  宏观 / 研究
+# ===========================================================================
+
+@_mcp.tool()
+def macro_data(
+    as_of_date: str,
+    region: str,
+    categories: Optional[list[str]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """宏观数据（时点版）。region: cn/us。categories 小写: gdp, cpi, pmi, m2, social_finance, exchange_rate 等。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"region": region}
+        if categories:
+            d["categories"] = categories
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/macro/data", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def research_view(
+    as_of_date: str,
+    view_type: str,
+    labels: Optional[list[str]] = None,
+    sec_codes: Optional[list[str]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    direction: Optional[int] = None,
+    latest_only: bool = True,
+    weeks: int = 1,
+    fund_code: Optional[str] = None,
+    days: int = 7,
+) -> dict[str, Any]:
+    """研究观点（时点版）。view_type: sector(行业观点,需labels)/weekly(周报,需labels)/fund_related(需fund_code)。"""
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
+        return e
+    try:
+        d: dict = {"view_type": view_type, "latest_only": latest_only, "weeks": weeks, "days": days}
+        if labels:
+            d["labels"] = labels
+        if sec_codes:
+            d["sec_codes"] = sec_codes
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        if direction is not None:
+            d["direction"] = direction
+        if fund_code:
+            d["fund_code"] = fund_code
+        return _pit_wrap(_post("/api/research/view", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)
