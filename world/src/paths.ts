@@ -8,6 +8,7 @@ export const overviewFile = (w: string, date: string) => join(dayDir(w, date), '
 export const eventsFile = (w: string, date: string) => join(dayDir(w, date), 'events.json')
 export const runDir = (w: string, runId: string) => join(w, 'runs', runId)
 export const runConfigFile = (w: string, runId: string) => join(runDir(w, runId), 'trading-rl-config.json')
+export const rlOpenclawDir = (w: string, runId: string) => join(runDir(w, runId), 'rl-openclaw')
 export const workspacesDir = (w: string, runId: string) => join(runDir(w, runId), 'workspaces')
 export const shadowWorkspaceDir = (w: string, runId: string, bot: string) => join(workspacesDir(w, runId), bot)
 export const memoryDir = (w: string, runId: string) => join(runDir(w, runId), 'memory')

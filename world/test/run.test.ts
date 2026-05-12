@@ -49,7 +49,6 @@ function setupWorldDir(opts: { bots: string[]; dates: string[]; withSrcWorkspace
     concurrency: 4,
     perBotTimeoutSeconds: 30,
     rlConfigBase: cfgBase,
-    rlOpenclawDir: join(root, 'fake-openclaw'),
     shadowInclude: ['SOUL.md'],
   }
   return { worldRoot, config, cleanup: () => rmSync(root, { recursive: true, force: true }) }
@@ -80,9 +79,11 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   // 影子 workspace + journal
   assert.match(readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'SOUL.md'), 'utf8'), /soul bot7/)
   assert.ok(existsSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'memory', 'trading', 'journal.md')))
-  // 生成的 rl-config 写入了 mem0 url
+  // 生成的 rl-config 写入了 mem0 url；openclaw_dir 指向 run 专属目录且已创建
   const genCfg = JSON.parse(readFileSync(P.runConfigFile(worldRoot, 'r1'), 'utf8'))
   assert.match(genCfg.mcp.mem0, /^http:\/\/127\.0\.0\.1:\d+$/)
+  assert.equal(genCfg.openclaw_dir, join(P.runDir(worldRoot, 'r1'), 'rl-openclaw'))
+  assert.equal(existsSync(genCfg.openclaw_dir), true)
   // summary.json
   const summary = JSON.parse(readFileSync(P.summaryFile(worldRoot, 'r1'), 'utf8'))
   assert.equal(summary.run_id, 'r1')

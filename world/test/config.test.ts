@@ -29,7 +29,7 @@ replay: { from: "2024-01-02", to: "2024-06-28" }
   assert.equal(isAbsolute(c.calendar), true)
   assert.equal(c.concurrency, 4)
   assert.equal(c.perBotTimeoutSeconds, 1200)
-  assert.equal(c.rlOpenclawDir, '/home/rooot/.openclaw')
+  assert.equal(c.rlOpenclawDir, undefined)
   assert.deepEqual(c.shadowInclude, DEFAULT_SHADOW_INCLUDE)
   rmSync(p, { force: true })
 })

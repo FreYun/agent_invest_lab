@@ -17,7 +17,7 @@ export interface WorldConfig {
   concurrency: number
   perBotTimeoutSeconds: number
   rlConfigBase: string
-  rlOpenclawDir: string
+  rlOpenclawDir?: string
   shadowInclude: string[]
 }
 
@@ -67,7 +67,7 @@ export function loadWorldConfig(path: string): WorldConfig {
   const rlConfigBase = typeof raw.rl_config_base === 'string' && raw.rl_config_base.trim()
     ? resolveMaybe(baseDir, raw.rl_config_base)
     : resolveMaybe(baseDir, '../config/trading-rl-config.base.json')
-  const rlOpenclawDir = typeof raw.rl_openclaw_dir === 'string' && raw.rl_openclaw_dir.trim() ? raw.rl_openclaw_dir : '/home/rooot/.openclaw'
+  const rlOpenclawDir = typeof raw.rl_openclaw_dir === 'string' && raw.rl_openclaw_dir.trim() ? raw.rl_openclaw_dir : undefined
   const shadowInclude = Array.isArray(raw.shadow_include) && raw.shadow_include.every(x => typeof x === 'string')
     ? (raw.shadow_include as string[])
     : DEFAULT_SHADOW_INCLUDE

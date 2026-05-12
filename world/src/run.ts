@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { WorldConfig } from './config.ts'
 import { loadCalendar, computeTradingDates } from './calendar.ts'
@@ -34,14 +34,14 @@ function log(worldRoot: string, runId: string, msg: string): void {
   process.stdout.write(`[world ${runId}] ${msg}\n`)
 }
 
-function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string, memoryUrl: string): void {
+function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string, memoryUrl: string, openclawDir: string): void {
   let base: Record<string, unknown>
   try { base = JSON.parse(readFileSync(config.rlConfigBase, 'utf8')) as Record<string, unknown> }
   catch (err) { throw new Error(`cannot read rl_config_base ${config.rlConfigBase}: ${err instanceof Error ? err.message : String(err)}`) }
   const mcp = (typeof base.mcp === 'object' && base.mcp ? base.mcp : {}) as Record<string, unknown>
   mcp.mem0 = memoryUrl
   base.mcp = mcp
-  base.openclaw_dir = config.rlOpenclawDir
+  base.openclaw_dir = openclawDir
   writeFileSync(P.runConfigFile(worldRoot, runId), JSON.stringify(base, null, 2) + '\n')
 }
 
@@ -65,11 +65,19 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   const missing = tradingDates.filter(d => !existsSync(P.quotesFile(worldRoot, d)))
   if (missing.length) throw new Error(`missing quotes.json for ${missing.length} trading day(s): ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ', …' : ''}`)
 
+  const rlOpenclawDir = config.rlOpenclawDir ?? P.rlOpenclawDir(worldRoot, runId)
+
   // 目录
   mkdirSync(P.runDir(worldRoot, runId), { recursive: true })
   mkdirSync(P.memoryDir(worldRoot, runId), { recursive: true })
   mkdirSync(P.workspacesDir(worldRoot, runId), { recursive: true })
-  mkdirSync(config.rlOpenclawDir, { recursive: true })
+  mkdirSync(rlOpenclawDir, { recursive: true })
+  // 把 openclaw.json 复制进 run 专属 openclaw 目录（research-loop-ts 的 openclaw_dir → session/事件存档落这里，与真实 .openclaw 隔离）
+  const srcOpenclawJson = join(config.workspaceRoot, 'openclaw.json')
+  const dstOpenclawJson = join(rlOpenclawDir, 'openclaw.json')
+  if (existsSync(srcOpenclawJson) && !existsSync(dstOpenclawJson)) {
+    try { copyFileSync(srcOpenclawJson, dstOpenclawJson) } catch { /* 非致命 */ }
+  }
   log(worldRoot, runId, `setup: ${tradingDates.length} trading days ${tradingDates[0]} .. ${tradingDates[tradingDates.length - 1]}, bots=[${config.bots.join(', ')}]`)
 
   // 记忆服务（进程内）
@@ -81,7 +89,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   log(worldRoot, runId, `memory server at ${memory.url}`)
 
   // 生成 rl-config
-  generateRlConfig(config, worldRoot, runId, memory.url)
+  generateRlConfig(config, worldRoot, runId, memory.url, rlOpenclawDir)
 
   // 影子 workspace + bot server
   const bots: { botId: string; server: BotServer }[] = []

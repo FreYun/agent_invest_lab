@@ -15,6 +15,7 @@ test('path helpers compose under worldRoot', () => {
   assert.equal(P.runDir(W, R), '/tmp/wr/runs/run1')
   assert.equal(P.runConfigFile(W, R), '/tmp/wr/runs/run1/trading-rl-config.json')
   assert.equal(P.shadowWorkspaceDir(W, R, 'bot7'), '/tmp/wr/runs/run1/workspaces/bot7')
+  assert.equal(P.rlOpenclawDir(W, R), '/tmp/wr/runs/run1/rl-openclaw')
   assert.equal(P.memoryStoreFile(W, R), '/tmp/wr/runs/run1/memory/store.jsonl')
   assert.equal(P.memoryRuntimeFile(W, R), '/tmp/wr/runs/run1/memory/runtime.json')
   assert.equal(P.botDayDir(W, R, '2024-03-15', 'bot7'), '/tmp/wr/runs/run1/2024-03-15/bot7')
