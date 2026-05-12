@@ -15,7 +15,7 @@ export interface CliArgs {
 const HELP = `world — agent_invest_lab 日度滚动金融世界系统
 
 用法:
-  world run    --config <world.yaml> [--run-id <id>] [--world-dir <dir>]   开新 run（默认 --world-dir ./world）
+  world run    --config <world.yaml> [--run-id <id>] [--world-dir <dir>]   开新 run（默认 --world-dir ./runtime）
   world resume --config <world.yaml> [--world-dir <dir>]                   从 state.json.cursor 续跑
   world status [--world-dir <dir>]                                        查看进度
   world stop   [--world-dir <dir>]                                        请求优雅终止当前 run
@@ -32,7 +32,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
 }
 
 function resolveWorldRoot(args: CliArgs): string {
-  return resolve(args.worldDir ?? join(process.cwd(), 'world'))
+  return resolve(args.worldDir ?? join(process.cwd(), 'runtime'))
 }
 
 function deriveRunId(): string {

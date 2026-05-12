@@ -1,4 +1,4 @@
-/world/
+/runtime/
 /node_modules/
 *.log
 config/world.yaml
