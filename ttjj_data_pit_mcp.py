@@ -631,3 +631,69 @@ def stock_profile(as_of_date: str, stock_codes: list[str]) -> dict[str, Any]:
         return _pit_wrap(result, cutoff, as_of_date, generic_filter=False)
     except Exception as e:
         return _err(e)
+
+
+# ===========================================================================
+#  研报 / 实时行情 — 特殊处理
+# ===========================================================================
+
+@_mcp.tool()
+def ttjj_research_search(
+    as_of_date: str,
+    query: str,
+    search_type: str = "news",
+    top_k: int = 5,
+    search_days: int = 7,
+    score_threshold: float = 0.3,
+) -> dict[str, Any]:
+    """天天基金研报/资讯搜索（时点版）。search_type: news/research/all。
+
+    注意: 上游的 "近 search_days 天" 是相对它的当前时间, 无法改成相对 as_of_date;
+    本服务在拿到结果后会把发布时间晚于 as_of_date 的条目剔除, 所以历史 as_of_date 下
+    返回的条数可能远少于 top_k(甚至为空)。
+    """
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    try:
+        result = _post("/api/research/search", {
+            "query": query,
+            "search_type": search_type,
+            "top_k": top_k,
+            "search_days": search_days,
+            "score_threshold": score_threshold,
+        })
+        result = _pit_wrap(result, cutoff, as_of_date)
+        if isinstance(result, dict) and "error" not in result:
+            result["_pit_note"] = ("搜索窗口为相对上游当前时间的近 N 天; 发布时间晚于 as_of_date "
+                                   "的条目已被剔除, 结果数可能少于 top_k。")
+        return result
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def market_realtime_quote(
+    as_of_date: str,
+    codes: list[str],
+    include: Optional[list[str]] = None,
+    raw: bool = False,
+    timeout: int = 10,
+) -> dict[str, Any]:
+    """实时行情（时点版）。codes: 6位个股代码 或 secid(如 1.000300=沪深300)。
+
+    include: quote/order_book/capital_flow/valuation/industry/index
+
+    注意: 实时行情的时间戳必然是"现在"; 当 as_of_date 早于今天时, 返回的行情会被全部
+    过滤掉(即该工具实际只对"今天"有效)。
+    """
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    try:
+        d: dict = {"codes": codes, "raw": raw, "timeout": timeout}
+        if include:
+            d["include"] = include
+        return _pit_wrap(_post("/api/market/realtime-quote", d), cutoff, as_of_date)
+    except Exception as e:
+        return _err(e)

@@ -160,3 +160,43 @@ class TestBespokeTools:
         monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True, "items": []})
         assert m.fund_basic_info("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
         assert m.stock_profile("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
+
+
+class TestSpecialTools:
+    def test_research_search_filters_future_articles(self, monkeypatch):
+        def fake(path, data):
+            assert path == "/api/research/search"
+            assert data["search_type"] == "news"
+            return {"success": True, "results": [
+                {"标题": "旧闻", "发布时间": "2023-12-20 10:00:00"},
+                {"标题": "未来新闻", "发布时间": "2026-05-01 10:00:00"},
+            ]}
+        monkeypatch.setattr(m, "_post", fake)
+        out = m.ttjj_research_search("2024-01-01", "贵州茅台")
+        assert [r["标题"] for r in out["results"]] == ["旧闻"]
+        assert out["_as_of_date"] == "2024-01-01"
+        assert "_pit_note" in out
+
+    def test_research_search_bad_as_of(self, monkeypatch):
+        monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True})
+        assert m.ttjj_research_search("xx", "q") == {"error": "bad_as_of_date", "message": "xx"}
+
+    def test_realtime_quote_filters_future_timestamps(self, monkeypatch):
+        def fake(path, data):
+            assert path == "/api/market/realtime-quote"
+            return {"success": True, "items": [
+                {"代码": "600519", "时间": "2023-12-29 15:00:00", "最新价": 1700.0},
+                {"代码": "000300", "时间": "2026-05-11 15:00:00", "最新价": 3500.0},
+            ]}
+        monkeypatch.setattr(m, "_post", fake)
+        out = m.market_realtime_quote("2024-01-01", ["600519", "000300"])
+        assert [r["代码"] for r in out["items"]] == ["600519"]
+        assert out["_as_of_date"] == "2024-01-01"
+
+    def test_realtime_quote_bad_as_of(self, monkeypatch):
+        monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True})
+        assert m.market_realtime_quote("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
+
+    def test_special_tools_registered(self):
+        assert callable(m.ttjj_research_search)
+        assert callable(m.market_realtime_quote)
