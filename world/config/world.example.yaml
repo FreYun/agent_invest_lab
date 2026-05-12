@@ -1,0 +1,36 @@
+# agent_invest_lab 世界配置示例。复制为 config/world.yaml 后按需修改。
+# 用法: node --experimental-strip-types main.ts run --config config/world.yaml
+
+# research-loop-ts 仓库路径（agent 大脑）
+research_loop_ts: /home/rooot/.openclaw/research-loop-ts
+
+# workspace-botN 的父目录（agent 人设/性格来源；world 会精选复制成每个 run 的影子 workspace）
+workspace_root: /home/rooot/.openclaw
+
+# 参与本世界的 bot 列表
+bots: [bot1, bot7, bot9]
+
+# 回放区间（含端点；非交易日会被交易日历过滤掉）
+replay:
+  from: "2024-01-02"
+  to:   "2024-06-28"
+
+# 交易日历 JSON：{ "trading_days": ["2024-01-02", ...] }（升序、YYYY-MM-DD）。
+# 默认相对本文件 → ./calendar.json；world 只消费它、不生成它（由数据团队/人工提供）。
+# calendar: /path/to/calendar.json
+
+# 同一天里并发跑多少个 bot
+concurrency: 4
+
+# 单 bot 单日 chat 超时（秒）；超时记 status=timeout，不阻塞当天其它 bot、不阻塞翻篇
+per_bot_timeout_seconds: 1200
+
+# 给 research-loop-ts 用的 rl-config 基底；默认相对本文件 → ../config/trading-rl-config.base.json
+# rl_config_base: /path/to/trading-rl-config.base.json
+
+# research-loop-ts 的 openclaw_dir（用于解析模型 API key 等）。保持默认即可；
+# 若想让 bot 的 session 存档也隔离，指向一个你自建了 openclaw.json 的影子目录。
+# rl_openclaw_dir: /home/rooot/.openclaw
+
+# 影子 workspace 从 workspace-botN 复制哪些条目（默认见 src/config.ts DEFAULT_SHADOW_INCLUDE）
+# shadow_include: [IDENTITY.md, SOUL.md, AGENTS.md, USER.md, METHODOLOGY.md, RESEARCH.md, MEMORY.md, EQUIPPED_SKILLS.md, TOOLS.md, skills, config]

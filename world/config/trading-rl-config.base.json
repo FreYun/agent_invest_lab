@@ -1,0 +1,38 @@
+{
+  "model": {
+    "primary": {
+      "provider": "openai_compatible",
+      "base_url": "https://dd-ai-api.eastmoney.com/v1",
+      "model": "qwen3.5-plus",
+      "api_key_from_openclaw": "zai-coding-plan"
+    }
+  },
+  "llm": {
+    "chat_max_tokens": 8000,
+    "chat_temperature": 0.3,
+    "chat_max_tool_iterations": 100,
+    "skill_max_tokens": 4000,
+    "skill_temperature": 0.3,
+    "compact_max_tokens": 2000,
+    "compact_temperature": 0.1
+  },
+  "timeouts": { "chat_llm": 180, "compact_llm": 120, "skill_llm": 60 },
+  "openclaw_dir": "/home/rooot/.openclaw",
+  "mcp": {
+    "servers": {}
+  },
+  "plugins": {
+    "browser": { "enabled": false },
+    "memory-mem0": { "enabled": true }
+  },
+  "extra_roots": ["/home/rooot/.openclaw/workspace/skills"],
+  "limits": {
+    "max_total_turns": 25,
+    "max_time_minutes": 30,
+    "token_budget": 900000,
+    "compact_threshold_pct": 60,
+    "min_sources_for_dig": 3,
+    "context_window": 1000000
+  },
+  "dashboard": { "enabled": false }
+}
