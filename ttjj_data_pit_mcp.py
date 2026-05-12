@@ -544,3 +544,90 @@ def research_view(
         return _pit_wrap(_post("/api/research/view", d), cutoff, as_of_date)
     except Exception as e:
         return _err(e)
+
+
+# ===========================================================================
+#  基金基本信息 / 股票画像 — 按静态日期过滤 (bespoke)
+# ===========================================================================
+
+_PIT_MASK_NOTE = "字段已按时点屏蔽: 该值为当前快照, 非 as_of_date 当时的真实值"
+
+
+def _items_of(result: dict) -> Optional[list]:
+    """Return the list of records inside a typical upstream response, or None."""
+    if not isinstance(result, dict):
+        return None
+    if isinstance(result.get("items"), list):
+        return result["items"]
+    data = result.get("data")
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return data["items"]
+    return None
+
+
+def _keep_by_static_date(result: dict, date_key: str, cutoff: date) -> None:
+    items = _items_of(result)
+    if items is None:
+        return
+    kept = []
+    for rec in items:
+        if isinstance(rec, dict):
+            d = _parse_date(rec.get(date_key)) if date_key in rec else None
+            if d is not None and d > cutoff:
+                continue
+        kept.append(rec)
+    items[:] = kept
+
+
+def _mask_keys(result: dict, keys: tuple[str, ...]) -> None:
+    items = _items_of(result)
+    if items is None:
+        return
+    for rec in items:
+        if not isinstance(rec, dict):
+            continue
+        masked = False
+        for k in keys:
+            if k in rec and rec[k] is not None:
+                rec[k] = None
+                masked = True
+        if masked:
+            rec["_pit_note"] = _PIT_MASK_NOTE
+
+
+@_mcp.tool()
+def fund_basic_info(as_of_date: str, fund_codes: list[str]) -> dict[str, Any]:
+    """基金基本信息（时点版）：基金公司/经理/类型/成立时间。
+
+    注意: 成立时间晚于 as_of_date 的基金会被剔除; "基金经理"/"最新定期报告时间" 是当前快照,
+    已置 null (本服务不提供 as_of_date 当时的真实任职经理)。
+    """
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    try:
+        result = _post("/api/fund/basic-info", {"fund_codes": fund_codes})
+        if isinstance(result, dict) and "error" not in result:
+            _keep_by_static_date(result, "成立时间", cutoff)
+            _mask_keys(result, ("基金经理", "最新定期报告时间"))
+        return _pit_wrap(result, cutoff, as_of_date, generic_filter=False)
+    except Exception as e:
+        return _err(e)
+
+
+@_mcp.tool()
+def stock_profile(as_of_date: str, stock_codes: list[str]) -> dict[str, Any]:
+    """股票画像（时点版）：基础信息、申万行业、中信行业。
+
+    注意: 上市日期晚于 as_of_date 的股票会被剔除; 行业分类为当前值 (变动较慢, 未做屏蔽)。
+    """
+    cutoff, err = _check_as_of(as_of_date)
+    if err:
+        return err
+    try:
+        result = _post("/api/stock/profile", {"stock_codes": stock_codes})
+        if isinstance(result, dict) and "error" not in result:
+            _keep_by_static_date(result, "上市日期", cutoff)
+        return _pit_wrap(result, cutoff, as_of_date, generic_filter=False)
+    except Exception as e:
+        return _err(e)

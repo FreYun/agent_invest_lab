@@ -123,3 +123,40 @@ class TestDatedTools:
         }
         for n in names:
             assert callable(getattr(m, n)), n
+
+
+class TestBespokeTools:
+    def test_fund_basic_info_drops_funds_established_after_cutoff_and_masks(self, monkeypatch):
+        def fake(path, data):
+            assert path == "/api/fund/basic-info"
+            return {"success": True, "items": [
+                {"基金代码": "110011", "基金公司": "易方达", "基金经理": "张三",
+                 "成立时间": "2008-09-19", "最新定期报告时间": "2026-03-31"},
+                {"基金代码": "999999", "基金公司": "新基金", "基金经理": "李四",
+                 "成立时间": "2025-06-01", "最新定期报告时间": "2026-03-31"},
+            ]}
+        monkeypatch.setattr(m, "_post", fake)
+        out = m.fund_basic_info("2024-01-01", ["110011", "999999"])
+        assert len(out["items"]) == 1
+        rec = out["items"][0]
+        assert rec["基金代码"] == "110011"
+        assert rec["基金经理"] is None
+        assert rec["最新定期报告时间"] is None
+        assert "_pit_note" in rec
+        assert out["_as_of_date"] == "2024-01-01"
+
+    def test_stock_profile_drops_stocks_listed_after_cutoff(self, monkeypatch):
+        def fake(path, data):
+            assert path == "/api/stock/profile"
+            return {"success": True, "items": [
+                {"股票代码": "600519", "上市日期": "2001-08-27"},
+                {"股票代码": "688981", "上市日期": "2025-01-10"},
+            ]}
+        monkeypatch.setattr(m, "_post", fake)
+        out = m.stock_profile("2024-01-01", ["600519", "688981"])
+        assert [r["股票代码"] for r in out["items"]] == ["600519"]
+
+    def test_bespoke_bad_as_of(self, monkeypatch):
+        monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True, "items": []})
+        assert m.fund_basic_info("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
+        assert m.stock_profile("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
