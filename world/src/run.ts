@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { WorldConfig } from './config.ts'
 import { loadCalendar, computeTradingDates } from './calendar.ts'
@@ -210,4 +210,38 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   } finally {
     process.off('SIGINT', onSigint)
   }
+}
+
+export interface ResumeWorldOptions {
+  worldRoot: string
+  config: WorldConfig
+  startBotServer?: StartBotServer
+}
+
+export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
+  const { worldRoot, config } = opts
+  const state = readState(worldRoot)
+  if (state.status !== 'running') throw new Error(`cannot resume: state status is "${state.status}", nothing to resume`)
+  // 清掉可能残留的 STOP 哨兵（否则 resume 会立刻被它中止）
+  rmSync(P.stopFile(worldRoot, state.run_id), { force: true })
+  // setup（重启记忆服务、重建/复用影子 workspace、重起 bot server），但 trading_dates 取自 state
+  const setupRes = await setup({ worldRoot, config, runId: state.run_id, startBotServer: opts.startBotServer })
+  // 若 calendar/replay 变了导致交易日序列对不上，拒绝
+  if (setupRes.tradingDates.length !== state.trading_dates.length || setupRes.tradingDates[0] !== state.trading_dates[0] || setupRes.tradingDates[setupRes.tradingDates.length - 1] !== state.trading_dates[state.trading_dates.length - 1]) {
+    for (const b of setupRes.bots) { try { await b.server.shutdown({ timeoutMs: 2000 }) } catch { /* ignore */ } }
+    try { await setupRes.memory.close() } catch { /* ignore */ }
+    throw new Error('resume: trading-date sequence changed since the run started; refuse to resume')
+  }
+  setupRes.currentDateRef.value = state.trading_dates[Math.min(state.cursor, state.trading_dates.length - 1)]
+  await runLoop({ worldRoot, runId: state.run_id, config, setupRes, fromCursor: state.cursor })
+}
+
+/** 由独立的 `world stop` 进程调用：写一个 STOP 哨兵，正在跑的 runLoop 会在下一天开始前发现它。 */
+export function requestStop(worldRoot: string): { ok: boolean; reason?: string } {
+  if (!existsSync(P.stateFile(worldRoot))) return { ok: false, reason: 'no state.json' }
+  const state = readState(worldRoot)
+  if (state.status !== 'running') return { ok: false, reason: `state status is "${state.status}"` }
+  mkdirSync(P.runDir(worldRoot, state.run_id), { recursive: true })
+  writeFileSync(P.stopFile(worldRoot, state.run_id), `requested at ${new Date().toISOString()}\n`)
+  return { ok: true }
 }
