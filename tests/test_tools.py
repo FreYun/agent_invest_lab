@@ -200,3 +200,18 @@ class TestSpecialTools:
     def test_special_tools_registered(self):
         assert callable(m.ttjj_research_search)
         assert callable(m.market_realtime_quote)
+
+
+def test_dropped_tools_are_absent():
+    dropped = [
+        "fund_select", "fund_performance", "fund_manager_profile", "fund_style_analysis",
+        "fund_rate", "fund_theme_screening", "fund_stock_holdings_screen", "fund_index_tracking",
+        "fund_top_holdings", "fund_invest_position", "fund_turnover_rate", "fund_industry_exposure",
+        "entity_extract", "health_check",
+    ]
+    for name in dropped:
+        assert not hasattr(m, name), name
+
+
+def test_main_callable():
+    assert callable(m.main)

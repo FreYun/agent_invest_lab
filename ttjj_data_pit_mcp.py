@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 from datetime import date, datetime
 from typing import Any, Optional
@@ -697,3 +696,22 @@ def market_realtime_quote(
         return _pit_wrap(_post("/api/market/realtime-quote", d), cutoff, as_of_date)
     except Exception as e:
         return _err(e)
+
+
+# ===========================================================================
+#  Entrypoint
+# ===========================================================================
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=18078)
+    ap.add_argument("--host", default="127.0.0.1")
+    args = ap.parse_args()
+
+    _mcp.settings.host = args.host
+    _mcp.settings.port = args.port
+    _mcp.run(transport="streamable-http")
+
+
+if __name__ == "__main__":
+    main()
