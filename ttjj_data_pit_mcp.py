@@ -43,3 +43,31 @@ _DATE_FIELD_BLOCKLIST = {
 
 _mcp = FastMCP("ttjj-data-pit")
 _session: requests.Session | None = None
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    """Best-effort parse to a date; return None if `value` doesn't look like one."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if len(s) < 4 or not s[:4].isdigit():
+        return None
+    m3 = re.match(r"(\d{4})\D?(\d{1,2})\D?(\d{1,2})", s)
+    if m3:
+        try:
+            return date(int(m3.group(1)), int(m3.group(2)), int(m3.group(3)))
+        except ValueError:
+            pass  # fall through to year-month and year-only patterns
+    m2 = re.match(r"(\d{4})[-/](\d{1,2})$", s)
+    if m2:
+        try:
+            return date(int(m2.group(1)), int(m2.group(2)), 1)
+        except ValueError:
+            return None
+    if re.fullmatch(r"\d{4}", s):
+        return date(int(s), 1, 1)
+    return None
