@@ -79,3 +79,42 @@ def _is_date_field(key: Any) -> bool:
     if key in _DATE_FIELD_BLOCKLIST:
         return False
     return bool(_DATE_FIELD_RE.search(key))
+
+
+def _record_has_future_date(d: dict, cutoff: date) -> bool:
+    for k, v in d.items():
+        if _is_date_field(k):
+            parsed = _parse_date(v)
+            if parsed is not None and parsed > cutoff:
+                return True
+    return False
+
+
+def _filter_response(obj: Any, cutoff: date) -> Any:
+    """Recursively drop future-dated list records and null future standalone date fields.
+
+    Mutates `obj` in place and returns it.
+    """
+    if isinstance(obj, list):
+        kept = []
+        for el in obj:
+            if isinstance(el, dict) and _record_has_future_date(el, cutoff):
+                continue
+            kept.append(_filter_response(el, cutoff))
+        obj[:] = kept
+        return obj
+    if isinstance(obj, dict):
+        truncated = False
+        for k in list(obj.keys()):
+            v = obj[k]
+            if _is_date_field(k):
+                parsed = _parse_date(v)
+                if parsed is not None and parsed > cutoff:
+                    obj[k] = None
+                    truncated = True
+                    continue
+            obj[k] = _filter_response(v, cutoff)
+        if truncated:
+            obj["_pit_truncated"] = True
+        return obj
+    return obj

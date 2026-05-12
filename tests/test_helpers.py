@@ -70,3 +70,70 @@ class TestIsDateField:
         # so this name needs explicit handling. See implementation below.
         assert m._is_date_field("权益登记日")
         assert m._is_date_field("发放日")
+
+
+from datetime import date as _d
+
+
+class TestFilterResponse:
+    def test_drops_future_list_records(self):
+        obj = {"items": [
+            {"交易日期": "2023-12-29", "单位净值": 1.1},
+            {"交易日期": "2024-01-02", "单位净值": 1.2},
+            {"交易日期": "2024-06-01", "单位净值": 1.3},
+        ]}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["items"] == [{"交易日期": "2023-12-29", "单位净值": 1.1}]
+
+    def test_keeps_records_without_date_field(self):
+        obj = {"items": [{"code": "x"}, {"code": "y"}]}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["items"] == [{"code": "x"}, {"code": "y"}]
+
+    def test_keeps_non_dict_list_elements(self):
+        obj = {"vals": [1, 2, "2099-01-01"]}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["vals"] == [1, 2, "2099-01-01"]  # bare strings in lists are not filtered
+
+    def test_any_date_field_over_cutoff_drops_the_record(self):
+        obj = {"items": [
+            {"分红日期": "2023-06-01", "权益登记日": "2023-06-02", "发放日": "2023-06-10"},
+            {"分红日期": "2023-12-30", "权益登记日": "2023-12-31", "发放日": "2024-01-05"},
+        ]}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["items"] == [
+            {"分红日期": "2023-06-01", "权益登记日": "2023-06-02", "发放日": "2023-06-10"}
+        ]
+
+    def test_nulls_standalone_future_date_field(self):
+        obj = {"data": {"最新净值日期": "2026-05-01", "items": [{"交易日期": "2023-01-01", "v": 1}]}}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["data"]["最新净值日期"] is None
+        assert out["data"]["_pit_truncated"] is True
+        assert out["data"]["items"] == [{"交易日期": "2023-01-01", "v": 1}]
+
+    def test_keeps_standalone_past_date_field(self):
+        obj = {"data": {"最新净值日期": "2023-12-29"}}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["data"]["最新净值日期"] == "2023-12-29"
+        assert "_pit_truncated" not in out["data"]
+
+    def test_ignores_blocklisted_time_fields(self):
+        obj = {"metadata": {"query_time": "2026-05-11 19:00:00", "service": "x"},
+               "items": [{"交易日期": "2023-01-01"}]}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["metadata"]["query_time"] == "2026-05-11 19:00:00"
+        assert "_pit_truncated" not in out["metadata"]
+
+    def test_nested_lists(self):
+        obj = {"items": [
+            {"基金代码": "A", "记录": [{"交易日期": "2023-05-01", "v": 1},
+                                      {"交易日期": "2024-05-01", "v": 2}]},
+        ]}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["items"][0]["记录"] == [{"交易日期": "2023-05-01", "v": 1}]
+
+    def test_unparseable_date_value_is_left_alone(self):
+        obj = {"items": [{"交易日期": "未知", "v": 1}]}
+        out = m._filter_response(obj, _d(2024, 1, 1))
+        assert out["items"] == [{"交易日期": "未知", "v": 1}]
