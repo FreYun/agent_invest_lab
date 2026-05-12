@@ -137,3 +137,45 @@ class TestFilterResponse:
         obj = {"items": [{"交易日期": "未知", "v": 1}]}
         out = m._filter_response(obj, _d(2024, 1, 1))
         assert out["items"] == [{"交易日期": "未知", "v": 1}]
+
+
+class TestAsOfGuards:
+    def test_check_as_of_ok(self):
+        cutoff, err = m._check_as_of("2024-01-01")
+        assert cutoff == _d(2024, 1, 1)
+        assert err is None
+
+    def test_check_as_of_bad(self):
+        cutoff, err = m._check_as_of("2024-13-40")
+        assert cutoff is None
+        assert err == {"error": "bad_as_of_date", "message": "2024-13-40"}
+
+    def test_check_as_of_empty(self):
+        cutoff, err = m._check_as_of("")
+        assert cutoff is None and err["error"] == "bad_as_of_date"
+
+    def test_clamp_end_date_none_returns_cutoff(self):
+        assert m._clamp_end_date(None, _d(2024, 1, 1)) == "2024-01-01"
+
+    def test_clamp_end_date_future_clamped(self):
+        assert m._clamp_end_date("2025-06-01", _d(2024, 1, 1)) == "2024-01-01"
+
+    def test_clamp_end_date_past_kept(self):
+        assert m._clamp_end_date("2023-06-01", _d(2024, 1, 1)) == "2023-06-01"
+
+    def test_clamp_end_date_unparseable_falls_back_to_cutoff(self):
+        assert m._clamp_end_date("不是日期", _d(2024, 1, 1)) == "2024-01-01"
+
+    def test_reject_if_future_none(self):
+        assert m._reject_if_future("start_date", None, _d(2024, 1, 1)) is None
+
+    def test_reject_if_future_past_ok(self):
+        assert m._reject_if_future("start_date", "2023-01-01", _d(2024, 1, 1)) is None
+
+    def test_reject_if_future_future(self):
+        err = m._reject_if_future("report_date", "2025-12-31", _d(2024, 1, 1))
+        assert err == {"error": "lookahead",
+                       "message": "report_date=2025-12-31 晚于 as_of_date=2024-01-01"}
+
+    def test_reject_if_future_unparseable_passes(self):
+        assert m._reject_if_future("trade_date", "garbage", _d(2024, 1, 1)) is None

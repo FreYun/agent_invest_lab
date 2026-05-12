@@ -118,3 +118,28 @@ def _filter_response(obj: Any, cutoff: date) -> Any:
             obj["_pit_truncated"] = True
         return obj
     return obj
+
+
+def _check_as_of(as_of_date: Any) -> tuple[Optional[date], Optional[dict]]:
+    parsed = _parse_date(as_of_date)
+    if parsed is None:
+        return None, {"error": "bad_as_of_date", "message": str(as_of_date)}
+    return parsed, None
+
+
+def _clamp_end_date(user_end: Optional[str], cutoff: date) -> str:
+    if user_end:
+        parsed = _parse_date(user_end)
+        if parsed is not None and parsed <= cutoff:
+            return parsed.isoformat()
+    return cutoff.isoformat()
+
+
+def _reject_if_future(name: str, value: Optional[str], cutoff: date) -> Optional[dict]:
+    if not value:
+        return None
+    parsed = _parse_date(value)
+    if parsed is not None and parsed > cutoff:
+        return {"error": "lookahead",
+                "message": f"{name}={value} 晚于 as_of_date={cutoff.isoformat()}"}
+    return None
