@@ -34,7 +34,7 @@ BASE_URL = "http://ttjj-data-api.jijinmima.cn"
 TIMEOUT = 30
 
 # 字段名匹配这些子串(大小写无关) -> 视为"数据日期"字段
-_DATE_FIELD_RE = re.compile(r"日期|时间|date|time", re.IGNORECASE)
+_DATE_FIELD_RE = re.compile(r"日期|报告期|登记日|发放日|时间|date|time", re.IGNORECASE)
 # ...但这些精确字段名是"接口元数据时间"/"记录维护时间", 不当作数据日期, 不参与过滤
 _DATE_FIELD_BLOCKLIST = {
     "query_time", "update_time", "updated_at", "create_time", "created_at",
@@ -71,3 +71,11 @@ def _parse_date(value: Any) -> Optional[date]:
     if re.fullmatch(r"\d{4}", s):
         return date(int(s), 1, 1)
     return None
+
+
+def _is_date_field(key: Any) -> bool:
+    if not isinstance(key, str):
+        return False
+    if key in _DATE_FIELD_BLOCKLIST:
+        return False
+    return bool(_DATE_FIELD_RE.search(key))

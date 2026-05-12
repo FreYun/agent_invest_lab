@@ -41,3 +41,32 @@ class TestParseDate:
 
     def test_invalid_calendar_date(self):
         assert m._parse_date("2024-13-40") is None
+
+
+class TestIsDateField:
+    def test_chinese_date_names(self):
+        for k in ["交易日期", "净值日期", "报告日期", "报告期", "分红日期",
+                  "权益登记日", "发放日", "变动日期", "停牌日期", "复牌日期",
+                  "成立时间", "上市日期", "时间", "更新时间"]:
+            assert m._is_date_field(k), k
+
+    def test_english_date_names(self):
+        for k in ["date", "trade_date", "endDate", "datetime", "publish_time", "timestamp"]:
+            assert m._is_date_field(k), k
+
+    def test_blocklisted(self):
+        for k in ["query_time", "update_time", "updated_at", "create_time",
+                  "created_at", "_as_of_date", "_pit_note", "_pit_truncated"]:
+            assert not m._is_date_field(k), k
+
+    def test_non_date_names(self):
+        for k in ["基金代码", "基金名称", "单位净值", "code", "name", "占净值比例"]:
+            assert not m._is_date_field(k), k
+
+    def test_权益登记日_matches_via_日(self):
+        # NOTE: "日" alone is NOT in the regex; "权益登记日" must match — verify the
+        # implementation includes "登记日"/"发放日" style names. If your regex is
+        # `日期|时间|date|time`, "权益登记日" does NOT contain any of those substrings,
+        # so this name needs explicit handling. See implementation below.
+        assert m._is_date_field("权益登记日")
+        assert m._is_date_field("发放日")
