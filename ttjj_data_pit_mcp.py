@@ -143,3 +143,32 @@ def _reject_if_future(name: str, value: Optional[str], cutoff: date) -> Optional
         return {"error": "lookahead",
                 "message": f"{name}={value} 晚于 as_of_date={cutoff.isoformat()}"}
     return None
+
+
+def _get_session() -> requests.Session:
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update({"Content-Type": "application/json"})
+    return _session
+
+
+def _post(path: str, data: dict) -> dict:
+    r = _get_session().post(f"{BASE_URL}{path}", data=json.dumps(data), timeout=TIMEOUT)
+    r.raise_for_status()
+    j = r.json()
+    if not j.get("success"):
+        return {"error": "api_error", "message": j.get("message", "unknown")}
+    return j
+
+
+def _pit_wrap(result: dict, cutoff: date, as_of_label: str, *, generic_filter: bool = True) -> dict:
+    if isinstance(result, dict) and generic_filter and "error" not in result:
+        _filter_response(result, cutoff)
+    if isinstance(result, dict):
+        result["_as_of_date"] = as_of_label
+    return result
+
+
+def _err(e: Exception) -> dict[str, Any]:
+    return {"error": "request_error", "message": str(e)}
