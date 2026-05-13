@@ -25,10 +25,10 @@ def _all_dates_le(obj, cutoff):
                 _all_dates_le(v, cutoff)
 
 
-def test_fund_nav_live_respects_as_of():
+def test_fund_nav_live_respects_simulated_today():
     cutoff = date(2024, 1, 1)
     out = m.fund_nav("2024-01-01", ["110011"])
-    assert out.get("_as_of_date") == "2024-01-01"
+    assert out.get("_simulated_today") == "2024-01-01"
     assert "error" not in out, out
     _all_dates_le(out, cutoff)
 

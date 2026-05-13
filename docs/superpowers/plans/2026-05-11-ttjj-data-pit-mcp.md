@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a "point-in-time" MCP server `ttjj-data-pit` that wraps the same upstream天天基金 data API as `MCP/ttjj-data-mcp/server.py`, but (a) drops tools that can't be anchored to a date, and (b) forces every data read to honor an `as_of_date` so nothing later than that date is ever returned.
+**Goal:** Build a "point-in-time" MCP server `ttjj-data-pit` that wraps the same upstream天天基金 data API as `MCP/ttjj-data-mcp/server.py`, but (a) drops tools that can't be anchored to a date, and (b) forces every data read to honor an `simulated_today` so nothing later than that date is ever returned.
 
-**Architecture:** Single-file FastMCP server at `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py`. Each kept tool takes a required first param `as_of_date: str (YYYY-MM-DD)`. Before calling upstream we clamp `end_date` to `as_of_date`, reject any user-supplied date param later than `as_of_date` (`lookahead` error), and reject a malformed `as_of_date` (`bad_as_of_date`). After upstream responds we recursively walk the JSON and drop any list-record whose date field is > `as_of_date` (and null out standalone date fields > `as_of_date`), then add `_as_of_date` to the top level. `fund_basic_info` / `stock_profile` get bespoke handling instead of the generic filter; `ttjj_research_search` recomputes its "近 N 天" window.
+**Architecture:** Single-file FastMCP server at `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py`. Each kept tool takes a required first param `simulated_today: str (YYYY-MM-DD)`. Before calling upstream we clamp `end_date` to `simulated_today`, reject any user-supplied date param later than `simulated_today` (`lookahead` error), and reject a malformed `simulated_today` (`bad_simulated_today`). After upstream responds we recursively walk the JSON and drop any list-record whose date field is > `simulated_today` (and null out standalone date fields > `simulated_today`), then add `_simulated_today` to the top level. `fund_basic_info` / `stock_profile` get bespoke handling instead of the generic filter; `ttjj_research_search` recomputes its "近 N 天" window.
 
 **Tech Stack:** Python 3.12, `mcp` (FastMCP, streamable-http transport), `requests`, `pytest` for tests. No DB, no cache.
 
@@ -22,11 +22,11 @@
 
 | File | Responsibility |
 |---|---|
-| `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py` | The entire MCP server: constants, date helpers, response filter, as_of guards, `_post`, 19 tools, `main()`. |
+| `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py` | The entire MCP server: constants, date helpers, response filter, simulated_today guards, `_post`, 19 tools, `main()`. |
 | `/home/rooot/agent_invest_lab/requirements.txt` | `mcp`, `requests` (runtime); `pytest` optional / dev. |
 | `/home/rooot/agent_invest_lab/restart.sh` | Kill anything on :18078, relaunch the server, log to `/tmp/ttjj-data-pit-mcp.log`. |
 | `/home/rooot/agent_invest_lab/.gitignore` | `__pycache__/`, `*.pyc`, `.pytest_cache/`. |
-| `/home/rooot/agent_invest_lab/tests/test_helpers.py` | Unit tests for `_parse_date`, `_is_date_field`, `_filter_response`, `_check_as_of`, `_clamp_end_date`, `_reject_if_future`. |
+| `/home/rooot/agent_invest_lab/tests/test_helpers.py` | Unit tests for `_parse_date`, `_is_date_field`, `_filter_response`, `_check_simulated_today`, `_clamp_end_date`, `_reject_if_future`. |
 | `/home/rooot/agent_invest_lab/tests/test_tools.py` | Tests for the tool functions with `_post` monkeypatched. |
 | `/home/rooot/agent_invest_lab/tests/test_smoke.py` | One opt-in test that hits the live upstream API (skipped unless `TTJJ_PIT_LIVE=1`). |
 
@@ -77,14 +77,14 @@ pytest
   1. 剔除了无法锚定到日期的工具 (基金筛选/业绩/经理画像/费率/各类基于最新数据的筛选,
      以及 fund_top_holdings / fund_invest_position / fund_turnover_rate /
      fund_industry_exposure 这 4 个只有"报告期"无披露日期的接口本期不纳入).
-  2. 每个工具都有必填首参 as_of_date (YYYY-MM-DD): 只返回该日期当天及之前的数据,
+  2. 每个工具都有必填首参 simulated_today (YYYY-MM-DD): 只返回该日期当天及之前的数据,
      哪怕上游数据库里有更新的也不返回.
 
 注意/已知局限:
-  - market_realtime_quote 在 as_of_date 早于今天时, 行情时间戳必然 > as_of_date,
+  - market_realtime_quote 在 simulated_today 早于今天时, 行情时间戳必然 > simulated_today,
     会被过滤掉, 实际相当于该工具只对"今天"有效.
   - fund_basic_info 的 "基金经理"/"最新定期报告时间" 是当前值, 已置 null;
-    本服务不提供 as_of_date 当时的真实任职经理.
+    本服务不提供 simulated_today 当时的真实任职经理.
   - 响应过滤靠"字段名像日期 + 值能解析成日期"启发式; 上游若改字段名/日期格式可能漏过滤.
 
 启动:
@@ -111,7 +111,7 @@ _DATE_FIELD_RE = re.compile(r"日期|时间|date|time", re.IGNORECASE)
 # ...但这些精确字段名是"接口元数据时间"/"记录维护时间", 不当作数据日期, 不参与过滤
 _DATE_FIELD_BLOCKLIST = {
     "query_time", "update_time", "updated_at", "create_time", "created_at",
-    "_as_of_date", "_pit_note", "_pit_truncated",
+    "_simulated_today", "_pit_note", "_pit_truncated",
 }
 
 _mcp = FastMCP("ttjj-data-pit")
@@ -269,7 +269,7 @@ class TestIsDateField:
 
     def test_blocklisted(self):
         for k in ["query_time", "update_time", "updated_at", "create_time",
-                  "created_at", "_as_of_date", "_pit_note", "_pit_truncated"]:
+                  "created_at", "_simulated_today", "_pit_note", "_pit_truncated"]:
             assert not m._is_date_field(k), k
 
     def test_non_date_names(self):
@@ -465,7 +465,7 @@ git commit -m "feat: add _filter_response recursive point-in-time filter"
 
 ---
 
-## Task 5: `as_of_date` guards — `_check_as_of`, `_clamp_end_date`, `_reject_if_future`
+## Task 5: `simulated_today` guards — `_check_simulated_today`, `_clamp_end_date`, `_reject_if_future`
 
 **Files:**
 - Modify: `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py` (add the three helpers)
@@ -475,19 +475,19 @@ git commit -m "feat: add _filter_response recursive point-in-time filter"
 
 ```python
 class TestAsOfGuards:
-    def test_check_as_of_ok(self):
-        cutoff, err = m._check_as_of("2024-01-01")
+    def test_check_simulated_today_ok(self):
+        cutoff, err = m._check_simulated_today("2024-01-01")
         assert cutoff == _d(2024, 1, 1)
         assert err is None
 
-    def test_check_as_of_bad(self):
-        cutoff, err = m._check_as_of("2024-13-40")
+    def test_check_simulated_today_bad(self):
+        cutoff, err = m._check_simulated_today("2024-13-40")
         assert cutoff is None
-        assert err == {"error": "bad_as_of_date", "message": "2024-13-40"}
+        assert err == {"error": "bad_simulated_today", "message": "2024-13-40"}
 
-    def test_check_as_of_empty(self):
-        cutoff, err = m._check_as_of("")
-        assert cutoff is None and err["error"] == "bad_as_of_date"
+    def test_check_simulated_today_empty(self):
+        cutoff, err = m._check_simulated_today("")
+        assert cutoff is None and err["error"] == "bad_simulated_today"
 
     def test_clamp_end_date_none_returns_cutoff(self):
         assert m._clamp_end_date(None, _d(2024, 1, 1)) == "2024-01-01"
@@ -510,7 +510,7 @@ class TestAsOfGuards:
     def test_reject_if_future_future(self):
         err = m._reject_if_future("report_date", "2025-12-31", _d(2024, 1, 1))
         assert err == {"error": "lookahead",
-                       "message": "report_date=2025-12-31 晚于 as_of_date=2024-01-01"}
+                       "message": "report_date=2025-12-31 晚于 simulated_today=2024-01-01"}
 
     def test_reject_if_future_unparseable_passes(self):
         assert m._reject_if_future("trade_date", "garbage", _d(2024, 1, 1)) is None
@@ -519,15 +519,15 @@ class TestAsOfGuards:
 - [ ] **Step 2: Run the tests, verify they fail**
 
 Run: `cd /home/rooot/agent_invest_lab && python3 -m pytest tests/test_helpers.py::TestAsOfGuards -q`
-Expected: FAIL — `AttributeError: ... has no attribute '_check_as_of'`
+Expected: FAIL — `AttributeError: ... has no attribute '_check_simulated_today'`
 
 - [ ] **Step 3: Implement the three helpers**
 
 ```python
-def _check_as_of(as_of_date: Any) -> tuple[Optional[date], Optional[dict]]:
-    parsed = _parse_date(as_of_date)
+def _check_simulated_today(simulated_today: Any) -> tuple[Optional[date], Optional[dict]]:
+    parsed = _parse_date(simulated_today)
     if parsed is None:
-        return None, {"error": "bad_as_of_date", "message": str(as_of_date)}
+        return None, {"error": "bad_simulated_today", "message": str(simulated_today)}
     return parsed, None
 
 
@@ -545,7 +545,7 @@ def _reject_if_future(name: str, value: Optional[str], cutoff: date) -> Optional
     parsed = _parse_date(value)
     if parsed is not None and parsed > cutoff:
         return {"error": "lookahead",
-                "message": f"{name}={value} 晚于 as_of_date={cutoff.isoformat()}"}
+                "message": f"{name}={value} 晚于 simulated_today={cutoff.isoformat()}"}
     return None
 ```
 
@@ -559,7 +559,7 @@ Expected: PASS (all helper tests).
 ```bash
 cd /home/rooot/agent_invest_lab
 git add ttjj_data_pit_mcp.py tests/test_helpers.py
-git commit -m "feat: add as_of_date guard helpers"
+git commit -m "feat: add simulated_today guard helpers"
 ```
 
 ---
@@ -570,7 +570,7 @@ git commit -m "feat: add as_of_date guard helpers"
 - Modify: `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py` (add the four functions)
 - Create: `/home/rooot/agent_invest_lab/tests/test_tools.py`
 
-`_post` mirrors `server.py`'s exactly (no as_of awareness). `_pit_wrap` is new: applies `_filter_response` (unless `generic_filter=False`) and stamps `_as_of_date`.
+`_post` mirrors `server.py`'s exactly (no simulated_today awareness). `_pit_wrap` is new: applies `_filter_response` (unless `generic_filter=False`) and stamps `_simulated_today`.
 
 - [ ] **Step 1: Write the failing tests** (`tests/test_tools.py`, new file)
 
@@ -587,18 +587,18 @@ class TestPitWrap:
         result = {"items": [{"交易日期": "2023-12-31", "v": 1}, {"交易日期": "2099-01-01", "v": 2}]}
         out = m._pit_wrap(result, date(2024, 1, 1), "2024-01-01")
         assert out["items"] == [{"交易日期": "2023-12-31", "v": 1}]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
     def test_skips_generic_filter_when_disabled(self):
         result = {"items": [{"交易日期": "2099-01-01", "v": 2}]}
         out = m._pit_wrap(result, date(2024, 1, 1), "2024-01-01", generic_filter=False)
         assert out["items"] == [{"交易日期": "2099-01-01", "v": 2}]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
     def test_stamps_error_dicts_too(self):
         out = m._pit_wrap({"error": "api_error", "message": "x"}, date(2024, 1, 1), "2024-01-01")
         assert out["error"] == "api_error"
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
 
 def test_post_uses_base_url_and_unwraps(monkeypatch):
@@ -659,11 +659,11 @@ def _post(path: str, data: dict) -> dict:
     return j
 
 
-def _pit_wrap(result: dict, cutoff: date, as_of_label: str, *, generic_filter: bool = True) -> dict:
+def _pit_wrap(result: dict, cutoff: date, simulated_today: str, *, generic_filter: bool = True) -> dict:
     if isinstance(result, dict) and generic_filter and "error" not in result:
         _filter_response(result, cutoff)
     if isinstance(result, dict):
-        result["_as_of_date"] = as_of_label
+        result["_simulated_today"] = simulated_today
     return result
 
 
@@ -692,7 +692,7 @@ git commit -m "feat: add HTTP plumbing (_post) and _pit_wrap"
 - Modify: `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py` (add 15 `@_mcp.tool()` functions)
 - Modify: `/home/rooot/agent_invest_lab/tests/test_tools.py` (add a test class)
 
-Each tool: parse `as_of_date` (return `bad_as_of_date` on failure); reject any user-supplied `start_date` later than the cutoff and any user-supplied single-point date later than the cutoff (`lookahead`); clamp `end_date` to the cutoff; call `_post`; return `_pit_wrap(...)`. The upstream paths and the non-date params are copied verbatim from `MCP/ttjj-data-mcp/server.py`.
+Each tool: parse `simulated_today` (return `bad_simulated_today` on failure); reject any user-supplied `start_date` later than the cutoff and any user-supplied single-point date later than the cutoff (`lookahead`); clamp `end_date` to the cutoff; call `_post`; return `_pit_wrap(...)`. The upstream paths and the non-date params are copied verbatim from `MCP/ttjj-data-mcp/server.py`.
 
 - [ ] **Step 1: Write the failing tests** (append to `tests/test_tools.py`)
 
@@ -716,16 +716,16 @@ class TestDatedTools:
         assert calls[0][1]["end_date"] == "2024-01-01"          # clamped
         assert calls[0][1]["start_date"] == "2023-01-01"        # kept
         assert out["items"] == [{"交易日期": "2023-12-31", "v": 1}]   # future record dropped
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
-    def test_fund_nav_defaults_end_to_as_of(self, monkeypatch):
+    def test_fund_nav_defaults_end_to_simulated_today(self, monkeypatch):
         calls = self._fake_post(monkeypatch)
         m.fund_nav("2024-01-01", ["110011"])
         assert calls[0][1]["end_date"] == "2024-01-01"
 
-    def test_bad_as_of(self, monkeypatch):
+    def test_bad_simulated_today(self, monkeypatch):
         self._fake_post(monkeypatch)
-        assert m.fund_nav("nope", ["110011"]) == {"error": "bad_as_of_date", "message": "nope"}
+        assert m.fund_nav("nope", ["110011"]) == {"error": "bad_simulated_today", "message": "nope"}
 
     def test_future_start_date_rejected(self, monkeypatch):
         self._fake_post(monkeypatch)
@@ -779,13 +779,13 @@ Expected: FAIL — `AttributeError: ... has no attribute 'fund_nav'`
 
 @_mcp.tool()
 def fund_nav(
-    as_of_date: str,
+    simulated_today: str,
     fund_codes: list[str],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
-    """基金净值历史（时点版：只返回 as_of_date 当天及之前；end_date 会被裁剪到 as_of_date）。"""
-    cutoff, err = _check_as_of(as_of_date)
+    """基金净值历史（时点版：只返回 simulated_today 当天及之前；end_date 会被裁剪到 simulated_today）。"""
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -795,20 +795,20 @@ def fund_nav(
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
-        return _pit_wrap(_post("/api/fund/nav", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/fund/nav", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def fund_index_return(
-    as_of_date: str,
+    simulated_today: str,
     fund_codes: list[str],
     trade_date: Optional[str] = None,
     period_codes: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """基金指数超额收益（时点版）。period_codes: 00近一周/01近一月/02近三月/03近一年/05近两年/06近三年。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("trade_date", trade_date, cutoff)):
@@ -817,35 +817,35 @@ def fund_index_return(
         d: dict = {"fund_codes": fund_codes, "trade_date": trade_date or cutoff.isoformat()}
         if period_codes:
             d["period_codes"] = period_codes
-        return _pit_wrap(_post("/api/fund/index-return", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/fund/index-return", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
-def fund_bonus(as_of_date: str, fund_code: str, date: Optional[str] = None) -> dict[str, Any]:
+def fund_bonus(simulated_today: str, fund_code: str, date: Optional[str] = None) -> dict[str, Any]:
     """基金分红记录（时点版）。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("date", date, cutoff)):
         return e
     try:
         return _pit_wrap(_post("/api/fund/bonus", {"fund_code": fund_code, "date": date or cutoff.isoformat()}),
-                         cutoff, as_of_date)
+                         cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def fund_abnormal_movement(
-    as_of_date: str,
+    simulated_today: str,
     fund_code: str,
     start_date: Optional[str] = None,
     direction: Optional[str] = None,
 ) -> dict[str, Any]:
-    """基金异动检测（时点版）。direction: '大涨' 或 '跳水'。注意 as_of_date 之后的异动不会返回。"""
-    cutoff, err = _check_as_of(as_of_date)
+    """基金异动检测（时点版）。direction: '大涨' 或 '跳水'。注意 simulated_today 之后的异动不会返回。"""
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -856,7 +856,7 @@ def fund_abnormal_movement(
             d["start_date"] = start_date
         if direction:
             d["direction"] = direction
-        return _pit_wrap(_post("/api/fund/abnormal-movement", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/fund/abnormal-movement", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
@@ -867,14 +867,14 @@ def fund_abnormal_movement(
 
 @_mcp.tool()
 def market_index_quote(
-    as_of_date: str,
+    simulated_today: str,
     market: str,
     symbols: list[str],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """指数行情（时点版）。market 必须小写: cn/hk/us。港股可传中文名如 '恒生指数'。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -884,20 +884,20 @@ def market_index_quote(
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
-        return _pit_wrap(_post("/api/market/index-quote", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/market/index-quote", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def commodity_market(
-    as_of_date: str,
+    simulated_today: str,
     symbols: Optional[list[str]] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """商品行情（时点版）。symbols 可传中文如 '黄金', '原油'。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -909,22 +909,22 @@ def commodity_market(
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
-        return _pit_wrap(_post("/api/commodity/market", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/commodity/market", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
-def bond_yield_curve(as_of_date: str, date: Optional[str] = None) -> dict[str, Any]:
-    """国债收益率曲线（时点版）。不传 date 则取 as_of_date 当天的曲线。"""
-    cutoff, err = _check_as_of(as_of_date)
+def bond_yield_curve(simulated_today: str, date: Optional[str] = None) -> dict[str, Any]:
+    """国债收益率曲线（时点版）。不传 date 则取 simulated_today 当天的曲线。"""
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("date", date, cutoff)):
         return e
     try:
         return _pit_wrap(_post("/api/bond/yield-curve", {"date": date or cutoff.isoformat()}),
-                         cutoff, as_of_date)
+                         cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
@@ -935,14 +935,14 @@ def bond_yield_curve(as_of_date: str, date: Optional[str] = None) -> dict[str, A
 
 @_mcp.tool()
 def stock_market(
-    as_of_date: str,
+    simulated_today: str,
     stock_codes: list[str],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     trade_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """股票行情（时点版）：行情记录[] + 市值记录[] + 估值记录[] + 股息率记录[]。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -956,20 +956,20 @@ def stock_market(
         d["end_date"] = _clamp_end_date(end_date, cutoff)
         if trade_date:
             d["trade_date"] = trade_date
-        return _pit_wrap(_post("/api/stock/market", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/stock/market", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def stock_capital_flow(
-    as_of_date: str,
+    simulated_today: str,
     stock_codes: list[str],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """股票资金流向（时点版）：资金流记录[] + 北向持股记录[] + 超大单资金记录[]。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -979,19 +979,19 @@ def stock_capital_flow(
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
-        return _pit_wrap(_post("/api/stock/capital-flow", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/stock/capital-flow", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def stock_ownership(
-    as_of_date: str,
+    simulated_today: str,
     stock_codes: list[str],
     report_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """股权结构（时点版）：股东记录[] + 股本结构记录[] + 股权分配记录[]。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("report_date", report_date, cutoff)):
@@ -999,20 +999,20 @@ def stock_ownership(
     try:
         return _pit_wrap(
             _post("/api/stock/ownership", {"stock_codes": stock_codes, "report_date": report_date or cutoff.isoformat()}),
-            cutoff, as_of_date)
+            cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def stock_financial_quality(
-    as_of_date: str,
+    simulated_today: str,
     stock_codes: list[str],
     trade_date: Optional[str] = None,
     d_type: str = "TTM",
 ) -> dict[str, Any]:
     """财务质量（时点版）：盈利能力记录[] + 收益质量记录[] 等。d_type: TTM/ANNUAL/QUARTERLY。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("trade_date", trade_date, cutoff)):
@@ -1021,21 +1021,21 @@ def stock_financial_quality(
         return _pit_wrap(
             _post("/api/stock/financial-quality",
                   {"stock_codes": stock_codes, "d_type": d_type, "trade_date": trade_date or cutoff.isoformat()}),
-            cutoff, as_of_date)
+            cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def stock_alpha(
-    as_of_date: str,
+    simulated_today: str,
     stock_codes: list[str],
     trade_date: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """Alpha 因子（时点版）：一致预期记录[] + Barra暴露记录[] 等。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("trade_date", trade_date, cutoff)):
@@ -1049,20 +1049,20 @@ def stock_alpha(
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
-        return _pit_wrap(_post("/api/stock/alpha", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/stock/alpha", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def stock_events(
-    as_of_date: str,
+    simulated_today: str,
     stock_codes: list[str],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """股票事件（时点版）：停复牌记录[] + SUE记录[]。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -1072,7 +1072,7 @@ def stock_events(
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
-        return _pit_wrap(_post("/api/stock/events", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/stock/events", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
@@ -1083,14 +1083,14 @@ def stock_events(
 
 @_mcp.tool()
 def macro_data(
-    as_of_date: str,
+    simulated_today: str,
     region: str,
     categories: Optional[list[str]] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
     """宏观数据（时点版）。region: cn/us。categories 小写: gdp, cpi, pmi, m2, social_finance, exchange_rate 等。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -1102,14 +1102,14 @@ def macro_data(
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
-        return _pit_wrap(_post("/api/macro/data", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/macro/data", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
 def research_view(
-    as_of_date: str,
+    simulated_today: str,
     view_type: str,
     labels: Optional[list[str]] = None,
     sec_codes: Optional[list[str]] = None,
@@ -1122,7 +1122,7 @@ def research_view(
     days: int = 7,
 ) -> dict[str, Any]:
     """研究观点（时点版）。view_type: sector(行业观点,需labels)/weekly(周报,需labels)/fund_related(需fund_code)。"""
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
@@ -1140,7 +1140,7 @@ def research_view(
             d["direction"] = direction
         if fund_code:
             d["fund_code"] = fund_code
-        return _pit_wrap(_post("/api/research/view", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/research/view", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 ```
@@ -1193,7 +1193,7 @@ class TestBespokeTools:
         assert rec["基金经理"] is None
         assert rec["最新定期报告时间"] is None
         assert "_pit_note" in rec
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
     def test_stock_profile_drops_stocks_listed_after_cutoff(self, monkeypatch):
         def fake(path, data):
@@ -1206,10 +1206,10 @@ class TestBespokeTools:
         out = m.stock_profile("2024-01-01", ["600519", "688981"])
         assert [r["股票代码"] for r in out["items"]] == ["600519"]
 
-    def test_bespoke_bad_as_of(self, monkeypatch):
+    def test_bespoke_bad_simulated_today(self, monkeypatch):
         monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True, "items": []})
-        assert m.fund_basic_info("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
-        assert m.stock_profile("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
+        assert m.fund_basic_info("xx", ["1"]) == {"error": "bad_simulated_today", "message": "xx"}
+        assert m.stock_profile("xx", ["1"]) == {"error": "bad_simulated_today", "message": "xx"}
 ```
 
 - [ ] **Step 2: Run the tests, verify they fail**
@@ -1220,7 +1220,7 @@ Expected: FAIL — `AttributeError: ... has no attribute 'fund_basic_info'`
 - [ ] **Step 3: Implement the helper + 2 tools** (append to `ttjj_data_pit_mcp.py`)
 
 ```python
-_PIT_MASK_NOTE = "字段已按时点屏蔽: 该值为当前快照, 非 as_of_date 当时的真实值"
+_PIT_MASK_NOTE = "字段已按时点屏蔽: 该值为当前快照, 非 simulated_today 当时的真实值"
 
 
 def _items_of(result: dict) -> Optional[list]:
@@ -1266,13 +1266,13 @@ def _mask_keys(result: dict, keys: tuple[str, ...]) -> None:
 
 
 @_mcp.tool()
-def fund_basic_info(as_of_date: str, fund_codes: list[str]) -> dict[str, Any]:
+def fund_basic_info(simulated_today: str, fund_codes: list[str]) -> dict[str, Any]:
     """基金基本信息（时点版）：基金公司/经理/类型/成立时间。
 
-    注意: 成立时间晚于 as_of_date 的基金会被剔除; "基金经理"/"最新定期报告时间" 是当前快照,
-    已置 null (本服务不提供 as_of_date 当时的真实任职经理)。
+    注意: 成立时间晚于 simulated_today 的基金会被剔除; "基金经理"/"最新定期报告时间" 是当前快照,
+    已置 null (本服务不提供 simulated_today 当时的真实任职经理)。
     """
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     try:
@@ -1280,25 +1280,25 @@ def fund_basic_info(as_of_date: str, fund_codes: list[str]) -> dict[str, Any]:
         if isinstance(result, dict) and "error" not in result:
             _keep_by_static_date(result, "成立时间", cutoff)
             _mask_keys(result, ("基金经理", "最新定期报告时间"))
-        return _pit_wrap(result, cutoff, as_of_date, generic_filter=False)
+        return _pit_wrap(result, cutoff, simulated_today, generic_filter=False)
     except Exception as e:
         return _err(e)
 
 
 @_mcp.tool()
-def stock_profile(as_of_date: str, stock_codes: list[str]) -> dict[str, Any]:
+def stock_profile(simulated_today: str, stock_codes: list[str]) -> dict[str, Any]:
     """股票画像（时点版）：基础信息、申万行业、中信行业。
 
-    注意: 上市日期晚于 as_of_date 的股票会被剔除; 行业分类为当前值 (变动较慢, 未做屏蔽)。
+    注意: 上市日期晚于 simulated_today 的股票会被剔除; 行业分类为当前值 (变动较慢, 未做屏蔽)。
     """
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     try:
         result = _post("/api/stock/profile", {"stock_codes": stock_codes})
         if isinstance(result, dict) and "error" not in result:
             _keep_by_static_date(result, "上市日期", cutoff)
-        return _pit_wrap(result, cutoff, as_of_date, generic_filter=False)
+        return _pit_wrap(result, cutoff, simulated_today, generic_filter=False)
     except Exception as e:
         return _err(e)
 ```
@@ -1324,8 +1324,8 @@ git commit -m "feat: add fund_basic_info & stock_profile with point-in-time mask
 - Modify: `/home/rooot/agent_invest_lab/ttjj_data_pit_mcp.py` (add 2 tools)
 - Modify: `/home/rooot/agent_invest_lab/tests/test_tools.py` (add a test class)
 
-- `ttjj_research_search`: upstream takes `search_days` ("近 N 天"). We can't pass an explicit end date, so we both (a) recompute nothing on the request side beyond keeping `search_days` (the upstream "近 N 天" is relative to *its* today, which we can't change) — instead we just call upstream then (b) run the generic `_filter_response`, which drops any returned article whose publish-date field (e.g. `发布时间` / `日期` / `publish_time`) is > cutoff. Additionally we add a `_pit_note` to the result explaining the search window may have included (now-removed) future articles. Keep the same params as `server.py`, plus `as_of_date` first.
-- `market_realtime_quote`: just `as_of_date` first + generic `_filter_response` (drops any quote record whose timestamp field is > cutoff). Document the "effectively today-only" limitation in the docstring.
+- `ttjj_research_search`: upstream takes `search_days` ("近 N 天"). We can't pass an explicit end date, so we both (a) recompute nothing on the request side beyond keeping `search_days` (the upstream "近 N 天" is relative to *its* today, which we can't change) — instead we just call upstream then (b) run the generic `_filter_response`, which drops any returned article whose publish-date field (e.g. `发布时间` / `日期` / `publish_time`) is > cutoff. Additionally we add a `_pit_note` to the result explaining the search window may have included (now-removed) future articles. Keep the same params as `server.py`, plus `simulated_today` first.
+- `market_realtime_quote`: just `simulated_today` first + generic `_filter_response` (drops any quote record whose timestamp field is > cutoff). Document the "effectively today-only" limitation in the docstring.
 
 - [ ] **Step 1: Write the failing tests** (append to `tests/test_tools.py`)
 
@@ -1342,12 +1342,12 @@ class TestSpecialTools:
         monkeypatch.setattr(m, "_post", fake)
         out = m.ttjj_research_search("2024-01-01", "贵州茅台")
         assert [r["标题"] for r in out["results"]] == ["旧闻"]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
         assert "_pit_note" in out
 
-    def test_research_search_bad_as_of(self, monkeypatch):
+    def test_research_search_bad_simulated_today(self, monkeypatch):
         monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True})
-        assert m.ttjj_research_search("xx", "q") == {"error": "bad_as_of_date", "message": "xx"}
+        assert m.ttjj_research_search("xx", "q") == {"error": "bad_simulated_today", "message": "xx"}
 
     def test_realtime_quote_filters_future_timestamps(self, monkeypatch):
         def fake(path, data):
@@ -1359,11 +1359,11 @@ class TestSpecialTools:
         monkeypatch.setattr(m, "_post", fake)
         out = m.market_realtime_quote("2024-01-01", ["600519", "000300"])
         assert [r["代码"] for r in out["items"]] == ["600519"]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
-    def test_realtime_quote_bad_as_of(self, monkeypatch):
+    def test_realtime_quote_bad_simulated_today(self, monkeypatch):
         monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True})
-        assert m.market_realtime_quote("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
+        assert m.market_realtime_quote("xx", ["1"]) == {"error": "bad_simulated_today", "message": "xx"}
 
     def test_special_tools_registered(self):
         assert callable(m.ttjj_research_search)
@@ -1384,7 +1384,7 @@ Expected: FAIL — `AttributeError: ... has no attribute 'ttjj_research_search'`
 
 @_mcp.tool()
 def ttjj_research_search(
-    as_of_date: str,
+    simulated_today: str,
     query: str,
     search_type: str = "news",
     top_k: int = 5,
@@ -1393,11 +1393,11 @@ def ttjj_research_search(
 ) -> dict[str, Any]:
     """天天基金研报/资讯搜索（时点版）。search_type: news/research/all。
 
-    注意: 上游的 "近 search_days 天" 是相对它的当前时间, 无法改成相对 as_of_date;
-    本服务在拿到结果后会把发布时间晚于 as_of_date 的条目剔除, 所以历史 as_of_date 下
+    注意: 上游的 "近 search_days 天" 是相对它的当前时间, 无法改成相对 simulated_today;
+    本服务在拿到结果后会把发布时间晚于 simulated_today 的条目剔除, 所以历史 simulated_today 下
     返回的条数可能远少于 top_k(甚至为空)。
     """
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     try:
@@ -1408,9 +1408,9 @@ def ttjj_research_search(
             "search_days": search_days,
             "score_threshold": score_threshold,
         })
-        result = _pit_wrap(result, cutoff, as_of_date)
+        result = _pit_wrap(result, cutoff, simulated_today)
         if isinstance(result, dict) and "error" not in result:
-            result["_pit_note"] = ("搜索窗口为相对上游当前时间的近 N 天; 发布时间晚于 as_of_date "
+            result["_pit_note"] = ("搜索窗口为相对上游当前时间的近 N 天; 发布时间晚于 simulated_today "
                                    "的条目已被剔除, 结果数可能少于 top_k。")
         return result
     except Exception as e:
@@ -1419,7 +1419,7 @@ def ttjj_research_search(
 
 @_mcp.tool()
 def market_realtime_quote(
-    as_of_date: str,
+    simulated_today: str,
     codes: list[str],
     include: Optional[list[str]] = None,
     raw: bool = False,
@@ -1429,17 +1429,17 @@ def market_realtime_quote(
 
     include: quote/order_book/capital_flow/valuation/industry/index
 
-    注意: 实时行情的时间戳必然是"现在"; 当 as_of_date 早于今天时, 返回的行情会被全部
+    注意: 实时行情的时间戳必然是"现在"; 当 simulated_today 早于今天时, 返回的行情会被全部
     过滤掉(即该工具实际只对"今天"有效)。
     """
-    cutoff, err = _check_as_of(as_of_date)
+    cutoff, err = _check_simulated_today(simulated_today)
     if err:
         return err
     try:
         d: dict = {"codes": codes, "raw": raw, "timeout": timeout}
         if include:
             d["include"] = include
-        return _pit_wrap(_post("/api/market/realtime-quote", d), cutoff, as_of_date)
+        return _pit_wrap(_post("/api/market/realtime-quote", d), cutoff, simulated_today)
     except Exception as e:
         return _err(e)
 ```
@@ -1580,10 +1580,10 @@ def _all_dates_le(obj, cutoff):
                 _all_dates_le(v, cutoff)
 
 
-def test_fund_nav_live_respects_as_of():
+def test_fund_nav_live_respects_simulated_today():
     cutoff = date(2024, 1, 1)
     out = m.fund_nav("2024-01-01", ["110011"])
-    assert out.get("_as_of_date") == "2024-01-01"
+    assert out.get("_simulated_today") == "2024-01-01"
     assert "error" not in out, out
     _all_dates_le(out, cutoff)
 
@@ -1620,7 +1620,7 @@ Confirm:
 - `python3 -m pytest -q` → all pass.
 - `grep -nE "@_mcp.tool" ttjj_data_pit_mcp.py | wc -l` → `19`.
 - `grep -nE "def (fund_select|fund_performance|fund_manager_profile|fund_style_analysis|fund_rate|fund_theme_screening|fund_stock_holdings_screen|fund_index_tracking|fund_top_holdings|fund_invest_position|fund_turnover_rate|fund_industry_exposure|entity_extract|health_check)\b" ttjj_data_pit_mcp.py` → no matches.
-- Every tool's first parameter is `as_of_date: str`.
+- Every tool's first parameter is `simulated_today: str`.
 - The original `/home/rooot/MCP/ttjj-data-mcp/` is unchanged (`cd /home/rooot/MCP/ttjj-data-mcp && git status` if it's a repo, or just confirm mtimes).
 
 - [ ] **Step 6: Commit**
@@ -1635,7 +1635,7 @@ git commit -m "test: add opt-in live upstream smoke tests"
 
 ## Notes for the implementer
 
-- Append code to `ttjj_data_pit_mcp.py` in task order; the final file layout (top → bottom) is: module docstring → imports → constants → `_parse_date` → `_is_date_field` (+ `_DATE_FIELD_RE` widening from Task 3) → `_record_has_future_date` / `_filter_response` → `_check_as_of` / `_clamp_end_date` / `_reject_if_future` → `_get_session` / `_post` / `_pit_wrap` / `_err` → the 15 dated tools → `_items_of` / `_keep_by_static_date` / `_mask_keys` / `fund_basic_info` / `stock_profile` → `ttjj_research_search` / `market_realtime_quote` → `main()` → `if __name__ == "__main__"`. (Helpers used by tools must be defined above the tools; `_items_of` etc. can go just before Task 8's tools.)
+- Append code to `ttjj_data_pit_mcp.py` in task order; the final file layout (top → bottom) is: module docstring → imports → constants → `_parse_date` → `_is_date_field` (+ `_DATE_FIELD_RE` widening from Task 3) → `_record_has_future_date` / `_filter_response` → `_check_simulated_today` / `_clamp_end_date` / `_reject_if_future` → `_get_session` / `_post` / `_pit_wrap` / `_err` → the 15 dated tools → `_items_of` / `_keep_by_static_date` / `_mask_keys` / `fund_basic_info` / `stock_profile` → `ttjj_research_search` / `market_realtime_quote` → `main()` → `if __name__ == "__main__"`. (Helpers used by tools must be defined above the tools; `_items_of` etc. can go just before Task 8's tools.)
 - `pytest` imports `ttjj_data_pit_mcp` as a top-level module — run pytest from `/home/rooot/agent_invest_lab/` so the module is on `sys.path`. If discovery fails, add an empty `tests/__init__.py` or a `conftest.py` at repo root with `import sys, os; sys.path.insert(0, os.path.dirname(__file__))`.
 - Do not edit anything under `/home/rooot/MCP/`.
 - If `python3 -m pip install` is blocked (no network), check whether `mcp` / `requests` / `pytest` are already importable (`python3 -c "import mcp, requests, pytest"`) before failing the task — the sibling MCP project already uses them.

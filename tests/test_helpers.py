@@ -56,7 +56,7 @@ class TestIsDateField:
 
     def test_blocklisted(self):
         for k in ["query_time", "update_time", "updated_at", "create_time",
-                  "created_at", "_as_of_date", "_pit_note", "_pit_truncated"]:
+                  "created_at", "_simulated_today", "_pit_note", "_pit_truncated"]:
             assert not m._is_date_field(k), k
 
     def test_non_date_names(self):
@@ -140,19 +140,19 @@ class TestFilterResponse:
 
 
 class TestAsOfGuards:
-    def test_check_as_of_ok(self):
-        cutoff, err = m._check_as_of("2024-01-01")
+    def test_check_simulated_today_ok(self):
+        cutoff, err = m._check_simulated_today("2024-01-01")
         assert cutoff == _d(2024, 1, 1)
         assert err is None
 
-    def test_check_as_of_bad(self):
-        cutoff, err = m._check_as_of("2024-13-40")
+    def test_check_simulated_today_bad(self):
+        cutoff, err = m._check_simulated_today("2024-13-40")
         assert cutoff is None
-        assert err == {"error": "bad_as_of_date", "message": "2024-13-40"}
+        assert err == {"error": "bad_simulated_today", "message": "2024-13-40"}
 
-    def test_check_as_of_empty(self):
-        cutoff, err = m._check_as_of("")
-        assert cutoff is None and err["error"] == "bad_as_of_date"
+    def test_check_simulated_today_empty(self):
+        cutoff, err = m._check_simulated_today("")
+        assert cutoff is None and err["error"] == "bad_simulated_today"
 
     def test_clamp_end_date_none_returns_cutoff(self):
         assert m._clamp_end_date(None, _d(2024, 1, 1)) == "2024-01-01"
@@ -175,7 +175,7 @@ class TestAsOfGuards:
     def test_reject_if_future_future(self):
         err = m._reject_if_future("report_date", "2025-12-31", _d(2024, 1, 1))
         assert err == {"error": "lookahead",
-                       "message": "report_date=2025-12-31 晚于 as_of_date=2024-01-01"}
+                       "message": "report_date=2025-12-31 晚于 simulated_today=2024-01-01"}
 
     def test_reject_if_future_unparseable_passes(self):
         assert m._reject_if_future("trade_date", "garbage", _d(2024, 1, 1)) is None

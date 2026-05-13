@@ -10,18 +10,18 @@ class TestPitWrap:
         result = {"items": [{"交易日期": "2023-12-31", "v": 1}, {"交易日期": "2099-01-01", "v": 2}]}
         out = m._pit_wrap(result, date(2024, 1, 1), "2024-01-01")
         assert out["items"] == [{"交易日期": "2023-12-31", "v": 1}]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
     def test_skips_generic_filter_when_disabled(self):
         result = {"items": [{"交易日期": "2099-01-01", "v": 2}]}
         out = m._pit_wrap(result, date(2024, 1, 1), "2024-01-01", generic_filter=False)
         assert out["items"] == [{"交易日期": "2099-01-01", "v": 2}]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
     def test_stamps_error_dicts_too(self):
         out = m._pit_wrap({"error": "api_error", "message": "x"}, date(2024, 1, 1), "2024-01-01")
         assert out["error"] == "api_error"
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
 
 def test_post_uses_base_url_and_unwraps(monkeypatch):
@@ -76,16 +76,16 @@ class TestDatedTools:
         assert calls[0][1]["end_date"] == "2024-01-01"          # clamped
         assert calls[0][1]["start_date"] == "2023-01-01"        # kept
         assert out["items"] == [{"交易日期": "2023-12-31", "v": 1}]   # future record dropped
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
-    def test_fund_nav_defaults_end_to_as_of(self, monkeypatch):
+    def test_fund_nav_defaults_end_to_simulated_today(self, monkeypatch):
         calls = self._fake_post(monkeypatch)
         m.fund_nav("2024-01-01", ["110011"])
         assert calls[0][1]["end_date"] == "2024-01-01"
 
-    def test_bad_as_of(self, monkeypatch):
+    def test_bad_simulated_today(self, monkeypatch):
         self._fake_post(monkeypatch)
-        assert m.fund_nav("nope", ["110011"]) == {"error": "bad_as_of_date", "message": "nope"}
+        assert m.fund_nav("nope", ["110011"]) == {"error": "bad_simulated_today", "message": "nope"}
 
     def test_future_start_date_rejected(self, monkeypatch):
         self._fake_post(monkeypatch)
@@ -154,7 +154,7 @@ class TestBespokeTools:
         assert rec["基金经理"] is None
         assert rec["最新定期报告时间"] is None
         assert "_pit_note" in rec
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
     def test_stock_profile_drops_stocks_listed_after_cutoff(self, monkeypatch):
         def fake(path, data):
@@ -167,10 +167,10 @@ class TestBespokeTools:
         out = m.stock_profile("2024-01-01", ["600519", "688981"])
         assert [r["股票代码"] for r in out["items"]] == ["600519"]
 
-    def test_bespoke_bad_as_of(self, monkeypatch):
+    def test_bespoke_bad_simulated_today(self, monkeypatch):
         monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True, "items": []})
-        assert m.fund_basic_info("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
-        assert m.stock_profile("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
+        assert m.fund_basic_info("xx", ["1"]) == {"error": "bad_simulated_today", "message": "xx"}
+        assert m.stock_profile("xx", ["1"]) == {"error": "bad_simulated_today", "message": "xx"}
 
 
 class TestSpecialTools:
@@ -185,12 +185,12 @@ class TestSpecialTools:
         monkeypatch.setattr(m, "_post", fake)
         out = m.ttjj_research_search("2024-01-01", "贵州茅台")
         assert [r["标题"] for r in out["results"]] == ["旧闻"]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
         assert "_pit_note" in out
 
-    def test_research_search_bad_as_of(self, monkeypatch):
+    def test_research_search_bad_simulated_today(self, monkeypatch):
         monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True})
-        assert m.ttjj_research_search("xx", "q") == {"error": "bad_as_of_date", "message": "xx"}
+        assert m.ttjj_research_search("xx", "q") == {"error": "bad_simulated_today", "message": "xx"}
 
     def test_realtime_quote_filters_future_timestamps(self, monkeypatch):
         def fake(path, data):
@@ -202,11 +202,11 @@ class TestSpecialTools:
         monkeypatch.setattr(m, "_post", fake)
         out = m.market_realtime_quote("2024-01-01", ["600519", "000300"])
         assert [r["代码"] for r in out["items"]] == ["600519"]
-        assert out["_as_of_date"] == "2024-01-01"
+        assert out["_simulated_today"] == "2024-01-01"
 
-    def test_realtime_quote_bad_as_of(self, monkeypatch):
+    def test_realtime_quote_bad_simulated_today(self, monkeypatch):
         monkeypatch.setattr(m, "_post", lambda *a, **k: {"success": True})
-        assert m.market_realtime_quote("xx", ["1"]) == {"error": "bad_as_of_date", "message": "xx"}
+        assert m.market_realtime_quote("xx", ["1"]) == {"error": "bad_simulated_today", "message": "xx"}
 
     def test_special_tools_registered(self):
         assert callable(m.ttjj_research_search)
