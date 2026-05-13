@@ -13,11 +13,11 @@ replay:
   to:   "2024-06-28"
 
 # bot 模板目录的父目录：world 会在 <bots_root>/<botId>/ 找 IDENTITY/SOUL/AGENTS/skills 等，
-# 复制成每个 run 的影子 workspace。默认相对本文件 → ../bots（即 <world>/bots/<botId>/）。
+# 复制成每个 run 的影子 workspace。默认相对本文件 → ../../bots（即 <repo>/bots/<botId>/，与 <world> 同级）。
 # bots_root: /custom/path/to/bots
 
 # research-loop 用的共享技能库（armor/research/portfolio/...），会作为绝对路径注入到
-# 生成 rl-config 的 extra_roots。默认相对本文件 → ../skills（即 <world>/skills/）。
+# 生成 rl-config 的 extra_roots。默认相对本文件 → ../../skills（即 <repo>/skills/，与 <world> 同级）。
 # skills_root: /custom/path/to/skills
 
 # 凭据 JSON（model api key、browser SSRF 等）。默认相对本文件 → ./openclaw.json
@@ -44,3 +44,20 @@ per_bot_timeout_seconds: 1200
 
 # 影子 workspace 从 <bots_root>/<botId>/ 复制哪些条目（默认见 src/config.ts DEFAULT_SHADOW_INCLUDE）
 # shadow_include: [IDENTITY.md, SOUL.md, AGENTS.md, USER.md, METHODOLOGY.md, RESEARCH.md, MEMORY.md, EQUIPPED_SKILLS.md, TOOLS.md, skills]
+
+# === Loop（agent runtime）选择 ===
+# 整 run 一种 loop，不混用。值：research-loop（默认）| openclaw-pi
+# loop: research-loop
+
+# === openclaw-pi loop 专用配置（只在 loop=openclaw-pi 时生效）===
+#
+# openclaw-pi 复用上面的 openclaw_json 作为凭据源。world 启动时把它复制进
+# runs/<run>/rl-openclaw/openclaw.json，并把 mcp.mem0 改写为本 run 的隔离 memory
+# server URL，pi-server 从该副本读配置。
+#
+# openclaw 仓根路径。用于推断 pi_server_entry。默认 /home/rooot/.openclaw/openclaw
+# openclaw_root: /path/to/openclaw
+#
+# pi-stdio-server 入口路径覆盖（测试/非常规布局用）。默认从 openclaw_root 推断：
+#   <openclaw_root>/src/agents/agent_invest_pi_stdio_server.ts
+# pi_server_entry: /path/to/agent_invest_pi_stdio_server.ts

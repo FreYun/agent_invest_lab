@@ -52,16 +52,16 @@ export function loadWorldConfig(path: string): WorldConfig {
 
   const researchLoop = reqString(raw, 'research_loop')
 
-  // world.yaml lives at <world>/config/world.yaml, so defaults resolve into the world tree:
-  //   bots_root      → ../bots            (i.e. <world>/bots/<botId>/)
-  //   skills_root    → ../skills          (i.e. <world>/skills/, injected as extra_roots)
+  // world.yaml lives at <world>/config/world.yaml. Defaults:
+  //   bots_root      → ../../bots         (i.e. <repo>/bots/<botId>/, sibling of <world>)
+  //   skills_root    → ../../skills       (i.e. <repo>/skills/, injected as extra_roots)
   //   openclaw_json  → ./openclaw.json    (i.e. <world>/config/openclaw.json, credentials)
   const botsRoot = typeof raw.bots_root === 'string' && raw.bots_root.trim()
     ? resolveMaybe(baseDir, raw.bots_root)
-    : resolveMaybe(baseDir, '../bots')
+    : resolveMaybe(baseDir, '../../bots')
   const skillsRoot = typeof raw.skills_root === 'string' && raw.skills_root.trim()
     ? resolveMaybe(baseDir, raw.skills_root)
-    : resolveMaybe(baseDir, '../skills')
+    : resolveMaybe(baseDir, '../../skills')
   const openclawJson = typeof raw.openclaw_json === 'string' && raw.openclaw_json.trim()
     ? resolveMaybe(baseDir, raw.openclaw_json)
     : resolveMaybe(baseDir, 'openclaw.json')

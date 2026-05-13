@@ -22,8 +22,8 @@ replay: { from: "2024-01-02", to: "2024-06-28" }
   assert.equal(c.researchLoop, '/opt/rl')
   // bots_root / skills_root / openclaw_json default to paths inside the world tree,
   // resolved relative to the world.yaml's parent dir.
-  assert.equal(c.botsRoot, resolve(dirname(p), '../bots'))
-  assert.equal(c.skillsRoot, resolve(dirname(p), '../skills'))
+  assert.equal(c.botsRoot, resolve(dirname(p), '../../bots'))
+  assert.equal(c.skillsRoot, resolve(dirname(p), '../../skills'))
   assert.equal(c.openclawJson, resolve(dirname(p), 'openclaw.json'))
   assert.equal(isAbsolute(c.botsRoot), true)
   assert.equal(isAbsolute(c.skillsRoot), true)
