@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 
 export const DEFAULT_SHADOW_INCLUDE = [
@@ -9,8 +9,10 @@ export const DEFAULT_SHADOW_INCLUDE = [
 ]
 
 export interface WorldConfig {
-  researchLoopTs: string
-  workspaceRoot: string
+  researchLoop: string
+  botsRoot: string
+  openclawJson: string
+  skillsRoot: string
   bots: string[]
   replay: { from: string; to: string }
   calendar: string
@@ -19,6 +21,10 @@ export interface WorldConfig {
   rlConfigBase: string
   rlOpenclawDir?: string
   shadowInclude: string[]
+  loop: 'research-loop' | 'openclaw-pi'
+  piOpenclawJson?: string
+  openclawRoot?: string
+  piServerEntry?: string
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -45,8 +51,21 @@ export function loadWorldConfig(path: string): WorldConfig {
   const raw = (parseYaml(text) ?? {}) as Record<string, unknown>
   const baseDir = dirname(resolve(path))
 
-  const researchLoopTs = reqString(raw, 'research_loop_ts')
-  const workspaceRoot = reqString(raw, 'workspace_root')
+  const researchLoop = reqString(raw, 'research_loop')
+
+  // world.yaml lives at <world>/config/world.yaml, so defaults resolve into the world tree:
+  //   bots_root      → ../bots            (i.e. <world>/bots/<botId>/)
+  //   skills_root    → ../skills          (i.e. <world>/skills/, injected as extra_roots)
+  //   openclaw_json  → ./openclaw.json    (i.e. <world>/config/openclaw.json, credentials)
+  const botsRoot = typeof raw.bots_root === 'string' && raw.bots_root.trim()
+    ? resolveMaybe(baseDir, raw.bots_root)
+    : resolveMaybe(baseDir, '../bots')
+  const skillsRoot = typeof raw.skills_root === 'string' && raw.skills_root.trim()
+    ? resolveMaybe(baseDir, raw.skills_root)
+    : resolveMaybe(baseDir, '../skills')
+  const openclawJson = typeof raw.openclaw_json === 'string' && raw.openclaw_json.trim()
+    ? resolveMaybe(baseDir, raw.openclaw_json)
+    : resolveMaybe(baseDir, 'openclaw.json')
 
   const botsRaw = raw.bots
   if (!Array.isArray(botsRaw) || botsRaw.length === 0 || !botsRaw.every(b => typeof b === 'string' && b.trim())) {
@@ -72,5 +91,35 @@ export function loadWorldConfig(path: string): WorldConfig {
     ? (raw.shadow_include as string[])
     : DEFAULT_SHADOW_INCLUDE
 
-  return { researchLoopTs, workspaceRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude }
+  const loopRaw = raw.loop
+  let loop: 'research-loop' | 'openclaw-pi' = 'research-loop'
+  if (loopRaw !== undefined) {
+    if (loopRaw !== 'research-loop' && loopRaw !== 'openclaw-pi') {
+      throw new Error(`world config: "loop" must be "research-loop" or "openclaw-pi" (got ${JSON.stringify(loopRaw)})`)
+    }
+    loop = loopRaw
+  }
+
+  let piOpenclawJson: string | undefined
+  let openclawRoot: string | undefined
+  let piServerEntry: string | undefined
+  if (loop === 'openclaw-pi') {
+    piOpenclawJson = typeof raw.pi_openclaw_json === 'string' && raw.pi_openclaw_json.trim()
+      ? resolveMaybe(baseDir, raw.pi_openclaw_json)
+      : '/home/rooot/.openclaw/openclaw.json'
+    if (!existsSync(piOpenclawJson)) {
+      throw new Error(`world config: pi_openclaw_json not found: ${piOpenclawJson}`)
+    }
+    openclawRoot = typeof raw.openclaw_root === 'string' && raw.openclaw_root.trim()
+      ? resolveMaybe(baseDir, raw.openclaw_root)
+      : '/home/rooot/.openclaw/openclaw'
+    piServerEntry = typeof raw.pi_server_entry === 'string' && raw.pi_server_entry.trim()
+      ? resolveMaybe(baseDir, raw.pi_server_entry)
+      : join(openclawRoot, 'src/agents/agent_invest_pi_stdio_server.ts')
+    if (!existsSync(piServerEntry)) {
+      throw new Error(`world config: pi_server_entry not found: ${piServerEntry}`)
+    }
+  }
+
+  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, piOpenclawJson, openclawRoot, piServerEntry }
 }
