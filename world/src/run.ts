@@ -49,7 +49,12 @@ export function patchPiOpenclawJsonMemory(rlOpenclawDir: string, memoryUrl: stri
 export function botServerArgv(config: WorldConfig, botId: string, workspace: string, loopConfigPath: string): string[] {
   if (config.loop === 'openclaw-pi') {
     if (!config.piServerEntry) throw new Error('botServerArgv: piServerEntry required for openclaw-pi loop')
-    return [process.execPath, '--experimental-strip-types', config.piServerEntry, '--bot-id', botId, '--workspace', workspace, '--openclaw-json', loopConfigPath]
+    if (!config.openclawRoot) throw new Error('botServerArgv: openclawRoot required for openclaw-pi loop')
+    // pi-server imports openclaw internals with .js specifiers pointing at .ts files;
+    // --experimental-strip-types doesn't rewrite .js → .ts, so use tsx loader via absolute path
+    // (avoids depending on the spawn cwd having tsx in node_modules).
+    const tsxLoader = join(config.openclawRoot, 'node_modules/tsx/dist/loader.mjs')
+    return [process.execPath, '--import', `file://${tsxLoader}`, config.piServerEntry, '--bot-id', botId, '--workspace', workspace, '--openclaw-json', loopConfigPath]
   }
   const serverEntry = join(config.researchLoop, 'server.ts')
   return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', loopConfigPath]
@@ -70,6 +75,9 @@ function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string,
   base.mcp = mcp
   base.openclaw_dir = openclawDir
   base.extra_roots = [config.skillsRoot]
+  // 让 rl-ts 从 run 专属 rl-openclaw/openclaw.json 里读模型 API key，
+  // 而不是它默认写死的 /home/rooot/.openclaw/openclaw.json
+  base.openclaw_json_path = join(openclawDir, 'openclaw.json')
   writeFileSync(P.runConfigFile(worldRoot, runId), JSON.stringify(base, null, 2) + '\n')
 }
 

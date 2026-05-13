@@ -245,9 +245,10 @@ test('botServerArgv: openclaw-pi branch points at piServerEntry with --openclaw-
   }
   const argv = botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/runs/r1/rl-openclaw/openclaw.json')
   assert.equal(argv[0], process.execPath)
-  assert.equal(argv[1], '--experimental-strip-types')
-  assert.equal(argv[2], '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts')
-  assert.deepEqual(argv.slice(3), ['--bot-id', 'bot7', '--workspace', '/tmp/ws/bot7', '--openclaw-json', '/tmp/runs/r1/rl-openclaw/openclaw.json'])
+  assert.equal(argv[1], '--import')
+  assert.equal(argv[2], 'file:///tmp/oc/node_modules/tsx/dist/loader.mjs')
+  assert.equal(argv[3], '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts')
+  assert.deepEqual(argv.slice(4), ['--bot-id', 'bot7', '--workspace', '/tmp/ws/bot7', '--openclaw-json', '/tmp/runs/r1/rl-openclaw/openclaw.json'])
 })
 
 test('botServerArgv: openclaw-pi without piServerEntry throws', () => {
@@ -269,6 +270,27 @@ test('botServerArgv: openclaw-pi without piServerEntry throws', () => {
     piServerEntry: undefined,
   }
   assert.throws(() => botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/oc.json'), /piServerEntry/)
+})
+
+test('botServerArgv: openclaw-pi without openclawRoot throws', () => {
+  const cfg: WorldConfig = {
+    researchLoop: '/tmp/research-loop/ts',
+    botsRoot: '/tmp/bots',
+    openclawJson: '/tmp/oc.json',
+    skillsRoot: '/tmp/skills',
+    bots: ['bot7'],
+    replay: { from: '2024-01-02', to: '2024-01-03' },
+    calendar: '/tmp/cal.json',
+    concurrency: 1,
+    perBotTimeoutSeconds: 30,
+    rlConfigBase: '/tmp/base.json',
+    rlOpenclawDir: undefined,
+    shadowInclude: [],
+    loop: 'openclaw-pi',
+    openclawRoot: undefined,
+    piServerEntry: '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts',
+  }
+  assert.throws(() => botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/oc.json'), /openclawRoot/)
 })
 
 test('openclawJsonSource: research-loop returns config.openclawJson', () => {

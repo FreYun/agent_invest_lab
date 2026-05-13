@@ -47,7 +47,10 @@ test('runWorld with loop=openclaw-pi: stub pi-server drives 1 trading day end-to
     rlOpenclawDir: undefined,
     shadowInclude: ['SOUL.md'],
     loop: 'openclaw-pi',
-    openclawRoot: '/unused',
+    // pi spawn uses <openclawRoot>/node_modules/tsx/dist/loader.mjs; point at real openclaw
+    // so tsx resolves. The stub doesn't actually need tsx (no .js imports) but the world-side
+    // spawn argv unconditionally references the loader.
+    openclawRoot: '/home/rooot/.openclaw/openclaw',
     piServerEntry: STUB_PI,
   }
 
