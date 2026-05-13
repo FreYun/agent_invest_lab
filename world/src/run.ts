@@ -34,15 +34,17 @@ export function loopConfigPath(config: WorldConfig, worldRoot: string, runId: st
   return P.runConfigFile(worldRoot, runId)
 }
 
-/** openclaw-pi loop：把 rl-openclaw/openclaw.json 的 mcp.mem0 改写为本 run 的 memory URL，让 pi 用隔离的记忆服务。 */
+/** openclaw-pi loop：如果 rl-openclaw/openclaw.json 已经有 mcp.mem0 字段，把它改写为本 run 的 memory URL；
+ *  否则不动（openclaw 的 config 校验对未知 mcp 子键会拒，所以不能凭空塞入）。 */
 export function patchPiOpenclawJsonMemory(rlOpenclawDir: string, memoryUrl: string): void {
   const p = join(rlOpenclawDir, 'openclaw.json')
   let cfg: Record<string, unknown>
   try { cfg = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown> }
   catch (err) { throw new Error(`cannot read ${p}: ${err instanceof Error ? err.message : String(err)}`) }
-  const mcp = (typeof cfg.mcp === 'object' && cfg.mcp ? cfg.mcp : {}) as Record<string, unknown>
+  if (typeof cfg.mcp !== 'object' || !cfg.mcp) return
+  const mcp = cfg.mcp as Record<string, unknown>
+  if (!('mem0' in mcp)) return
   mcp.mem0 = memoryUrl
-  cfg.mcp = mcp
   writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n')
 }
 
@@ -127,9 +129,13 @@ function formatBotNotification(botId: string, method: string, params: Record<str
 
 async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   const { worldRoot, config, runId } = opts
+  // pi-server needs to be spawned with cwd=openclawRoot so tsx's tsconfig.json lookup picks up
+  // openclaw's path aliases (openclaw/plugin-sdk/*). research-loop doesn't need this.
+  const spawnCwd = config.loop === 'openclaw-pi' ? config.openclawRoot : undefined
   const startBotServer: StartBotServer = opts.startBotServer
     ?? ((botId, argv) => BotServer.start(botId, {
       argv,
+      cwd: spawnCwd,
       readyTimeoutMs: 60_000,
       onLog: (l) => process.stderr.write(l + '\n'),
       onNotification: (method, params) => {

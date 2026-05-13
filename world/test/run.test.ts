@@ -326,12 +326,22 @@ test('patchPiOpenclawJsonMemory: rewrites mcp.mem0 to the given URL', () => {
   assert.equal(after.top, 'keep')
 })
 
-test('patchPiOpenclawJsonMemory: creates mcp object if missing', () => {
+test('patchPiOpenclawJsonMemory: leaves file alone when mcp.mem0 is absent (openclaw schema would reject unknown mcp keys)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pi-patch-'))
   const p = join(dir, 'openclaw.json')
   writeFileSync(p, JSON.stringify({ top: 'value' }) + '\n')
   patchPiOpenclawJsonMemory(dir, 'http://127.0.0.1:9999')
   const after = JSON.parse(readFileSync(p, 'utf8'))
-  assert.equal(after.mcp.mem0, 'http://127.0.0.1:9999')
+  assert.equal(after.mcp, undefined)
   assert.equal(after.top, 'value')
+})
+
+test('patchPiOpenclawJsonMemory: leaves file alone when mcp exists but has no mem0', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pi-patch-'))
+  const p = join(dir, 'openclaw.json')
+  writeFileSync(p, JSON.stringify({ mcp: { servers: { foo: 'bar' } } }) + '\n')
+  patchPiOpenclawJsonMemory(dir, 'http://127.0.0.1:9999')
+  const after = JSON.parse(readFileSync(p, 'utf8'))
+  assert.equal(after.mcp.servers.foo, 'bar')
+  assert.equal('mem0' in after.mcp, false)
 })
