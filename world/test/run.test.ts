@@ -106,6 +106,24 @@ test('runWorld: a hanging bot is recorded as timeout but does not block the othe
   cleanup()
 })
 
+test('runWorld writes a running status as soon as a bot chat is dispatched', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14'] })
+  config.perBotTimeoutSeconds = 2
+  const start = (botId: string, _argv: string[]) => BotServer.start(botId, {
+    argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+    readyTimeoutMs: 5000,
+    env: { STUB_CHAT_DELAY_MS: '300' },
+  })
+  const runPromise = runWorld({ worldRoot, config, runId: 'rrun', startBotServer: start })
+  await new Promise(resolve => setTimeout(resolve, 80))
+  const running = JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrun', '2024-03-14', 'bot1'), 'utf8'))
+  assert.equal(running.status, 'running')
+  assert.equal(typeof running.started_at, 'string')
+  assert.equal('finished_at' in running, false)
+  await runPromise
+  cleanup()
+})
+
 test('runWorld fails fast when a quotes.json is missing', async () => {
   const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
   rmSync(P.quotesFile(worldRoot, '2024-03-15'), { force: true })

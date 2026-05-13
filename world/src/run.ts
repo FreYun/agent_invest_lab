@@ -52,10 +52,55 @@ interface SetupResult {
   currentDateRef: { value: string }
 }
 
+function formatBotNotification(botId: string, method: string, params: Record<string, unknown>): string | null {
+  if (method === 'research.started') {
+    const topic = typeof params.topic === 'string' ? params.topic.slice(0, 48) : ''
+    return `bot ${botId}: research started${topic ? ` (${topic}${topic.length === 48 ? '…' : ''})` : ''}`
+  }
+  if (method === 'research.progress') {
+    const event = typeof params.event === 'string' ? params.event : ''
+    if (event === 'phase') {
+      const phase = typeof params.phase === 'string' ? params.phase : 'unknown'
+      return `bot ${botId}: phase=${phase}`
+    }
+    if (event === 'nudge') {
+      const text = typeof params.text === 'string' ? params.text.slice(0, 80) : ''
+      return `bot ${botId}: ${text || 'progress update'}`
+    }
+    if (event === 'done') return `bot ${botId}: research completed`
+  }
+  if (method === 'tool.call') {
+    const name = typeof params.name === 'string' ? params.name : 'unknown'
+    return `bot ${botId}: tool ${name}`
+  }
+  if (method === 'tool.result') {
+    const name = typeof params.name === 'string' ? params.name : 'unknown'
+    const isError = Boolean(params.is_error)
+    return `bot ${botId}: tool ${name} ${isError ? 'error' : 'ok'}`
+  }
+  if (method === 'message.done') {
+    const text = typeof params.text === 'string' ? params.text.slice(0, 80) : ''
+    return `bot ${botId}: reply ready${text ? ` (${text}${text.length === 80 ? '…' : ''})` : ''}`
+  }
+  if (method === 'log' && params.level === 'error') {
+    const message = typeof params.message === 'string' ? params.message : 'unknown error'
+    return `bot ${botId}: error ${message}`
+  }
+  return null
+}
+
 async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   const { worldRoot, config, runId } = opts
   const startBotServer: StartBotServer = opts.startBotServer
-    ?? ((botId, argv) => BotServer.start(botId, { argv, readyTimeoutMs: 60_000, onLog: (l) => process.stderr.write(l + '\n') }))
+    ?? ((botId, argv) => BotServer.start(botId, {
+      argv,
+      readyTimeoutMs: 60_000,
+      onLog: (l) => process.stderr.write(l + '\n'),
+      onNotification: (method, params) => {
+        const line = formatBotNotification(botId, method, params)
+        if (line) log(worldRoot, runId, line)
+      },
+    }))
 
   // 交易日序列
   const cal = loadCalendar(config.calendar)
@@ -121,22 +166,35 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
   mkdirSync(dir, { recursive: true })
   writeFileSync(P.sentFile(worldRoot, runId, date, b.botId), message)
   const startedAt = Date.now()
-  const writeStatus = (s: DayBotStatus): void => writeFileSync(
-    P.statusFile(worldRoot, runId, date, b.botId),
-    JSON.stringify({ status: s.status, started_at: new Date(startedAt).toISOString(), finished_at: new Date().toISOString(), ...(typeof s.iterations === 'number' ? { iterations: s.iterations } : {}), ...(typeof s.usage === 'number' ? { usage: s.usage } : {}), ...(s.error ? { error: s.error } : {}) }, null, 2) + '\n',
-  )
-  if (!b.server.alive) { const s: DayBotStatus = { bot: b.botId, status: 'dead', ms: 0, error: 'server process not alive' }; writeStatus(s); return s }
+  const writeStatus = (status: DayBotStatus['status'] | 'running', extras: { iterations?: number; usage?: number; error?: string; finishedAt?: string } = {}): void => {
+    const payload: Record<string, unknown> = {
+      status,
+      started_at: new Date(startedAt).toISOString(),
+      ...(extras.finishedAt ? { finished_at: extras.finishedAt } : {}),
+      ...(typeof extras.iterations === 'number' ? { iterations: extras.iterations } : {}),
+      ...(typeof extras.usage === 'number' ? { usage: extras.usage } : {}),
+      ...(extras.error ? { error: extras.error } : {}),
+    }
+    writeFileSync(P.statusFile(worldRoot, runId, date, b.botId), JSON.stringify(payload, null, 2) + '\n')
+  }
+  if (!b.server.alive) {
+    const s: DayBotStatus = { bot: b.botId, status: 'dead', ms: 0, error: 'server process not alive' }
+    writeStatus(s.status, { error: s.error, finishedAt: new Date().toISOString() })
+    return s
+  }
+  writeStatus('running')
+  log(worldRoot, runId, `bot ${b.botId}: chat request sent for ${date} (timeout=${Math.floor(perBotTimeoutMs / 1000)}s)`)
   try {
     const r = await b.server.chat({ message, session_key: SESSION_KEY(runId), history: [] }, { timeoutMs: perBotTimeoutMs })
     writeFileSync(P.replyFile(worldRoot, runId, date, b.botId), JSON.stringify(r, null, 2) + '\n')
     const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt }
-    writeStatus(s)
+    writeStatus(s.status, { iterations: s.iterations, usage: s.usage, finishedAt: new Date().toISOString() })
     return s
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const status: DayBotStatus['status'] = /timeout/i.test(msg) ? 'timeout' : !b.server.alive ? 'dead' : 'error'
     const s: DayBotStatus = { bot: b.botId, status, ms: Date.now() - startedAt, error: msg }
-    writeStatus(s)
+    writeStatus(s.status, { error: s.error, finishedAt: new Date().toISOString() })
     return s
   }
 }
