@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runWorld } from '../src/run.ts'
+import { runWorld, botServerArgv } from '../src/run.ts'
 import { BotServer } from '../src/botServer.ts'
 import * as P from '../src/paths.ts'
 import { readState } from '../src/state.ts'
@@ -177,4 +177,75 @@ test('runWorld aborts (status=aborted) when a STOP sentinel is present', async (
   assert.equal(st.cursor, 0)
   assert.equal(existsSync(P.sentFile(worldRoot, 'rstop', '2024-03-14', 'bot1')), false)
   cleanup()
+})
+
+test('botServerArgv: research-loop branch points at researchLoop/server.ts with --config', () => {
+  const cfg: WorldConfig = {
+    researchLoop: '/tmp/research-loop/ts',
+    botsRoot: '/tmp/bots',
+    openclawJson: '/tmp/oc.json',
+    skillsRoot: '/tmp/skills',
+    bots: ['bot7'],
+    replay: { from: '2024-01-02', to: '2024-01-03' },
+    calendar: '/tmp/cal.json',
+    concurrency: 1,
+    perBotTimeoutSeconds: 30,
+    rlConfigBase: '/tmp/base.json',
+    rlOpenclawDir: undefined,
+    shadowInclude: [],
+    loop: 'research-loop',
+    openclawRoot: undefined,
+    piServerEntry: undefined,
+  }
+  const argv = botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/runs/r1/trading-rl-config.json')
+  assert.equal(argv[0], process.execPath)
+  assert.equal(argv[1], '--experimental-strip-types')
+  assert.equal(argv[2], '/tmp/research-loop/ts/server.ts')
+  assert.deepEqual(argv.slice(3), ['--bot-id', 'bot7', '--workspace', '/tmp/ws/bot7', '--config', '/tmp/runs/r1/trading-rl-config.json'])
+})
+
+test('botServerArgv: openclaw-pi branch points at piServerEntry with --openclaw-json', () => {
+  const cfg: WorldConfig = {
+    researchLoop: '/tmp/research-loop/ts',
+    botsRoot: '/tmp/bots',
+    openclawJson: '/tmp/oc.json',
+    skillsRoot: '/tmp/skills',
+    bots: ['bot7'],
+    replay: { from: '2024-01-02', to: '2024-01-03' },
+    calendar: '/tmp/cal.json',
+    concurrency: 1,
+    perBotTimeoutSeconds: 30,
+    rlConfigBase: '/tmp/base.json',
+    rlOpenclawDir: undefined,
+    shadowInclude: [],
+    loop: 'openclaw-pi',
+    openclawRoot: '/tmp/oc',
+    piServerEntry: '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts',
+  }
+  const argv = botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/runs/r1/rl-openclaw/openclaw.json')
+  assert.equal(argv[0], process.execPath)
+  assert.equal(argv[1], '--experimental-strip-types')
+  assert.equal(argv[2], '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts')
+  assert.deepEqual(argv.slice(3), ['--bot-id', 'bot7', '--workspace', '/tmp/ws/bot7', '--openclaw-json', '/tmp/runs/r1/rl-openclaw/openclaw.json'])
+})
+
+test('botServerArgv: openclaw-pi without piServerEntry throws', () => {
+  const cfg: WorldConfig = {
+    researchLoop: '/tmp/research-loop/ts',
+    botsRoot: '/tmp/bots',
+    openclawJson: '/tmp/oc.json',
+    skillsRoot: '/tmp/skills',
+    bots: ['bot7'],
+    replay: { from: '2024-01-02', to: '2024-01-03' },
+    calendar: '/tmp/cal.json',
+    concurrency: 1,
+    perBotTimeoutSeconds: 30,
+    rlConfigBase: '/tmp/base.json',
+    rlOpenclawDir: undefined,
+    shadowInclude: [],
+    loop: 'openclaw-pi',
+    openclawRoot: undefined,
+    piServerEntry: undefined,
+  }
+  assert.throws(() => botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/oc.json'), /piServerEntry/)
 })

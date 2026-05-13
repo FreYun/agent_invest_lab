@@ -23,9 +23,13 @@ export interface RunWorldOptions {
 const SESSION_KEY = (runId: string): string => `trading-${runId}`
 const JOURNAL_REL = 'memory/trading/journal.md'
 
-export function botServerArgv(config: WorldConfig, botId: string, workspace: string, rlConfigPath: string): string[] {
+export function botServerArgv(config: WorldConfig, botId: string, workspace: string, loopConfigPath: string): string[] {
+  if (config.loop === 'openclaw-pi') {
+    if (!config.piServerEntry) throw new Error('botServerArgv: piServerEntry required for openclaw-pi loop')
+    return [process.execPath, '--experimental-strip-types', config.piServerEntry, '--bot-id', botId, '--workspace', workspace, '--openclaw-json', loopConfigPath]
+  }
   const serverEntry = join(config.researchLoop, 'server.ts')
-  return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', rlConfigPath]
+  return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', loopConfigPath]
 }
 
 function log(worldRoot: string, runId: string, msg: string): void {
