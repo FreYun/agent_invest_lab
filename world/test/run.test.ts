@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runWorld, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory } from '../src/run.ts'
+import { runWorld, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot } from '../src/run.ts'
 import { BotServer } from '../src/botServer.ts'
 import * as P from '../src/paths.ts'
 import { readState } from '../src/state.ts'
@@ -249,6 +249,48 @@ test('botServerArgv: openclaw-pi branch points at piServerEntry with --openclaw-
   assert.equal(argv[2], 'file:///tmp/oc/node_modules/tsx/dist/loader.mjs')
   assert.equal(argv[3], '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts')
   assert.deepEqual(argv.slice(4), ['--bot-id', 'bot7', '--workspace', '/tmp/ws/bot7', '--openclaw-json', '/tmp/runs/r1/rl-openclaw/openclaw.json'])
+})
+
+test('botServerArgv: openclaw-pi does NOT append --sessions-dir (piSessionsDir flows via env OPENCLAW_AGENTS_DIR, not argv)', () => {
+  const cfg: WorldConfig = {
+    researchLoop: '/tmp/research-loop/ts',
+    botsRoot: '/tmp/bots',
+    openclawJson: '/tmp/oc.json',
+    skillsRoot: '/tmp/skills',
+    bots: ['bot7'],
+    replay: { from: '2024-01-02', to: '2024-01-03' },
+    calendar: '/tmp/cal.json',
+    concurrency: 1,
+    perBotTimeoutSeconds: 30,
+    rlConfigBase: '/tmp/base.json',
+    rlOpenclawDir: undefined,
+    shadowInclude: [],
+    loop: 'openclaw-pi',
+    openclawRoot: '/tmp/oc',
+    piServerEntry: '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts',
+    piSessionsDir: '/home/rooot/agent_invest_lab/session',
+  }
+  const argv = botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/runs/r1/rl-openclaw/openclaw.json')
+  assert.equal(argv.includes('--sessions-dir'), false)
+})
+
+test('seedPiAgentBot: copies auth files from source agents dir on first call, leaves existing dest alone', () => {
+  const root = mkdtempSync(join(tmpdir(), 'seed-'))
+  const source = join(root, 'src-agents'); mkdirSync(join(source, 'bot7/agent'), { recursive: true })
+  writeFileSync(join(source, 'bot7/agent/auth-profiles.json'), '{"profile":"original"}')
+  writeFileSync(join(source, 'bot7/agent/models.json'), '{}')
+  const dest = join(root, 'pi-sessions')
+
+  seedPiAgentBot(dest, source, 'bot7')
+  assert.equal(readFileSync(join(dest, 'bot7/agent/auth-profiles.json'), 'utf8'), '{"profile":"original"}')
+  assert.equal(existsSync(join(dest, 'bot7/agent/models.json')), true)
+
+  // Second call: don't overwrite
+  writeFileSync(join(dest, 'bot7/agent/auth-profiles.json'), '{"profile":"local-edit"}')
+  seedPiAgentBot(dest, source, 'bot7')
+  assert.equal(readFileSync(join(dest, 'bot7/agent/auth-profiles.json'), 'utf8'), '{"profile":"local-edit"}')
+
+  rmSync(root, { recursive: true, force: true })
 })
 
 test('botServerArgv: openclaw-pi without piServerEntry throws', () => {

@@ -6,6 +6,8 @@ export const DEFAULT_SHADOW_INCLUDE = [
   'IDENTITY.md', 'SOUL.md', 'AGENTS.md', 'USER.md',
   'METHODOLOGY.md', 'RESEARCH.md', 'MEMORY.md',
   'EQUIPPED_SKILLS.md', 'TOOLS.md', 'skills',
+  // bot 自带的 MCP 清单 (config/mcporter.json) — rl-ts applyWorkspaceMcporter 会读
+  'config',
 ]
 
 export interface WorldConfig {
@@ -24,6 +26,7 @@ export interface WorldConfig {
   loop: 'research-loop' | 'openclaw-pi'
   openclawRoot?: string
   piServerEntry?: string
+  piSessionsDir?: string
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -101,6 +104,7 @@ export function loadWorldConfig(path: string): WorldConfig {
 
   let openclawRoot: string | undefined
   let piServerEntry: string | undefined
+  let piSessionsDir: string | undefined
   if (loop === 'openclaw-pi') {
     if (!existsSync(openclawJson)) {
       throw new Error(`world config: openclaw_json not found (required for openclaw-pi loop): ${openclawJson}`)
@@ -114,7 +118,12 @@ export function loadWorldConfig(path: string): WorldConfig {
     if (!existsSync(piServerEntry)) {
       throw new Error(`world config: pi_server_entry not found: ${piServerEntry}`)
     }
+    // pi session 持久化目录。pi-server 会把每次 chat 的 jsonl 落到 <piSessionsDir>/<botId>/<sessionId>.jsonl，
+    // 不再像默认的临时文件那样 chat 结束即删。默认相对 world.yaml → ../../session（即 <repo>/session）。
+    piSessionsDir = typeof raw.pi_sessions_dir === 'string' && raw.pi_sessions_dir.trim()
+      ? resolveMaybe(baseDir, raw.pi_sessions_dir)
+      : resolveMaybe(baseDir, '../../session')
   }
 
-  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry }
+  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, piSessionsDir }
 }

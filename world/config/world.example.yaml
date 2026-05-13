@@ -61,3 +61,8 @@ per_bot_timeout_seconds: 1200
 # pi-stdio-server 入口路径覆盖（测试/非常规布局用）。默认从 openclaw_root 推断：
 #   <openclaw_root>/src/agents/agent_invest_pi_stdio_server.ts
 # pi_server_entry: /path/to/agent_invest_pi_stdio_server.ts
+#
+# pi session 持久化目录。pi-server 把每次 chat 的 jsonl 落到
+#   <pi_sessions_dir>/<botId>/<sessionId>.jsonl
+# 不再像默认的临时文件那样跑完即删。默认相对本文件 → ../../session（即 <repo>/session/）。
+# pi_sessions_dir: /custom/path/to/session

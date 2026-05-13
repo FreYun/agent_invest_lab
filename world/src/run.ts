@@ -62,6 +62,23 @@ export function botServerArgv(config: WorldConfig, botId: string, workspace: str
   return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', loopConfigPath]
 }
 
+/** openclaw-pi loop：从真实 ~/.openclaw/agents/<botId>/agent/ 把 auth-profiles / auth-state / models.json
+ *  种子拷贝到 piSessionsDir/<botId>/agent/。已存在的不动（"seed once"），让 lab 的 agent state 后续与 openclaw
+ *  脱钩演化。配合 spawn 时 env OPENCLAW_AGENTS_DIR=<piSessionsDir>，pi 把所有读写都改道到 lab 的隔离树里，
+ *  不污染真实 .openclaw/agents/。 */
+export function seedPiAgentBot(piSessionsDir: string, sourceAgentsDir: string, botId: string): void {
+  const dest = join(piSessionsDir, botId, 'agent')
+  if (existsSync(join(dest, 'auth-profiles.json'))) return
+  mkdirSync(dest, { recursive: true })
+  const src = join(sourceAgentsDir, botId, 'agent')
+  for (const f of ['auth-profiles.json', 'auth-state.json', 'models.json']) {
+    const s = join(src, f)
+    if (existsSync(s)) {
+      try { copyFileSync(s, join(dest, f)) } catch { /* best-effort */ }
+    }
+  }
+}
+
 function log(worldRoot: string, runId: string, msg: string): void {
   const line = `${new Date().toISOString()} ${msg}\n`
   try { appendFileSync(P.runLogFile(worldRoot, runId), line) } catch { /* ignore */ }
@@ -132,17 +149,48 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // pi-server needs to be spawned with cwd=openclawRoot so tsx's tsconfig.json lookup picks up
   // openclaw's path aliases (openclaw/plugin-sdk/*). research-loop doesn't need this.
   const spawnCwd = config.loop === 'openclaw-pi' ? config.openclawRoot : undefined
+  // pi reads/writes the agent dir from $OPENCLAW_AGENT_DIR (auth-profiles, models.json, sessions).
+  // Point it at the per-bot lab-isolated dir so reads use seeded auth and writes (new session jsonl) land
+  // under piSessionsDir, never touching the real ~/.openclaw/agents/. PI_CODING_AGENT_DIR is the equivalent
+  // env that pi-coding-agent SDK reads — set both for belt-and-suspenders.
+  const piAgentDirFor = (botId: string): string | undefined =>
+    config.loop === 'openclaw-pi' && config.piSessionsDir
+      ? join(config.piSessionsDir, botId, 'agent')
+      : undefined
   const startBotServer: StartBotServer = opts.startBotServer
-    ?? ((botId, argv) => BotServer.start(botId, {
-      argv,
-      cwd: spawnCwd,
-      readyTimeoutMs: 60_000,
-      onLog: (l) => process.stderr.write(l + '\n'),
-      onNotification: (method, params) => {
-        const line = formatBotNotification(botId, method, params)
-        if (line) log(worldRoot, runId, line)
-      },
-    }))
+    ?? ((botId, argv) => {
+      const agentDir = piAgentDirFor(botId)
+      // OPENCLAW_AGENT_DIR / PI_CODING_AGENT_DIR redirect auth + per-agent files.
+      // OPENCLAW_STATE_DIR redirects openclaw's state tree (where session jsonl + sessions.json land):
+      // pi writes to <STATE_DIR>/agents/<defaultAgentId>/sessions/<UUID>.jsonl. Point it at piSessionsDir
+      // and arrange the structure so the lab tree mirrors openclaw's expected layout
+      // (<piSessionsDir>/agents/<id>/sessions/...) — but the user-facing layout the user wants is
+      // <piSessionsDir>/<botId>/sessions/... so we pass piSessionsDir as STATE_DIR and let openclaw
+      // create its agents/<id>/sessions/ tree inside; net effect: sessions land at
+      // <piSessionsDir>/agents/<resolved>/sessions/<UUID>.jsonl. Auth files stay seeded at
+      // <piSessionsDir>/<botId>/agent (compatible with the AGENT_DIR override).
+      // Pi reads per-agent auth/models from $OPENCLAW_AGENT_DIR (and the equivalent
+      // SDK var PI_CODING_AGENT_DIR). Point both at the lab's seeded per-bot dir so
+      // pi finds API keys without falling back to ~/.openclaw/agents/main/.
+      // NOTE: this only redirects AUTH reads. Pi still writes session jsonls to
+      // ~/.openclaw/agents/<resolved>/sessions/<UUID>.jsonl based on internal state-dir
+      // resolution — redirecting that requires a deeper pi change. For now, accept
+      // that pi session jsonls live in openclaw's tree; lab only owns auth + reply.json.
+      const env = agentDir
+        ? { OPENCLAW_AGENT_DIR: agentDir, PI_CODING_AGENT_DIR: agentDir }
+        : undefined
+      return BotServer.start(botId, {
+        argv,
+        cwd: spawnCwd,
+        env,
+        readyTimeoutMs: 60_000,
+        onLog: (l) => process.stderr.write(l + '\n'),
+        onNotification: (method, params) => {
+          const line = formatBotNotification(botId, method, params)
+          if (line) log(worldRoot, runId, line)
+        },
+      })
+    })
 
   // 交易日序列
   const cal = loadCalendar(config.calendar)
@@ -178,6 +226,15 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // 按 loop 分支生成 server 配置：research-loop 写 trading-rl-config.json；pi 直接 patch 已经复制的 openclaw.json 的 mcp.mem0。
   if (config.loop === 'openclaw-pi') {
     patchPiOpenclawJsonMemory(rlOpenclawDir, memory.url)
+    // Pi 的 agents dir 隔离：seed once 把每个 bot 的 auth-profiles / models 从真实 ~/.openclaw/agents/<bot>/agent
+    // 拷到 lab 自己的 piSessionsDir/<bot>/agent。之后 lab agent 与 openclaw agent 完全脱钩演化。
+    if (config.piSessionsDir && config.openclawRoot) {
+      mkdirSync(config.piSessionsDir, { recursive: true })
+      const sourceAgentsDir = join(config.openclawRoot, '..', 'agents')
+      for (const botId of config.bots) {
+        if (!isAbsolute(botId)) seedPiAgentBot(config.piSessionsDir, sourceAgentsDir, botId)
+      }
+    }
   } else {
     generateRlConfig(config, worldRoot, runId, memory.url, rlOpenclawDir)
   }
