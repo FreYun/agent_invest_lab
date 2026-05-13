@@ -53,3 +53,15 @@ test('resumeWorld refuses when state status is not running', async () => {
   await assert.rejects(() => resumeWorld({ worldRoot, config, startBotServer: (b) => stubStart(b) }), /not running|nothing to resume/i)
   cleanup()
 })
+
+test('resumeWorld refuses when state.loop differs from config.loop', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir(['bot1'], ['2024-03-14'])
+  await runWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }) // writes state with loop=research-loop
+  // Force state.status back to running so the loop-mismatch check is the rejector (not the status check)
+  const s = readState(worldRoot)
+  writeState(worldRoot, { ...s, status: 'running' })
+  // Now resume with loop=openclaw-pi
+  const piConfig: WorldConfig = { ...config, loop: 'openclaw-pi', openclawRoot: '/tmp/oc', piServerEntry: '/tmp/oc/pi.ts' }
+  await assert.rejects(() => resumeWorld({ worldRoot, config: piConfig, startBotServer: (b) => stubStart(b) }), /loop/)
+  cleanup()
+})

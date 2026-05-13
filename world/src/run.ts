@@ -273,6 +273,7 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     run_id: runId, status: 'running', current_date: setupRes.tradingDates[0],
     trading_dates: setupRes.tradingDates, cursor: 0, bots: config.bots,
     memory_port: setupRes.memory.port, started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    loop: config.loop,
   }
   writeState(worldRoot, initial)
 
@@ -335,6 +336,9 @@ export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
   const { worldRoot, config } = opts
   const state = readState(worldRoot)
   if (state.status !== 'running') throw new Error(`cannot resume: state status is "${state.status}", nothing to resume`)
+  if (state.loop !== config.loop) {
+    throw new Error(`resume: state loop="${state.loop}" but world.yaml loop="${config.loop}" — refuse to resume across loop change`)
+  }
   // 清掉可能残留的 STOP 哨兵（否则 resume 会立刻被它中止）
   rmSync(P.stopFile(worldRoot, state.run_id), { force: true })
   // setup（重启记忆服务、重建/复用影子 workspace、重起 bot server），但 trading_dates 取自 state

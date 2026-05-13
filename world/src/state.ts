@@ -14,6 +14,7 @@ export interface WorldState {
   memory_port: number
   started_at: string
   updated_at: string
+  loop: 'research-loop' | 'openclaw-pi'
 }
 
 export function stateExists(worldRoot: string): boolean {
@@ -31,5 +32,8 @@ export function writeState(worldRoot: string, state: WorldState): void {
 export function readState(worldRoot: string): WorldState {
   const path = stateFile(worldRoot)
   if (!existsSync(path)) throw new Error(`no state.json at ${path}`)
-  return JSON.parse(readFileSync(path, 'utf8')) as WorldState
+  const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+  // 向后兼容：旧 state 没有 loop 字段，默认 research-loop
+  if (raw.loop !== 'research-loop' && raw.loop !== 'openclaw-pi') raw.loop = 'research-loop'
+  return raw as unknown as WorldState
 }
