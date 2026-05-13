@@ -124,7 +124,7 @@ CLI：`--bot-id <id> --workspace <abs-dir> --openclaw-json <abs-path>`。所有�
 
 1. 装载 `--openclaw-json` 指向的 openclaw config（复用 openclaw 的 config loader）。
 2. 用 `--bot-id` 解析 agentId 对应的 runtime，**但强制走 pi**（不读 `loop-mode.json`、不调 `resolveAgentRuntime`）—— world 已经在外层选好 loop。
-3. 创建 `JsonRpcStdioServer` 实例（与 research-loop server 同形态，从 stdin 读 LSP 风格帧 `Content-Length: ...\r\n\r\n<body>`，往 stdout 写）。
+3. 创建 stdio JSON-RPC server（与 research-loop server 同形态：NDJSON、`\n`-delimited，每行一条 `{id, method, params}` / `{id, result|error}` / `{method, params}`，stderr 用于日志）。
 4. 启动完成发 `server.ready` 通知。
 5. 注册 RPC method：
    - `ping` → `{pong: true, bot_id, workspace, model}`
