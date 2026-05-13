@@ -12,6 +12,34 @@
 
 ---
 
+## ⚠️ Plan 修订记录（2026-05-13 执行期间）
+
+Plan 起草时 world 的 config schema 还是旧的（`researchLoopTs` / `workspaceRoot`）。执行 A1 时发现你并行做了 schema rename（commit cecd216）：
+
+- `researchLoopTs` → `researchLoop`
+- 删 `workspaceRoot`
+- 加 `botsRoot`（bots 模板父目录，默认 `<world>/bots`）
+- 加 `skillsRoot`（默认 `<world>/skills`，注入 rl extra_roots）
+- 加 `openclawJson`（凭据 JSON，默认 `<world>/config/openclaw.json`）
+
+因此 plan 里的字段名 / 路径需要以下"翻译"，**所有后续 task 以这里为准**：
+
+| Plan 旧字段 | 新字段 |
+|---|---|
+| `config.researchLoopTs` | `config.researchLoop` |
+| `config.workspaceRoot` | 删除——研究 loop 的 openclaw.json 源已经迁到 `config.openclawJson` |
+| `join(config.workspaceRoot, 'openclaw.json')`（A3 步骤 5） | `config.openclawJson` |
+| `join(config.workspaceRoot, \`workspace-${botId}\`)` | `join(config.botsRoot, botId)` |
+| `pi_openclaw_json` yaml 字段、`piOpenclawJson` config 字段 | **删除** — pi 直接复用 `openclaw_json` / `config.openclawJson`（commit cbfc6a4） |
+| `world.yaml` 里 `research_loop_ts` | `research_loop` |
+| `world.yaml` 里 `workspace_root` | 删除（被 `bots_root` / `skills_root` / `openclaw_json` 拆开） |
+
+`openclaw_root` 和 `pi_server_entry` 字段保持原样。Task A5（yaml 文档化）只用加 `loop`/`openclaw_root`/`pi_server_entry` 注释；其它字段在 cecd216 里已记录。
+
+Task A1 已落地（commits b221656 + cbfc6a4）；后续 task 按以上映射翻译。
+
+---
+
 ## 协议契约 reminder
 
 pi-server 必须与 research-loop server（[/home/rooot/.openclaw/research-loop/ts/src/server.ts](file:///home/rooot/.openclaw/research-loop/ts/src/server.ts)）完全等价：
@@ -80,12 +108,12 @@ test('loop defaults to research-loop when field omitted', () => {
   const p = mkTmpYaml(yaml)
   const cfg = loadWorldConfig(p)
   assert.equal(cfg.loop, 'research-loop')
-  assert.equal(cfg.piOpenclawJson, undefined)
+  assert.equal(cfg.(removed — pi loop reuses openclawJson), undefined)
   assert.equal(cfg.openclawRoot, undefined)
   assert.equal(cfg.piServerEntry, undefined)
 })
 
-test('loop=openclaw-pi requires pi_openclaw_json file to exist', () => {
+test('loop=openclaw-pi requires openclaw_json (pi reuses existing field) file to exist', () => {
   const yaml = [
     'research_loop_ts: /tmp/rl-ts',
     'workspace_root: /tmp/ws',
@@ -94,10 +122,10 @@ test('loop=openclaw-pi requires pi_openclaw_json file to exist', () => {
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
     'loop: openclaw-pi',
-    'pi_openclaw_json: /tmp/does-not-exist-pi.json',
+    'openclaw_json (pi reuses existing field): /tmp/does-not-exist-pi.json',
   ].join('\n') + '\n'
   const p = mkTmpYaml(yaml)
-  assert.throws(() => loadWorldConfig(p), /pi_openclaw_json/)
+  assert.throws(() => loadWorldConfig(p), /openclaw_json (pi reuses existing field)/)
 })
 
 test('loop=openclaw-pi with valid paths populates pi fields', () => {
@@ -114,13 +142,13 @@ test('loop=openclaw-pi with valid paths populates pi fields', () => {
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
     'loop: openclaw-pi',
-    `pi_openclaw_json: ${pij}`,
+    `openclaw_json (pi reuses existing field): ${pij}`,
     `openclaw_root: ${ocRoot}`,
   ].join('\n') + '\n'
   const p = mkTmpYaml(yaml)
   const cfg = loadWorldConfig(p)
   assert.equal(cfg.loop, 'openclaw-pi')
-  assert.equal(cfg.piOpenclawJson, pij)
+  assert.equal(cfg.(removed — pi loop reuses openclawJson), pij)
   assert.equal(cfg.openclawRoot, ocRoot)
   assert.equal(cfg.piServerEntry, piEntry)
 })
@@ -161,7 +189,7 @@ a) 在 `WorldConfig` 接口里加：
 
 ```ts
 loop: 'research-loop' | 'openclaw-pi'
-piOpenclawJson?: string
+(removed — pi loop reuses openclawJson)?: string
 openclawRoot?: string
 piServerEntry?: string
 ```
@@ -178,15 +206,15 @@ if (loopRaw !== undefined) {
   loop = loopRaw
 }
 
-let piOpenclawJson: string | undefined
+let (removed — pi loop reuses openclawJson): string | undefined
 let openclawRoot: string | undefined
 let piServerEntry: string | undefined
 if (loop === 'openclaw-pi') {
-  piOpenclawJson = typeof raw.pi_openclaw_json === 'string' && raw.pi_openclaw_json.trim()
-    ? resolveMaybe(baseDir, raw.pi_openclaw_json)
+  (removed — pi loop reuses openclawJson) = typeof raw.openclaw_json (pi reuses existing field) === 'string' && raw.openclaw_json (pi reuses existing field).trim()
+    ? resolveMaybe(baseDir, raw.openclaw_json (pi reuses existing field))
     : '/home/rooot/.openclaw/openclaw.json'
-  if (!existsSync(piOpenclawJson)) {
-    throw new Error(`world config: pi_openclaw_json not found: ${piOpenclawJson}`)
+  if (!existsSync((removed — pi loop reuses openclawJson))) {
+    throw new Error(`world config: openclaw_json (pi reuses existing field) not found: ${(removed — pi loop reuses openclawJson)}`)
   }
   openclawRoot = typeof raw.openclaw_root === 'string' && raw.openclaw_root.trim()
     ? resolveMaybe(baseDir, raw.openclaw_root)
@@ -212,7 +240,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 d) 把 `return` 语句更新为：
 
 ```ts
-return { researchLoopTs, workspaceRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, piOpenclawJson, openclawRoot, piServerEntry }
+return { researchLoopTs, workspaceRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, (removed — pi loop reuses openclawJson), openclawRoot, piServerEntry }
 ```
 
 - [ ] **Step 5: 跑测试确认绿**
@@ -266,7 +294,7 @@ test('botServerArgv: research-loop branch points at researchLoopTs/server.ts wit
 test('botServerArgv: openclaw-pi branch points at piServerEntry with --openclaw-json', () => {
   const cfg = baseConfig({
     loop: 'openclaw-pi',
-    piOpenclawJson: '/tmp/oc.json',
+    (removed — pi loop reuses openclawJson): '/tmp/oc.json',
     openclawRoot: '/tmp/oc',
     piServerEntry: '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts',
   })
@@ -294,7 +322,7 @@ function baseConfig(overrides: Partial<WorldConfig> = {}): WorldConfig {
     rlOpenclawDir: undefined,
     shadowInclude: [],
     loop: 'research-loop',
-    piOpenclawJson: undefined,
+    (removed — pi loop reuses openclawJson): undefined,
     openclawRoot: undefined,
     piServerEntry: undefined,
     ...overrides,
@@ -359,8 +387,8 @@ test('openclawJsonSource: research-loop returns workspace_root/openclaw.json', (
   assert.equal(openclawJsonSource(cfg), '/tmp/ws/openclaw.json')
 })
 
-test('openclawJsonSource: openclaw-pi returns piOpenclawJson', () => {
-  const cfg = baseConfig({ loop: 'openclaw-pi', piOpenclawJson: '/tmp/pi/openclaw.json' })
+test('openclawJsonSource: openclaw-pi returns (removed — pi loop reuses openclawJson)', () => {
+  const cfg = baseConfig({ loop: 'openclaw-pi', (removed — pi loop reuses openclawJson): '/tmp/pi/openclaw.json' })
   assert.equal(openclawJsonSource(cfg), '/tmp/pi/openclaw.json')
 })
 
@@ -388,11 +416,11 @@ Run: `cd world && node --experimental-strip-types --test test/run.test.ts 2>&1 |
 在文件中（建议放在 `botServerArgv` 上方）加：
 
 ```ts
-/** 选 openclaw.json 源路径：research-loop 用 workspace_root/openclaw.json；pi 用 piOpenclawJson。 */
+/** 选 openclaw.json 源路径：research-loop 用 workspace_root/openclaw.json；pi 用 (removed — pi loop reuses openclawJson)。 */
 export function openclawJsonSource(config: WorldConfig): string {
   if (config.loop === 'openclaw-pi') {
-    if (!config.piOpenclawJson) throw new Error('openclawJsonSource: piOpenclawJson required for openclaw-pi loop')
-    return config.piOpenclawJson
+    if (!config.(removed — pi loop reuses openclawJson)) throw new Error('openclawJsonSource: (removed — pi loop reuses openclawJson) required for openclaw-pi loop')
+    return config.(removed — pi loop reuses openclawJson)
   }
   return join(config.workspaceRoot, 'openclaw.json')
 }
@@ -470,7 +498,7 @@ Expected: PASS
 ```bash
 git add world/src/run.ts world/test/run.test.ts
 git commit -m "$(cat <<'EOF'
-feat(world): setup branches on loop — pi uses piOpenclawJson and patches mcp.mem0
+feat(world): setup branches on loop — pi uses (removed — pi loop reuses openclawJson) and patches mcp.mem0
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -577,7 +605,7 @@ test('resumeWorld rejects when world.yaml loop differs from state.loop', async (
     memory_port: 0, started_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
     loop: 'research-loop',
   })
-  const cfg = baseConfig({ loop: 'openclaw-pi', piOpenclawJson: '/x.json', piServerEntry: '/x.ts' })
+  const cfg = baseConfig({ loop: 'openclaw-pi', (removed — pi loop reuses openclawJson): '/x.json', piServerEntry: '/x.ts' })
   await assert.rejects(() => resumeWorld({ worldRoot: dir, config: cfg }), /loop/)
 })
 ```
@@ -623,7 +651,7 @@ EOF
 # openclaw.json 源路径。world 启动时把它复制进 runs/<run>/rl-openclaw/openclaw.json，
 # 并把 mcp.mem0 改写为本 run 的隔离 memory server URL。pi-server 从该副本读配置。
 # 默认：/home/rooot/.openclaw/openclaw.json
-# pi_openclaw_json: /path/to/openclaw.json
+# openclaw_json (pi reuses existing field): /path/to/openclaw.json
 #
 # openclaw 仓根路径。用于推断 pi_server_entry，默认 /home/rooot/.openclaw/openclaw
 # openclaw_root: /path/to/openclaw
@@ -816,7 +844,7 @@ test('runWorld with loop=openclaw-pi drives stub pi-server for 1 trading day', a
     rlOpenclawDir: undefined,
     shadowInclude: ['IDENTITY.md'],
     loop: 'openclaw-pi',
-    piOpenclawJson: ocJson,
+    (removed — pi loop reuses openclawJson): ocJson,
     openclawRoot: '/unused',
     piServerEntry: STUB_PI,
   }
@@ -1335,7 +1363,7 @@ calendar: /home/rooot/agent_invest_lab/world/config/calendar.json
 concurrency: 1
 per_bot_timeout_seconds: 600
 loop: openclaw-pi
-pi_openclaw_json: /home/rooot/.openclaw/openclaw.json
+openclaw_json (pi reuses existing field): /home/rooot/.openclaw/openclaw.json
 openclaw_root: /home/rooot/.openclaw/openclaw
 ```
 
@@ -1391,7 +1419,7 @@ Run: `cd /home/rooot/agent_invest_lab && node --experimental-strip-types world/m
 
 1. **Spec 覆盖**
    - [x] `loop: research-loop | openclaw-pi` yaml 开关 — Task A1
-   - [x] `pi_openclaw_json` 字段与默认 — Task A1
+   - [x] `openclaw_json (pi reuses existing field)` 字段与默认 — Task A1
    - [x] world 端 botServerArgv 按 loop 分支 — Task A2
    - [x] setup 按 loop 选 openclaw.json 源 — Task A3
    - [x] mcp.mem0 patch — Task A3
