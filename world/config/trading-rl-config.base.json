@@ -17,7 +17,6 @@
     "compact_temperature": 0.1
   },
   "timeouts": { "chat_llm": 180, "compact_llm": 120, "skill_llm": 60 },
-  "openclaw_dir": "/home/rooot/.openclaw",
   "mcp": {
     "servers": {}
   },
@@ -25,7 +24,6 @@
     "browser": { "enabled": false },
     "memory-mem0": { "enabled": true }
   },
-  "extra_roots": ["/home/rooot/.openclaw/workspace/skills"],
   "limits": {
     "max_total_turns": 25,
     "max_time_minutes": 30,

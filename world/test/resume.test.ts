@@ -20,10 +20,12 @@ function setupWorldDir(bots: string[], dates: string[]) {
   mkdirSync(worldRoot, { recursive: true })
   writeFileSync(P.calendarFile(worldRoot), JSON.stringify({ trading_days: dates }))
   for (const d of dates) { mkdirSync(P.dayDir(worldRoot, d), { recursive: true }); writeFileSync(P.quotesFile(worldRoot, d), JSON.stringify({ summary: d })); writeFileSync(P.overviewFile(worldRoot, d), `ov ${d}`) }
-  const wsRoot = join(root, 'workspaces')
-  for (const b of bots) { mkdirSync(join(wsRoot, `workspace-${b}`), { recursive: true }); writeFileSync(join(wsRoot, `workspace-${b}`, 'SOUL.md'), b) }
+  const botsRoot = join(root, 'bots')
+  for (const b of bots) { mkdirSync(join(botsRoot, b), { recursive: true }); writeFileSync(join(botsRoot, b, 'SOUL.md'), b) }
+  const skillsRoot = join(root, 'skills'); mkdirSync(skillsRoot, { recursive: true })
+  const openclawJson = join(root, 'openclaw.json'); writeFileSync(openclawJson, '{}\n')
   const cfgBase = join(root, 'base.json'); writeFileSync(cfgBase, JSON.stringify({ mcp: { servers: {} } }))
-  const config: WorldConfig = { researchLoopTs: '/no', workspaceRoot: wsRoot, bots, replay: { from: dates[0], to: dates[dates.length - 1] }, calendar: P.calendarFile(worldRoot), concurrency: 4, perBotTimeoutSeconds: 30, rlConfigBase: cfgBase, rlOpenclawDir: join(root, 'oc'), shadowInclude: ['SOUL.md'] }
+  const config: WorldConfig = { researchLoop: '/no', botsRoot, openclawJson, skillsRoot, bots, replay: { from: dates[0], to: dates[dates.length - 1] }, calendar: P.calendarFile(worldRoot), concurrency: 4, perBotTimeoutSeconds: 30, rlConfigBase: cfgBase, rlOpenclawDir: join(root, 'oc'), shadowInclude: ['SOUL.md'], loop: 'research-loop' }
   return { worldRoot, config, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 

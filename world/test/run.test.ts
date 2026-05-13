@@ -30,19 +30,27 @@ function setupWorldDir(opts: { bots: string[]; dates: string[]; withSrcWorkspace
     writeFileSync(P.quotesFile(worldRoot, d), JSON.stringify({ summary: `行情快照 ${d}` }))
     writeFileSync(P.overviewFile(worldRoot, d), `概览：${d} 上证小涨`)
   }
-  // 源 workspace（research_loop_ts 路径在 e2e 里不会被真的执行，但 buildShadowWorkspace 需要它存在）
-  const wsRoot = join(root, 'workspaces')
+  // 源 bot 模板（research_loop 路径在 e2e 里不会被真的执行，但 buildShadowWorkspace 需要它存在）
+  const botsRoot = join(root, 'bots')
   for (const b of opts.bots) {
-    const ws = join(wsRoot, `workspace-${b}`)
+    const ws = join(botsRoot, b)
     mkdirSync(ws, { recursive: true })
     writeFileSync(join(ws, 'SOUL.md'), `# soul ${b}`)
   }
+  // 共享技能库（注入 extra_roots，存在即可）
+  const skillsRoot = join(root, 'skills')
+  mkdirSync(skillsRoot, { recursive: true })
+  // 凭据 JSON（run.ts 会复制进 rl-openclaw 目录；空 JSON 足够通过）
+  const openclawJson = join(root, 'openclaw.json')
+  writeFileSync(openclawJson, '{}\n')
   // rl-config base
   const cfgBase = join(root, 'trading-rl-config.base.json')
   writeFileSync(cfgBase, JSON.stringify({ model: { primary: {} }, mcp: { servers: {} }, plugins: { 'memory-mem0': { enabled: true } } }))
   const config: WorldConfig = {
-    researchLoopTs: '/nonexistent/research-loop-ts',
-    workspaceRoot: wsRoot,
+    researchLoop: '/nonexistent/research-loop',
+    botsRoot,
+    openclawJson,
+    skillsRoot,
     bots: opts.bots,
     replay: { from: opts.dates[0], to: opts.dates[opts.dates.length - 1] },
     calendar: P.calendarFile(worldRoot),
@@ -50,6 +58,7 @@ function setupWorldDir(opts: { bots: string[]; dates: string[]; withSrcWorkspace
     perBotTimeoutSeconds: 30,
     rlConfigBase: cfgBase,
     shadowInclude: ['SOUL.md'],
+    loop: 'research-loop',
   }
   return { worldRoot, config, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
@@ -79,11 +88,15 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   // 影子 workspace + journal
   assert.match(readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'SOUL.md'), 'utf8'), /soul bot7/)
   assert.ok(existsSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'memory', 'trading', 'journal.md')))
-  // 生成的 rl-config 写入了 mem0 url；openclaw_dir 指向 run 专属目录且已创建
+  // 生成的 rl-config 写入了 mem0 url；openclaw_dir 指向 run 专属目录且已创建；
+  // extra_roots 指向 world 的共享 skills 库
   const genCfg = JSON.parse(readFileSync(P.runConfigFile(worldRoot, 'r1'), 'utf8'))
   assert.match(genCfg.mcp.mem0, /^http:\/\/127\.0\.0\.1:\d+$/)
   assert.equal(genCfg.openclaw_dir, join(P.runDir(worldRoot, 'r1'), 'rl-openclaw'))
   assert.equal(existsSync(genCfg.openclaw_dir), true)
+  assert.deepEqual(genCfg.extra_roots, [config.skillsRoot])
+  // openclaw.json 已从 config.openclawJson 复制进 run 专属 rl-openclaw 目录
+  assert.ok(existsSync(join(P.runDir(worldRoot, 'r1'), 'rl-openclaw', 'openclaw.json')))
   // summary.json
   const summary = JSON.parse(readFileSync(P.summaryFile(worldRoot, 'r1'), 'utf8'))
   assert.equal(summary.run_id, 'r1')

@@ -1,11 +1,8 @@
 # agent_invest_lab 世界配置示例。复制为 config/world.yaml 后按需修改。
 # 用法: node --experimental-strip-types main.ts run --config config/world.yaml
 
-# research-loop-ts 仓库路径（agent 大脑）
-research_loop_ts: /home/rooot/.openclaw/research-loop-ts
-
-# workspace-botN 的父目录（agent 人设/性格来源；world 会精选复制成每个 run 的影子 workspace）
-workspace_root: /home/rooot/.openclaw
+# research-loop 仓库路径（agent 大脑；目录里要有 server.ts）
+research_loop: /home/rooot/.openclaw/research-loop/ts
 
 # 参与本世界的 bot 列表
 bots: [bot1, bot7, bot9]
@@ -14,6 +11,18 @@ bots: [bot1, bot7, bot9]
 replay:
   from: "2024-01-02"
   to:   "2024-06-28"
+
+# bot 模板目录的父目录：world 会在 <bots_root>/<botId>/ 找 IDENTITY/SOUL/AGENTS/skills 等，
+# 复制成每个 run 的影子 workspace。默认相对本文件 → ../bots（即 <world>/bots/<botId>/）。
+# bots_root: /custom/path/to/bots
+
+# research-loop 用的共享技能库（armor/research/portfolio/...），会作为绝对路径注入到
+# 生成 rl-config 的 extra_roots。默认相对本文件 → ../skills（即 <world>/skills/）。
+# skills_root: /custom/path/to/skills
+
+# 凭据 JSON（model api key、browser SSRF 等）。默认相对本文件 → ./openclaw.json
+# （即 <world>/config/openclaw.json，已 gitignore）。
+# openclaw_json: /home/rooot/.openclaw/openclaw.json
 
 # 交易日历 JSON：{ "trading_days": ["2024-01-02", ...] }（升序、YYYY-MM-DD）。
 # 默认相对本文件 → ./calendar.json；world 只消费它、不生成它（由数据团队/人工提供）。
@@ -25,14 +34,13 @@ concurrency: 4
 # 单 bot 单日 chat 超时（秒）；超时记 status=timeout，不阻塞当天其它 bot、不阻塞翻篇
 per_bot_timeout_seconds: 1200
 
-# 给 research-loop-ts 用的 rl-config 基底；默认相对本文件 → ../config/trading-rl-config.base.json
+# 给 research-loop 用的 rl-config 基底；默认相对本文件 → ../config/trading-rl-config.base.json
 # rl_config_base: /path/to/trading-rl-config.base.json
 
-# research-loop-ts 的 openclaw_dir：控制 bot 的 session/事件/brief 存档写到哪。
-# 不填则默认每个 run 一个隔离目录：<world-dir>/runs/<run_id>/rl-openclaw/（world 会把
-# <workspace_root>/openclaw.json 复制进去）。不影响模型 API key 解析——那读的是硬编码的
-# /home/rooot/.openclaw/openclaw.json。想用真实 .openclaw 目录就显式填它：
+# research-loop 的 openclaw_dir：控制 bot 的 session/事件/brief 存档写到哪。不填则默认
+# 每个 run 一个隔离目录：<world-dir>/runs/<run_id>/rl-openclaw/（world 会把 openclaw_json
+# 复制进去）。想用真实 .openclaw 目录就显式填它：
 # rl_openclaw_dir: /home/rooot/.openclaw
 
-# 影子 workspace 从 workspace-botN 复制哪些条目（默认见 src/config.ts DEFAULT_SHADOW_INCLUDE）
+# 影子 workspace 从 <bots_root>/<botId>/ 复制哪些条目（默认见 src/config.ts DEFAULT_SHADOW_INCLUDE）
 # shadow_include: [IDENTITY.md, SOUL.md, AGENTS.md, USER.md, METHODOLOGY.md, RESEARCH.md, MEMORY.md, EQUIPPED_SKILLS.md, TOOLS.md, skills]

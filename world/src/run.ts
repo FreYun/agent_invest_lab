@@ -24,7 +24,7 @@ const SESSION_KEY = (runId: string): string => `trading-${runId}`
 const JOURNAL_REL = 'memory/trading/journal.md'
 
 export function botServerArgv(config: WorldConfig, botId: string, workspace: string, rlConfigPath: string): string[] {
-  const serverEntry = join(config.researchLoopTs, 'server.ts')
+  const serverEntry = join(config.researchLoop, 'server.ts')
   return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', rlConfigPath]
 }
 
@@ -42,6 +42,7 @@ function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string,
   mcp.mem0 = memoryUrl
   base.mcp = mcp
   base.openclaw_dir = openclawDir
+  base.extra_roots = [config.skillsRoot]
   writeFileSync(P.runConfigFile(worldRoot, runId), JSON.stringify(base, null, 2) + '\n')
 }
 
@@ -117,8 +118,8 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   mkdirSync(P.memoryDir(worldRoot, runId), { recursive: true })
   mkdirSync(P.workspacesDir(worldRoot, runId), { recursive: true })
   mkdirSync(rlOpenclawDir, { recursive: true })
-  // 把 openclaw.json 复制进 run 专属 openclaw 目录（research-loop-ts 的 openclaw_dir → session/事件存档落这里，与真实 .openclaw 隔离）
-  const srcOpenclawJson = join(config.workspaceRoot, 'openclaw.json')
+  // 把 openclaw.json 复制进 run 专属 openclaw 目录（research-loop 的 openclaw_dir → session/事件存档落这里，与真实 .openclaw 隔离）
+  const srcOpenclawJson = config.openclawJson
   const dstOpenclawJson = join(rlOpenclawDir, 'openclaw.json')
   if (existsSync(srcOpenclawJson) && !existsSync(dstOpenclawJson)) {
     try { copyFileSync(srcOpenclawJson, dstOpenclawJson) } catch { /* 非致命 */ }
@@ -140,7 +141,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   const bots: { botId: string; server: BotServer }[] = []
   try {
     for (const botId of config.bots) {
-      const srcWs = isAbsolute(botId) ? botId : join(config.workspaceRoot, `workspace-${botId}`)
+      const srcWs = isAbsolute(botId) ? botId : join(config.botsRoot, botId)
       if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
       const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
       buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude })
