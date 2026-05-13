@@ -172,12 +172,16 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
       // Pi reads per-agent auth/models from $OPENCLAW_AGENT_DIR (and the equivalent
       // SDK var PI_CODING_AGENT_DIR). Point both at the lab's seeded per-bot dir so
       // pi finds API keys without falling back to ~/.openclaw/agents/main/.
-      // NOTE: this only redirects AUTH reads. Pi still writes session jsonls to
-      // ~/.openclaw/agents/<resolved>/sessions/<UUID>.jsonl based on internal state-dir
-      // resolution — redirecting that requires a deeper pi change. For now, accept
-      // that pi session jsonls live in openclaw's tree; lab only owns auth + reply.json.
+      // WORLD_PI_SESSIONS_DEST tells pi-server where to copy the session jsonl (and
+      // then unlink the source from ~/.openclaw/agents/<resolved>/sessions/) so the
+      // real openclaw tree stays clean. The pi-server passes the sessionId as a UUID
+      // so the source filename is predictable.
       const env = agentDir
-        ? { OPENCLAW_AGENT_DIR: agentDir, PI_CODING_AGENT_DIR: agentDir }
+        ? {
+            OPENCLAW_AGENT_DIR: agentDir,
+            PI_CODING_AGENT_DIR: agentDir,
+            WORLD_PI_SESSIONS_DEST: join(config.piSessionsDir!, botId, 'sessions'),
+          }
         : undefined
       return BotServer.start(botId, {
         argv,
