@@ -292,20 +292,23 @@ def market_index_quote(
 @_mcp.tool()
 def commodity_market(
     as_of_date: str,
-    symbols: Optional[list[str]] = None,
+    market_type: str,
+    symbols: list[str],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> dict[str, Any]:
-    """商品行情（时点版）。symbols 可传中文如 '黄金', '原油'。"""
+    """商品行情（时点版）。market_type: 'spot'(现货) / 'futures'(期货)。
+
+    symbols 可传中文如 '上海银' 或代码如 'AU9999'(现货) / 'RB0','AU0'(期货)。
+    end_date 会被裁剪到 as_of_date。
+    """
     cutoff, err = _check_as_of(as_of_date)
     if err:
         return err
     if (e := _reject_if_future("start_date", start_date, cutoff)):
         return e
     try:
-        d: dict = {}
-        if symbols:
-            d["symbols"] = symbols
+        d: dict = {"market_type": market_type, "symbols": symbols}
         if start_date:
             d["start_date"] = start_date
         d["end_date"] = _clamp_end_date(end_date, cutoff)
@@ -315,16 +318,28 @@ def commodity_market(
 
 
 @_mcp.tool()
-def bond_yield_curve(as_of_date: str, date: Optional[str] = None) -> dict[str, Any]:
-    """国债收益率曲线（时点版）。不传 date 则取 as_of_date 当天的曲线。"""
+def bond_yield_curve(
+    as_of_date: str,
+    curve_type: str,
+    maturities: list[str],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict[str, Any]:
+    """国债/信用债收益率曲线（时点版）。curve_type: 'cn' / 'us' / 'credit'。
+
+    maturities: 期限列表, 如 ['10Y','30Y'] 或 ['5y','10y']。end_date 会被裁剪到 as_of_date。
+    """
     cutoff, err = _check_as_of(as_of_date)
     if err:
         return err
-    if (e := _reject_if_future("date", date, cutoff)):
+    if (e := _reject_if_future("start_date", start_date, cutoff)):
         return e
     try:
-        return _pit_wrap(_post("/api/bond/yield-curve", {"date": date or cutoff.isoformat()}),
-                         cutoff, as_of_date)
+        d: dict = {"curve_type": curve_type, "maturities": maturities}
+        if start_date:
+            d["start_date"] = start_date
+        d["end_date"] = _clamp_end_date(end_date, cutoff)
+        return _pit_wrap(_post("/api/bond/yield-curve", d), cutoff, as_of_date)
     except Exception as e:
         return _err(e)
 

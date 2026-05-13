@@ -102,10 +102,21 @@ class TestDatedTools:
         m.stock_ownership("2024-01-01", ["600519"])
         assert calls[0][1]["report_date"] == "2024-01-01"
 
-    def test_bond_yield_curve_defaults_date(self, monkeypatch):
+    def test_bond_yield_curve_passes_required_params_and_clamps(self, monkeypatch):
         calls = self._fake_post(monkeypatch)
-        m.bond_yield_curve("2024-01-01")
-        assert calls[0][1] == {"date": "2024-01-01"}
+        m.bond_yield_curve("2024-01-01", "cn", ["10Y", "30Y"], end_date="2025-12-31")
+        assert calls[0][0] == "/api/bond/yield-curve"
+        assert calls[0][1]["curve_type"] == "cn"
+        assert calls[0][1]["maturities"] == ["10Y", "30Y"]
+        assert calls[0][1]["end_date"] == "2024-01-01"  # clamped
+
+    def test_commodity_market_passes_market_type_and_clamps(self, monkeypatch):
+        calls = self._fake_post(monkeypatch)
+        m.commodity_market("2024-01-01", "spot", ["上海银"], end_date="2099-01-01")
+        assert calls[0][0] == "/api/commodity/market"
+        assert calls[0][1]["market_type"] == "spot"
+        assert calls[0][1]["symbols"] == ["上海银"]
+        assert calls[0][1]["end_date"] == "2024-01-01"  # clamped
 
     def test_macro_data_passthrough(self, monkeypatch):
         calls = self._fake_post(monkeypatch)
