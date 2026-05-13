@@ -86,12 +86,11 @@ test('loop defaults to research-loop when field omitted', () => {
   const p = tmpYaml(yaml)
   const cfg = loadWorldConfig(p)
   assert.equal(cfg.loop, 'research-loop')
-  assert.equal(cfg.piOpenclawJson, undefined)
   assert.equal(cfg.openclawRoot, undefined)
   assert.equal(cfg.piServerEntry, undefined)
 })
 
-test('loop=openclaw-pi requires pi_openclaw_json file to exist', () => {
+test('loop=openclaw-pi requires openclaw_json file to exist', () => {
   const yaml = [
     'research_loop: /tmp/rl',
     'bots: [bot1]',
@@ -99,15 +98,15 @@ test('loop=openclaw-pi requires pi_openclaw_json file to exist', () => {
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
     'loop: openclaw-pi',
-    'pi_openclaw_json: /tmp/does-not-exist-pi.json',
+    'openclaw_json: /tmp/does-not-exist-pi.json',
   ].join('\n') + '\n'
   const p = tmpYaml(yaml)
-  assert.throws(() => loadWorldConfig(p), /pi_openclaw_json/)
+  assert.throws(() => loadWorldConfig(p), /openclaw_json/)
 })
 
 test('loop=openclaw-pi with valid paths populates pi fields', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'world-cfg-'))
-  const pij = join(tmpDir, 'openclaw.json'); writeFileSync(pij, '{}\n')
+  const ocJson = join(tmpDir, 'openclaw.json'); writeFileSync(ocJson, '{}\n')
   const ocRoot = join(tmpDir, 'oc'); mkdirSync(ocRoot, { recursive: true })
   const piEntry = join(ocRoot, 'src/agents/agent_invest_pi_stdio_server.ts')
   mkdirSync(dirname(piEntry), { recursive: true }); writeFileSync(piEntry, '// stub\n')
@@ -118,13 +117,13 @@ test('loop=openclaw-pi with valid paths populates pi fields', () => {
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
     'loop: openclaw-pi',
-    `pi_openclaw_json: ${pij}`,
+    `openclaw_json: ${ocJson}`,
     `openclaw_root: ${ocRoot}`,
   ].join('\n') + '\n'
   const p = tmpYaml(yaml)
   const cfg = loadWorldConfig(p)
   assert.equal(cfg.loop, 'openclaw-pi')
-  assert.equal(cfg.piOpenclawJson, pij)
+  assert.equal(cfg.openclawJson, ocJson)
   assert.equal(cfg.openclawRoot, ocRoot)
   assert.equal(cfg.piServerEntry, piEntry)
 })

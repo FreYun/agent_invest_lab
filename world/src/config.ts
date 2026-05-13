@@ -22,7 +22,6 @@ export interface WorldConfig {
   rlOpenclawDir?: string
   shadowInclude: string[]
   loop: 'research-loop' | 'openclaw-pi'
-  piOpenclawJson?: string
   openclawRoot?: string
   piServerEntry?: string
 }
@@ -100,15 +99,11 @@ export function loadWorldConfig(path: string): WorldConfig {
     loop = loopRaw
   }
 
-  let piOpenclawJson: string | undefined
   let openclawRoot: string | undefined
   let piServerEntry: string | undefined
   if (loop === 'openclaw-pi') {
-    piOpenclawJson = typeof raw.pi_openclaw_json === 'string' && raw.pi_openclaw_json.trim()
-      ? resolveMaybe(baseDir, raw.pi_openclaw_json)
-      : '/home/rooot/.openclaw/openclaw.json'
-    if (!existsSync(piOpenclawJson)) {
-      throw new Error(`world config: pi_openclaw_json not found: ${piOpenclawJson}`)
+    if (!existsSync(openclawJson)) {
+      throw new Error(`world config: openclaw_json not found (required for openclaw-pi loop): ${openclawJson}`)
     }
     openclawRoot = typeof raw.openclaw_root === 'string' && raw.openclaw_root.trim()
       ? resolveMaybe(baseDir, raw.openclaw_root)
@@ -121,5 +116,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
   }
 
-  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, piOpenclawJson, openclawRoot, piServerEntry }
+  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry }
 }
