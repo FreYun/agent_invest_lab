@@ -224,15 +224,21 @@ def fund_index_return(
 
 @_mcp.tool()
 def fund_bonus(as_of_date: str, fund_code: str, date: Optional[str] = None) -> dict[str, Any]:
-    """基金分红记录（时点版）。"""
+    """基金分红记录（时点版）。
+
+    date: 可选, 上游语义是"只看该日期及之后的分红记录"(一个下界过滤器), 不传则返回全部;
+    晚于 as_of_date 的分红记录会在响应里被剔除。
+    """
     cutoff, err = _check_as_of(as_of_date)
     if err:
         return err
     if (e := _reject_if_future("date", date, cutoff)):
         return e
     try:
-        return _pit_wrap(_post("/api/fund/bonus", {"fund_code": fund_code, "date": date or cutoff.isoformat()}),
-                         cutoff, as_of_date)
+        d: dict = {"fund_code": fund_code}
+        if date:
+            d["date"] = date
+        return _pit_wrap(_post("/api/fund/bonus", d), cutoff, as_of_date)
     except Exception as e:
         return _err(e)
 
