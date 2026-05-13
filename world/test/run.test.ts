@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runWorld, botServerArgv } from '../src/run.ts'
+import { runWorld, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory } from '../src/run.ts'
 import { BotServer } from '../src/botServer.ts'
 import * as P from '../src/paths.ts'
 import { readState } from '../src/state.ts'
@@ -61,6 +61,27 @@ function setupWorldDir(opts: { bots: string[]; dates: string[]; withSrcWorkspace
     loop: 'research-loop',
   }
   return { worldRoot, config, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+}
+
+function piBaseConfig(overrides: Partial<WorldConfig> = {}): WorldConfig {
+  return {
+    researchLoop: '/tmp/research-loop/ts',
+    botsRoot: '/tmp/bots',
+    openclawJson: '/tmp/oc.json',
+    skillsRoot: '/tmp/skills',
+    bots: ['bot7'],
+    replay: { from: '2024-01-02', to: '2024-01-03' },
+    calendar: '/tmp/cal.json',
+    concurrency: 1,
+    perBotTimeoutSeconds: 30,
+    rlConfigBase: '/tmp/base.json',
+    rlOpenclawDir: undefined,
+    shadowInclude: [],
+    loop: 'research-loop',
+    openclawRoot: undefined,
+    piServerEntry: undefined,
+    ...overrides,
+  }
 }
 
 test('runWorld replays 2 trading days for 2 bots: artifacts written, status done, generated rl-config has mem0 url', async () => {
@@ -248,4 +269,47 @@ test('botServerArgv: openclaw-pi without piServerEntry throws', () => {
     piServerEntry: undefined,
   }
   assert.throws(() => botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/oc.json'), /piServerEntry/)
+})
+
+test('openclawJsonSource: research-loop returns config.openclawJson', () => {
+  const cfg = piBaseConfig({ loop: 'research-loop' })
+  assert.equal(openclawJsonSource(cfg), cfg.openclawJson)
+})
+
+test('openclawJsonSource: openclaw-pi returns config.openclawJson (same source for both loops)', () => {
+  const cfg = piBaseConfig({ loop: 'openclaw-pi' })
+  assert.equal(openclawJsonSource(cfg), cfg.openclawJson)
+})
+
+test('loopConfigPath: research-loop points at runConfigFile (trading-rl-config.json)', () => {
+  const cfg = piBaseConfig({ loop: 'research-loop' })
+  const p = loopConfigPath(cfg, '/tmp/world', 'r1')
+  assert.match(p, /\/runs\/r1\/trading-rl-config\.json$/)
+})
+
+test('loopConfigPath: openclaw-pi points at run rl-openclaw/openclaw.json', () => {
+  const cfg = piBaseConfig({ loop: 'openclaw-pi' })
+  const p = loopConfigPath(cfg, '/tmp/world', 'r1')
+  assert.match(p, /\/runs\/r1\/rl-openclaw\/openclaw\.json$/)
+})
+
+test('patchPiOpenclawJsonMemory: rewrites mcp.mem0 to the given URL', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pi-patch-'))
+  const p = join(dir, 'openclaw.json')
+  writeFileSync(p, JSON.stringify({ mcp: { mem0: 'http://old:1234', other: 'keep' }, top: 'keep' }) + '\n')
+  patchPiOpenclawJsonMemory(dir, 'http://127.0.0.1:9999')
+  const after = JSON.parse(readFileSync(p, 'utf8'))
+  assert.equal(after.mcp.mem0, 'http://127.0.0.1:9999')
+  assert.equal(after.mcp.other, 'keep')
+  assert.equal(after.top, 'keep')
+})
+
+test('patchPiOpenclawJsonMemory: creates mcp object if missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pi-patch-'))
+  const p = join(dir, 'openclaw.json')
+  writeFileSync(p, JSON.stringify({ top: 'value' }) + '\n')
+  patchPiOpenclawJsonMemory(dir, 'http://127.0.0.1:9999')
+  const after = JSON.parse(readFileSync(p, 'utf8'))
+  assert.equal(after.mcp.mem0, 'http://127.0.0.1:9999')
+  assert.equal(after.top, 'value')
 })

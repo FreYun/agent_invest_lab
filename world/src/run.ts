@@ -23,6 +23,29 @@ export interface RunWorldOptions {
 const SESSION_KEY = (runId: string): string => `trading-${runId}`
 const JOURNAL_REL = 'memory/trading/journal.md'
 
+/** 选 openclaw.json 源路径。当前两种 loop 都用同一个 credentials 文件。 */
+export function openclawJsonSource(config: WorldConfig): string {
+  return config.openclawJson
+}
+
+/** 选 loop server 的配置文件路径：research-loop 用生成的 trading-rl-config.json；pi 直接用 rl-openclaw/openclaw.json 副本（带 mcp.mem0 patch）。 */
+export function loopConfigPath(config: WorldConfig, worldRoot: string, runId: string): string {
+  if (config.loop === 'openclaw-pi') return join(P.rlOpenclawDir(worldRoot, runId), 'openclaw.json')
+  return P.runConfigFile(worldRoot, runId)
+}
+
+/** openclaw-pi loop：把 rl-openclaw/openclaw.json 的 mcp.mem0 改写为本 run 的 memory URL，让 pi 用隔离的记忆服务。 */
+export function patchPiOpenclawJsonMemory(rlOpenclawDir: string, memoryUrl: string): void {
+  const p = join(rlOpenclawDir, 'openclaw.json')
+  let cfg: Record<string, unknown>
+  try { cfg = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown> }
+  catch (err) { throw new Error(`cannot read ${p}: ${err instanceof Error ? err.message : String(err)}`) }
+  const mcp = (typeof cfg.mcp === 'object' && cfg.mcp ? cfg.mcp : {}) as Record<string, unknown>
+  mcp.mem0 = memoryUrl
+  cfg.mcp = mcp
+  writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n')
+}
+
 export function botServerArgv(config: WorldConfig, botId: string, workspace: string, loopConfigPath: string): string[] {
   if (config.loop === 'openclaw-pi') {
     if (!config.piServerEntry) throw new Error('botServerArgv: piServerEntry required for openclaw-pi loop')
@@ -123,7 +146,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   mkdirSync(P.workspacesDir(worldRoot, runId), { recursive: true })
   mkdirSync(rlOpenclawDir, { recursive: true })
   // 把 openclaw.json 复制进 run 专属 openclaw 目录（research-loop 的 openclaw_dir → session/事件存档落这里，与真实 .openclaw 隔离）
-  const srcOpenclawJson = config.openclawJson
+  const srcOpenclawJson = openclawJsonSource(config)
   const dstOpenclawJson = join(rlOpenclawDir, 'openclaw.json')
   if (existsSync(srcOpenclawJson) && !existsSync(dstOpenclawJson)) {
     try { copyFileSync(srcOpenclawJson, dstOpenclawJson) } catch { /* 非致命 */ }
@@ -138,8 +161,12 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   writeFileSync(P.memoryRuntimeFile(worldRoot, runId), JSON.stringify({ port: memory.port, url: memory.url, collection: 'trading-memories' }, null, 2) + '\n')
   log(worldRoot, runId, `memory server at ${memory.url}`)
 
-  // 生成 rl-config
-  generateRlConfig(config, worldRoot, runId, memory.url, rlOpenclawDir)
+  // 按 loop 分支生成 server 配置：research-loop 写 trading-rl-config.json；pi 直接 patch 已经复制的 openclaw.json 的 mcp.mem0。
+  if (config.loop === 'openclaw-pi') {
+    patchPiOpenclawJsonMemory(rlOpenclawDir, memory.url)
+  } else {
+    generateRlConfig(config, worldRoot, runId, memory.url, rlOpenclawDir)
+  }
 
   // 影子 workspace + bot server
   const bots: { botId: string; server: BotServer }[] = []
@@ -149,7 +176,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
       if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
       const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
       buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude })
-      const argv = botServerArgv(config, botId, shadow, P.runConfigFile(worldRoot, runId))
+      const argv = botServerArgv(config, botId, shadow, loopConfigPath(config, worldRoot, runId))
       const server = await startBotServer(botId, argv)
       bots.push({ botId, server })
       log(worldRoot, runId, `bot ${botId}: server ready`)
