@@ -1,0 +1,7 @@
+{
+  "name": "研究数据库",
+  "icon": "🗄️",
+  "slot": "research",
+  "desc": "金融研究 MCP 数据接口（行情/基金/宏观）",
+  "subType": "general"
+}

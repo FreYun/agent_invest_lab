@@ -1,0 +1,8 @@
+[project]
+name = "fund-portfolio-mcp"
+version = "0.1.0"
+description = "基金直投组合管理 MCP 服务 — 基金数据查询、持仓管理、订单管理(T+1)、巡检调仓、收益快照、选品追踪"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+]

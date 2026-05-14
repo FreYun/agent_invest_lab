@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(timeout 600 node --experimental-strip-types world/main.ts run --config /tmp/world-pi-e2e.yaml --world-dir /tmp/world-pi-e2e-runtime --run-id e2e-fullbak)",
+      "Bash(timeout 600 node --experimental-strip-types world/main.ts run --config /tmp/world-pi-e2e.yaml --world-dir /tmp/world-pi-e2e-runtime --run-id e2e-lab-paths)",
+      "Bash(timeout 600 node --experimental-strip-types world/main.ts run --config /tmp/world-pi-e2e.yaml --world-dir /tmp/world-pi-e2e-runtime --run-id e2e-zai-auth)",
+      "Bash(curl -s -X POST 'https://dd-ai-api.eastmoney.com/v1/chat/completions' -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-hqlf9tRAsnWJwgks5eB66e721aD84e489fC3A6D274Ad49C4' -d '{\"model\":\"qwen3.5-plus\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":10}')",
+      "Bash(timeout 300 node --experimental-strip-types world/main.ts run --config /tmp/world-pi-e2e.yaml --world-dir /tmp/world-pi-e2e-runtime --run-id e2e-debug)",
+      "Bash(cat /proc/sys/fs/inotify/max_user_watches /proc/sys/fs/inotify/max_user_instances 2>&1)",
+      "Read(//proc/sys/fs/inotify/**)",
+      "Read(//proc/**)",
+      "Bash(awk -F/ '{print $3}')",
+      "Bash(find /proc/*/fd -lname 'anon_inode:inotify')",
+      "Bash(timeout 900 node --experimental-strip-types world/main.ts run --config /tmp/world-pi-e2e.yaml --world-dir /tmp/world-pi-e2e-runtime --run-id e2e-debug)",
+      "Bash(tee /tmp/world-pi-run.log)",
+      "Bash(find ~/.openclaw/agents/*/sessions -type f -newer /tmp/world-pi-run.log)",
+      "Bash(ps -p 683324 -o args=)",
+      "Bash(rm -rf /tmp/world-pi-e2e-runtime session /tmp/pi-world-chat-*)",
+      "Bash(tee /tmp/world-pi-run2.log)",
+      "Bash(kill 683324)",
+      "Bash(nohup node server.js)",
+      "Bash(tee /tmp/world-pi-run3.log)",
+      "Bash(curl -s \"http://127.0.0.1:18888/api/state\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:18888/)",
+      "Bash(curl -s \"http://127.0.0.1:18888/api/data\")",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);ws=[s for s in d.get\\('allSessions',[]\\) if 'world' in s.get\\('agent',''\\) or s.get\\('sessionRootType'\\)=='world'];print\\(f'world sessions count: {len\\(ws\\)}'\\);print\\(json.dumps\\(ws[:5],indent=2,ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);ws=[s for s in d.get\\('allSessions',[]\\) if s.get\\('agent',''\\).endswith\\('-world'\\)];print\\(f'-world sessions: {len\\(ws\\)}'\\);print\\(json.dumps\\(ws,indent=2,ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);k=next\\(iter\\(d\\)\\);print\\('key:',repr\\(k\\)\\);print\\(json.dumps\\(d[k],indent=2,ensure_ascii=False\\)[:1000]\\)\")",
+      "Bash(lsof -i :18789 -sTCP:LISTEN)",
+      "Bash(disown)",
+      "Bash(kill -9 3452211)"
+    ]
+  }
+}
