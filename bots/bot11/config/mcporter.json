@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "xiaohongshu-mcp": {
+      "url": "http://localhost:18060/mcp/bot11"
+    },
+    "research-mcp": {
+      "url": "http://research-mcp.jijinmima.cn/mcp"
+    },
+    "image-gen-mcp": {
+      "url": "http://localhost:18085/mcp"
+    },
+    "weread-mcp": {
+      "url": "http://localhost:18100/mcp/bot11"
+    },
+    "tougu-portfolio-mcp": {
+      "url": "http://localhost:18070/mcp"
+    },
+    "zsxq-mcp": {
+      "url": "http://localhost:18080/mcp"
+    },
+    "finance-data": {
+      "url": "http://localhost:8000/sse"
+    },
+    "yfinance": {
+      "url": "http://localhost:18091/mcp"
+    },
+    "fund-portfolio-mcp": {
+      "url": "http://localhost:28171/mcp"
+    }
+  },
+  "imports": []
+}

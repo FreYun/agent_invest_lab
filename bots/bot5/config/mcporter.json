@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "xiaohongshu-mcp": {
+      "url": "http://localhost:18060/mcp/bot5"
+    },
+    "image-gen-mcp": {
+      "url": "http://localhost:18085/mcp"
+    },
+    "research-mcp": {
+      "url": "http://research-mcp.jijinmima.cn/mcp"
+    },
+    "tougu-portfolio-mcp": {
+      "url": "http://localhost:18070/mcp"
+    },
+    "compliance-mcp": {
+      "url": "http://localhost:18090/mcp"
+    },
+    "zsxq-mcp": {
+      "url": "http://localhost:18080/mcp"
+    },
+    "fund-portfolio-mcp": {
+      "url": "http://localhost:28171/mcp"
+    }
+  },
+  "imports": []
+}
