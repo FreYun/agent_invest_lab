@@ -1,0 +1,15 @@
+{
+    "mcpServers": {
+        "image-gen-mcp": {
+            "url": "http://localhost:18085/mcp"
+        },
+        "media-data-pack": {
+            "type": "streamableHttp",
+            "url": "http://localhost:18075/mcp"
+        },
+        "zsxq-mcp": {
+            "url": "http://localhost:18080/mcp"
+        }
+    },
+    "imports": []
+}
