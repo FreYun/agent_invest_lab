@@ -99,7 +99,7 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1', 'bot7'], dates: ['2024-03-14', '2024-03-15'] })
   await runWorld({ worldRoot, config, runId: 'r1', startBotServer: stubStartBotServer })
 
-  const st = readState(worldRoot)
+  const st = readState(worldRoot, 'r1')
   assert.equal(st.status, 'done')
   assert.equal(st.cursor, 2)
   assert.equal(st.run_id, 'r1')
@@ -148,7 +148,7 @@ test('runWorld: a hanging bot is recorded as timeout but does not block the othe
     env: botId === 'bot7' ? { STUB_CHAT_MODE: 'hang' } : {},
   })
   await runWorld({ worldRoot, config, runId: 'r2', startBotServer: start })
-  assert.equal(readState(worldRoot).status, 'done')
+  assert.equal(readState(worldRoot, 'r2').status, 'done')
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r2', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r2', '2024-03-14', 'bot7'), 'utf8')).status, 'timeout')
   cleanup()
@@ -177,7 +177,7 @@ test('runWorld no longer fails when a day has no quotes.json (deprecated: prompt
   rmSync(P.quotesFile(worldRoot, '2024-03-15'), { force: true })
   // 之前会 reject /quotes\.json|missing/；现在 setup 不再校验 quotes.json，run 应该正常完成。
   await runWorld({ worldRoot, config, runId: 'r3-no-quotes', startBotServer: stubStartBotServer })
-  assert.equal(readState(worldRoot).status, 'done')
+  assert.equal(readState(worldRoot, 'r3-no-quotes').status, 'done')
   cleanup()
 })
 
@@ -189,7 +189,7 @@ test('runWorld: a bot whose process exits mid-chat is recorded dead and the run 
     env: botId === 'bot7' ? { STUB_CHAT_MODE: 'exit' } : {},
   })
   await runWorld({ worldRoot, config, runId: 'rdead', startBotServer: start })
-  assert.equal(readState(worldRoot).status, 'done')
+  assert.equal(readState(worldRoot, 'rdead').status, 'done')
   // bot1 ok on both days
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-15', 'bot1'), 'utf8')).status, 'ok')
@@ -206,7 +206,7 @@ test('runWorld aborts (status=aborted) when a STOP sentinel is present', async (
   mkdirSync(dirname(stopPath), { recursive: true })
   writeFileSync(stopPath, 'stop\n')
   await runWorld({ worldRoot, config, runId: 'rstop', startBotServer: stubStartBotServer })
-  const st = readState(worldRoot)
+  const st = readState(worldRoot, 'rstop')
   assert.equal(st.status, 'aborted')
   // 循环在第一次迭代顶部就发现 STOP → cursor 停在 0，没有任何当天产物
   assert.equal(st.cursor, 0)
