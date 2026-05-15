@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseCliArgs } from '../src/cli.ts'
+import { parseCliArgs, main } from '../src/cli.ts'
 
 test('parseCliArgs: run with config + run-id + world-dir', () => {
   assert.deepEqual(parseCliArgs(['run', '--config', 'config/world.yaml', '--run-id', 'r1', '--world-dir', '/tmp/w']),
@@ -25,4 +25,43 @@ test('parseCliArgs: help and unknown', () => {
 
 test('parseCliArgs: run requires --config (validated by caller, but parser still returns it absent)', () => {
   assert.deepEqual(parseCliArgs(['run']), { command: 'run', config: undefined, runId: undefined, worldDir: undefined })
+})
+
+test('main: resume without --run-id exits 2 with clear error', async () => {
+  const errs: string[] = []
+  const orig = process.stderr.write.bind(process.stderr)
+  process.stderr.write = (chunk: any) => { errs.push(String(chunk)); return true }
+  try {
+    const code = await main(['resume', '--config', 'whatever.yaml'])
+    assert.equal(code, 2)
+    assert.match(errs.join(''), /--run-id <id> is required/)
+  } finally {
+    process.stderr.write = orig
+  }
+})
+
+test('main: status without --run-id exits 2', async () => {
+  const errs: string[] = []
+  const orig = process.stderr.write.bind(process.stderr)
+  process.stderr.write = (chunk: any) => { errs.push(String(chunk)); return true }
+  try {
+    const code = await main(['status'])
+    assert.equal(code, 2)
+    assert.match(errs.join(''), /--run-id <id> is required/)
+  } finally {
+    process.stderr.write = orig
+  }
+})
+
+test('main: stop without --run-id exits 2', async () => {
+  const errs: string[] = []
+  const orig = process.stderr.write.bind(process.stderr)
+  process.stderr.write = (chunk: any) => { errs.push(String(chunk)); return true }
+  try {
+    const code = await main(['stop'])
+    assert.equal(code, 2)
+    assert.match(errs.join(''), /--run-id <id> is required/)
+  } finally {
+    process.stderr.write = orig
+  }
 })
