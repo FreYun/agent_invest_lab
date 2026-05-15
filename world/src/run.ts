@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { WorldConfig } from './config.ts'
@@ -8,6 +9,8 @@ import { buildShadowWorkspace } from './shadowWorkspace.ts'
 import { renderDailyMessage } from './message.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
+import { createSimworldProxy, type SimworldProxyHandle } from './simworld-proxy/server.ts'
+import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import * as P from './paths.ts'
 
@@ -20,12 +23,32 @@ export interface RunWorldOptions {
   startBotServer?: StartBotServer
 }
 
-const SESSION_KEY = (runId: string): string => `trading-${runId}`
+// openclaw 解析 sessionKey → agentId 走 parseAgentSessionKey，要求格式 `agent:<id>:<rest>`
+// (openclaw/src/sessions/session-key-utils.ts)。不带这个前缀，pi runner 内部 plugin tool
+// context (mem0_search 等) 会 fallback 到 resolveDefaultAgentId(cfg)，把所有 bot 都当成
+// 默认 agent (eg mag1)，导致 MEMORY.md / workspace 全部落到 mag1 那条线。
+const SESSION_KEY = (runId: string, botId: string): string => `agent:${botId}:trading-${runId}`
 const JOURNAL_REL = 'memory/trading/journal.md'
 
 /** 选 openclaw.json 源路径。当前两种 loop 都用同一个 credentials 文件。 */
 export function openclawJsonSource(config: WorldConfig): string {
   return config.openclawJson
+}
+
+/** 跑一次 fund-portfolio-mcp/cli_tools.py 子进程（绕过 MCP HTTP），返回 stdout 文本。
+ *  用在 system 侧调 init_fund_account / close_my_day——这些 tool 在 BOT_ONLY 端口被隐藏，
+ *  bot 看不见，只能由 world setup / 每日收盘自动触发。 */
+export async function runFundCli(cliPath: string, cmd: string, args: string[], opts: { timeoutMs?: number } = {}): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolveP, reject) => {
+    const child = spawn('python3', [cliPath, cmd, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    const timer = opts.timeoutMs ? setTimeout(() => { try { child.kill('SIGKILL') } catch { /* ignore */ } reject(new Error(`fund cli ${cmd} timeout (${opts.timeoutMs}ms)`)) }, opts.timeoutMs) : null
+    child.stdout.on('data', d => { stdout += d.toString() })
+    child.stderr.on('data', d => { stderr += d.toString() })
+    child.on('error', err => { if (timer) clearTimeout(timer); reject(err) })
+    child.on('close', code => { if (timer) clearTimeout(timer); resolveP({ stdout: stdout.trim(), stderr: stderr.trim(), code: code ?? -1 }) })
+  })
 }
 
 /** 选 loop server 的配置文件路径：research-loop 用生成的 trading-rl-config.json；pi 直接用 rl-openclaw/openclaw.json 副本（带 mcp.mem0 patch）。 */
@@ -62,12 +85,41 @@ export function botServerArgv(config: WorldConfig, botId: string, workspace: str
   return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', loopConfigPath]
 }
 
+/** Build env supplement so child Node fetch() honors the parent's HTTP(S)_PROXY.
+ *
+ * Two reasons we have to manage this in lab instead of relying on shell env:
+ * 1. Node's built-in fetch (undici) DOES NOT read HTTPS_PROXY/HTTP_PROXY by default.
+ *    Need `--use-env-proxy` (Node 22+ EnvHttpProxyAgent) to opt in. We inject it
+ *    via NODE_OPTIONS so it survives spawn without changing argv plumbing.
+ * 2. undici's EnvHttpProxyAgent NO_PROXY parser doesn't grok CIDR ranges
+ *    (e.g. `192.168.0.0/16`). When parsing fails it tends to bypass the proxy
+ *    entirely → all fetches go direct → external API timeouts. Strip CIDR
+ *    entries from NO_PROXY before handing it down.
+ *
+ * Returns {} when no proxy is set in the parent — we don't disturb proxy-free
+ * environments. */
+export function proxyEnvSupplement(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const hasProxy = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy || env.ALL_PROXY || env.all_proxy
+  if (!hasProxy) return {}
+  const out: Record<string, string> = {}
+  const existing = env.NODE_OPTIONS ?? ''
+  out.NODE_OPTIONS = existing.includes('--use-env-proxy') ? existing : `${existing} --use-env-proxy`.trim()
+  // CIDR entries (a.b.c.d/N) crash EnvHttpProxyAgent's no-proxy matcher; drop them.
+  // Always keep at least localhost/127.0.0.1/::1 so loopback (e.g. our memory-server) bypasses.
+  const raw = env.NO_PROXY ?? env.no_proxy ?? ''
+  const cleaned = raw.split(',').map(s => s.trim()).filter(s => s && !/\/\d+$/.test(s))
+  const baseLoopback = ['localhost', '127.0.0.1', '::1']
+  for (const lb of baseLoopback) if (!cleaned.includes(lb)) cleaned.push(lb)
+  out.NO_PROXY = cleaned.join(',')
+  return out
+}
+
 /** openclaw-pi loop：从真实 ~/.openclaw/agents/<botId>/agent/ 把 auth-profiles / auth-state / models.json
- *  种子拷贝到 piSessionsDir/<botId>/agent/。已存在的不动（"seed once"），让 lab 的 agent state 后续与 openclaw
- *  脱钩演化。配合 spawn 时 env OPENCLAW_AGENTS_DIR=<piSessionsDir>，pi 把所有读写都改道到 lab 的隔离树里，
- *  不污染真实 .openclaw/agents/。 */
+ *  种子拷贝到 piSessionsDir/agents/<botId>/agent/。已存在的不动（"seed once"），让 lab 的 agent state 后续
+ *  与 openclaw 脱钩演化。配合 spawn 时 env OPENCLAW_STATE_DIR=<piSessionsDir>，pi 把 sessions.json /
+ *  *.jsonl 也写进 <piSessionsDir>/agents/<botId>/sessions/，dashboard 可以按 world-root 扫描列出来。 */
 export function seedPiAgentBot(piSessionsDir: string, sourceAgentsDir: string, botId: string): void {
-  const dest = join(piSessionsDir, botId, 'agent')
+  const dest = join(piSessionsDir, 'agents', botId, 'agent')
   if (existsSync(join(dest, 'auth-profiles.json'))) return
   mkdirSync(dest, { recursive: true })
   const src = join(sourceAgentsDir, botId, 'agent')
@@ -103,6 +155,8 @@ function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string,
 interface SetupResult {
   tradingDates: string[]
   memory: MemoryServerHandle
+  simworldProxy: SimworldProxyHandle
+  fundPortfolioProxy: FundPortfolioProxyHandle | null
   bots: { botId: string; server: BotServer }[]
   currentDateRef: { value: string }
 }
@@ -149,40 +203,37 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // pi-server needs to be spawned with cwd=openclawRoot so tsx's tsconfig.json lookup picks up
   // openclaw's path aliases (openclaw/plugin-sdk/*). research-loop doesn't need this.
   const spawnCwd = config.loop === 'openclaw-pi' ? config.openclawRoot : undefined
-  // pi reads/writes the agent dir from $OPENCLAW_AGENT_DIR (auth-profiles, models.json, sessions).
-  // Point it at the per-bot lab-isolated dir so reads use seeded auth and writes (new session jsonl) land
-  // under piSessionsDir, never touching the real ~/.openclaw/agents/. PI_CODING_AGENT_DIR is the equivalent
-  // env that pi-coding-agent SDK reads — set both for belt-and-suspenders.
+  // Lay pi state under <piSessionsDir>/agents/<botId>/ so it mirrors openclaw's
+  // own ~/.openclaw/agents/<id>/ layout. That lets dashboards/auditors point at
+  // <piSessionsDir> as a "world openclaw root" and scan sessions/sessions.json
+  // exactly the same way they scan the real openclaw state tree.
   const piAgentDirFor = (botId: string): string | undefined =>
     config.loop === 'openclaw-pi' && config.piSessionsDir
-      ? join(config.piSessionsDir, botId, 'agent')
+      ? join(config.piSessionsDir, 'agents', botId, 'agent')
       : undefined
   const startBotServer: StartBotServer = opts.startBotServer
     ?? ((botId, argv) => {
       const agentDir = piAgentDirFor(botId)
-      // OPENCLAW_AGENT_DIR / PI_CODING_AGENT_DIR redirect auth + per-agent files.
-      // OPENCLAW_STATE_DIR redirects openclaw's state tree (where session jsonl + sessions.json land):
-      // pi writes to <STATE_DIR>/agents/<defaultAgentId>/sessions/<UUID>.jsonl. Point it at piSessionsDir
-      // and arrange the structure so the lab tree mirrors openclaw's expected layout
-      // (<piSessionsDir>/agents/<id>/sessions/...) — but the user-facing layout the user wants is
-      // <piSessionsDir>/<botId>/sessions/... so we pass piSessionsDir as STATE_DIR and let openclaw
-      // create its agents/<id>/sessions/ tree inside; net effect: sessions land at
-      // <piSessionsDir>/agents/<resolved>/sessions/<UUID>.jsonl. Auth files stay seeded at
-      // <piSessionsDir>/<botId>/agent (compatible with the AGENT_DIR override).
-      // Pi reads per-agent auth/models from $OPENCLAW_AGENT_DIR (and the equivalent
-      // SDK var PI_CODING_AGENT_DIR). Point both at the lab's seeded per-bot dir so
-      // pi finds API keys without falling back to ~/.openclaw/agents/main/.
-      // WORLD_PI_SESSIONS_DEST tells pi-server where to copy the session jsonl (and
-      // then unlink the source from ~/.openclaw/agents/<resolved>/sessions/) so the
-      // real openclaw tree stays clean. The pi-server passes the sessionId as a UUID
-      // so the source filename is predictable.
-      const env = agentDir
+      // - OPENCLAW_AGENT_DIR / PI_CODING_AGENT_DIR: per-agent dir (auth-profiles, models.json).
+      // - OPENCLAW_STATE_DIR: pi computes session paths from <STATE_DIR>/agents/<id>/sessions/
+      //   (see openclaw config/sessions/paths.ts). Point it at piSessionsDir so sessions.json +
+      //   *.jsonl + *.state.json all land under <piSessionsDir>/agents/<botId>/sessions/, never
+      //   touching ~/.openclaw/agents/<id>/sessions/. pi-stdio-server reads STATE_DIR to compute
+      //   the sessionFile path so the index file matches the jsonl filename.
+      const piEnv: Record<string, string> = agentDir && config.piSessionsDir
         ? {
             OPENCLAW_AGENT_DIR: agentDir,
             PI_CODING_AGENT_DIR: agentDir,
-            WORLD_PI_SESSIONS_DEST: join(config.piSessionsDir!, botId, 'sessions'),
+            OPENCLAW_STATE_DIR: config.piSessionsDir,
           }
-        : undefined
+        : {}
+      const proxyEnv = proxyEnvSupplement()
+      // research-loop reads this file each turn to pin its system-prompt date to the
+      // world's replay day instead of the host wall-clock. World rewrites the file
+      // at the top of each trading day. pi doesn't auto-inject the date in its
+      // system prompt, so the env var is benign there (just unused).
+      const dateOverrideEnv: Record<string, string> = { WORLD_DATE_OVERRIDE_FILE: P.worldDateOverrideFile(worldRoot, runId) }
+      const env: Record<string, string> = { ...dateOverrideEnv, ...piEnv, ...proxyEnv }
       return BotServer.start(botId, {
         argv,
         cwd: spawnCwd,
@@ -199,10 +250,10 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // 交易日序列
   const cal = loadCalendar(config.calendar)
   const tradingDates = computeTradingDates(cal, config.replay.from, config.replay.to)
-
-  // 校验数据齐全（fail-fast，在写 state 之前）
-  const missing = tradingDates.filter(d => !existsSync(P.quotesFile(worldRoot, d)))
-  if (missing.length) throw new Error(`missing quotes.json for ${missing.length} trading day(s): ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ', …' : ''}`)
+  // 历史上这里 fail-fast 校验每个交易日有 days/<d>/quotes.json——那时 prompt 会把
+  // quotes.json 渲染进 daily message。现在 prompt 改走 simworld-data MCP 实时查行情，
+  // quotes.json 已经不再被任何活路径消费（overview.ts 也成了死代码）。删掉这个守门，
+  // calendar 内任意区间都能跑。如果需要回来强制 quotes 数据齐全，重新加回 missing check。
 
   const rlOpenclawDir = config.rlOpenclawDir ?? P.rlOpenclawDir(worldRoot, runId)
 
@@ -227,6 +278,25 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   writeFileSync(P.memoryRuntimeFile(worldRoot, runId), JSON.stringify({ port: memory.port, url: memory.url, collection: 'trading-memories' }, null, 2) + '\n')
   log(worldRoot, runId, `memory server at ${memory.url}`)
 
+  // simworld-data MCP 代理（必选，进程内）。模板变量 ${SIMWORLD_PROXY_URL} 在
+  // buildShadowWorkspace 拷贝 config/mcporter.json 时替换为下面的 url。
+  const simworldProxy = await createSimworldProxy({ upstreamUrl: config.simworldUpstreamUrl, getCurrentDate })
+  writeFileSync(P.simworldProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: simworldProxy.port, url: simworldProxy.url, upstream: config.simworldUpstreamUrl }, null, 2) + '\n')
+  log(worldRoot, runId, `simworld-data proxy at ${simworldProxy.url} (upstream ${config.simworldUpstreamUrl})`)
+  const templateVars: Record<string, string> = { SIMWORLD_PROXY_URL: simworldProxy.url }
+
+  // fund-portfolio-mcp 代理（仅当 fundMcpCli 配置时启用——基金 run 才需要）：
+  //   - 强制注入 run_id 到所有 writer 工具的 arguments
+  //   - 从 tools/list 的 inputSchema 删除 run_id（bot 永远看不见）
+  // bot 的 mcporter.json 用 ${FUND_PORTFOLIO_PROXY_URL} 占位符引用。
+  let fundPortfolioProxy: FundPortfolioProxyHandle | null = null
+  if (config.fundMcpCli && config.fundPortfolioUpstreamUrl) {
+    fundPortfolioProxy = await createFundPortfolioProxy({ upstreamUrl: config.fundPortfolioUpstreamUrl, runId })
+    writeFileSync(P.fundPortfolioProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: fundPortfolioProxy.port, url: fundPortfolioProxy.url, upstream: config.fundPortfolioUpstreamUrl, runId }, null, 2) + '\n')
+    log(worldRoot, runId, `fund-portfolio proxy at ${fundPortfolioProxy.url} (upstream ${config.fundPortfolioUpstreamUrl}, run_id=${runId})`)
+    templateVars.FUND_PORTFOLIO_PROXY_URL = fundPortfolioProxy.url
+  }
+
   // 按 loop 分支生成 server 配置：research-loop 写 trading-rl-config.json；pi 直接 patch 已经复制的 openclaw.json 的 mcp.mem0。
   if (config.loop === 'openclaw-pi') {
     patchPiOpenclawJsonMemory(rlOpenclawDir, memory.url)
@@ -250,21 +320,55 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
       const srcWs = isAbsolute(botId) ? botId : join(config.botsRoot, botId)
       if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
       const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
-      buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude })
+      buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars })
       const argv = botServerArgv(config, botId, shadow, loopConfigPath(config, worldRoot, runId))
       const server = await startBotServer(botId, argv)
       bots.push({ botId, server })
       log(worldRoot, runId, `bot ${botId}: server ready`)
     }
   } catch (err) {
-    // 启动阶段失败：关掉已起的 bot server + 记忆服务
+    // 启动阶段失败：关掉已起的 bot server + 记忆服务 + 代理
     for (const b of bots) { try { await b.server.shutdown({ timeoutMs: 2000 }) } catch { /* ignore */ } }
     try { await memory.close() } catch { /* ignore */ }
+    try { await simworldProxy.close() } catch { /* ignore */ }
+    if (fundPortfolioProxy) try { await fundPortfolioProxy.close() } catch { /* ignore */ }
     throw err
   }
 
-  return { tradingDates, memory, bots, currentDateRef }
+  // 系统侧 init：每个 bot 调一次 init_fund_account。bot 在 BOT_ONLY 端口看不到这个 tool，
+  // 只能由 world 帮它建账户。默认 capital 100 万、全现金、reset=true（world replay 起点干净）。
+  if (config.fundMcpCli) {
+    // Per-run 可买基金白名单：写到 fund-portfolio-mcp 进程能读到的固定路径。
+    // 路径必须跟 lab-fund-bot-only.service / lab-fund-readonly.service 的
+    // FUND_BUYABLE_CODES_FILE env 一致（手工 sync；改一处记得改另一处）。
+    if (config.buyableFundCodes) {
+      try {
+        writeFileSync(BUYABLE_CODES_FILE, JSON.stringify({ fund_codes: config.buyableFundCodes }) + '\n')
+        log(worldRoot, runId, `fund buyable codes pinned (${config.buyableFundCodes.length}): ${config.buyableFundCodes.slice(0, 8).join(',')}${config.buyableFundCodes.length > 8 ? ',…' : ''}`)
+      } catch (err) {
+        log(worldRoot, runId, `fund buyable codes write FAILED: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    const capital = config.fundInitialCapital ?? 1_000_000
+    // --run-id 把本轮 runId 透给 cli_tools.py，server.py 的 _require_run_id 才能放行 init。
+    const initArgs = ['--initial-capital', String(capital), '--run-id', runId]
+    if (config.fundInitReset !== false) initArgs.push('--reset')
+    for (const { botId } of bots) {
+      try {
+        const r = await runFundCli(config.fundMcpCli, 'init_fund_account', ['--bot-id', botId, ...initArgs], { timeoutMs: 30_000 })
+        log(worldRoot, runId, `fund init ${botId}: code=${r.code} ${r.stdout.slice(0, 200)}${r.stderr ? ` | stderr: ${r.stderr.slice(0, 200)}` : ''}`)
+      } catch (err) {
+        log(worldRoot, runId, `fund init ${botId} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+
+  return { tradingDates, memory, simworldProxy, fundPortfolioProxy, bots, currentDateRef }
 }
+
+// 必须跟 lab-fund-bot-only.service / lab-fund-readonly.service 的 FUND_BUYABLE_CODES_FILE
+// 完全一致——server.py 在 BOT_ONLY 模式下从这里读 curated 列表。
+const BUYABLE_CODES_FILE = '/home/rooot/agent_invest_lab/data/lab-fund-buyable.json'
 
 interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string }
 
@@ -292,7 +396,7 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
   writeStatus('running')
   log(worldRoot, runId, `bot ${b.botId}: chat request sent for ${date} (timeout=${Math.floor(perBotTimeoutMs / 1000)}s)`)
   try {
-    const r = await b.server.chat({ message, session_key: SESSION_KEY(runId), history: [] }, { timeoutMs: perBotTimeoutMs })
+    const r = await b.server.chat({ message, session_key: SESSION_KEY(runId, b.botId), history: [] }, { timeoutMs: perBotTimeoutMs })
     writeFileSync(P.replyFile(worldRoot, runId, date, b.botId), JSON.stringify(r, null, 2) + '\n')
     const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt }
     writeStatus(s.status, { iterations: s.iterations, usage: s.usage, finishedAt: new Date().toISOString() })
@@ -320,16 +424,27 @@ function writeSkippedDeadBot(worldRoot: string, runId: string, date: string, mes
 interface DaySummary { date: string; bots: DayBotStatus[] }
 
 async function teardown(worldRoot: string, runId: string, setupRes: SetupResult, finalStatus: WorldState['status'], days: DaySummary[]): Promise<void> {
-  for (const b of setupRes.bots) { try { await b.server.shutdown({ timeoutMs: 5000 }) } catch { /* ignore */ } }
-  try { await setupRes.memory.close() } catch { /* ignore */ }
-  writeFileSync(P.summaryFile(worldRoot, runId), JSON.stringify({ run_id: runId, status: finalStatus, days, finished_at: new Date().toISOString() }, null, 2) + '\n')
+  // 1) 先把 state.json 翻成终态——dashboard 通过 status!=='running' 判断能否起新 run，
+  //    任何 cleanup hang 都不能阻塞这一步。同时把 run 目录里的 state archive 也写下。
   let state: WorldState | undefined
-  try { state = readState(worldRoot) } catch { /* state.json may not exist if setup never wrote it */ }
+  try { state = readState(worldRoot) } catch { /* state.json 可能 setup 都没写出来 */ }
   if (state) {
-    writeState(worldRoot, { ...state, status: finalStatus, updated_at: new Date().toISOString() })
-    // 也把最终 state 复制进 run 目录存档
-    writeFileSync(join(P.runDir(worldRoot, runId), 'state.json'), JSON.stringify({ ...state, status: finalStatus }, null, 2) + '\n')
+    try { writeState(worldRoot, { ...state, status: finalStatus, updated_at: new Date().toISOString() }) } catch { /* ignore */ }
+    try { writeFileSync(join(P.runDir(worldRoot, runId), 'state.json'), JSON.stringify({ ...state, status: finalStatus }, null, 2) + '\n') } catch { /* ignore */ }
   }
+  // 2) 关 server / memory / proxy；用 Promise.race 给整体 cleanup 一个 10s 硬顶。
+  //    任何单独 close 卡住都会被这个超时罩住，绝不让 teardown 永远挂在等待 socket drain。
+  await Promise.race([
+    Promise.allSettled([
+      ...setupRes.bots.map(b => b.server.shutdown({ timeoutMs: 5000 })),
+      setupRes.memory.close(),
+      setupRes.simworldProxy.close(),
+      ...(setupRes.fundPortfolioProxy ? [setupRes.fundPortfolioProxy.close()] : []),
+    ]),
+    new Promise<void>(resolve => setTimeout(resolve, 10_000)),
+  ])
+  // 3) summary 是 best-effort——cleanup 已经收尾，state 已落盘，summary 只是审阅辅助。
+  try { writeFileSync(P.summaryFile(worldRoot, runId), JSON.stringify({ run_id: runId, status: finalStatus, days, finished_at: new Date().toISOString() }, null, 2) + '\n') } catch { /* ignore */ }
   log(worldRoot, runId, `teardown: status=${finalStatus}`)
 }
 
@@ -357,11 +472,17 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
 
 interface RunLoopArgs { worldRoot: string; runId: string; config: WorldConfig; setupRes: SetupResult; fromCursor: number }
 
+/** 第 N / 2N / 3N … 个交易日（cursor 0-based）算研究日；researchDayEvery=0 关闭。 */
+export function isResearchDay(cursor: number, researchDayEvery: number): boolean {
+  return researchDayEvery > 0 && ((cursor + 1) % researchDayEvery === 0)
+}
+
 export async function runLoop(args: RunLoopArgs): Promise<void> {
   const { worldRoot, runId, config, setupRes, fromCursor } = args
   const dates = setupRes.tradingDates
   const days: DaySummary[] = []
   const perBotTimeoutMs = config.perBotTimeoutSeconds * 1000
+  const researchDayTimeoutMs = config.researchDayTimeoutSeconds * 1000
   // 一旦某个 bot 在某天 timeout/dead，它的 server 可能还在处理上一天的请求（research-loop-ts 不串行化），
   // 之后的每一天都直接记 dead、不再向它发 chat。
   const brokenBots = new Set<string>()
@@ -373,19 +494,61 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       if (aborted || existsSync(P.stopFile(worldRoot, runId))) { log(worldRoot, runId, 'stop requested — aborting'); await teardown(worldRoot, runId, setupRes, 'aborted', days); return }
       const date = dates[cursor]
       setupRes.currentDateRef.value = date
+      // Pin the loop processes' system-prompt date to today's world day before any
+      // chat goes out. See WORLD_DATE_OVERRIDE_FILE in startBotServer above.
+      writeFileSync(P.worldDateOverrideFile(worldRoot, runId), date)
       {
         const state = readState(worldRoot)
         writeState(worldRoot, { ...state, current_date: date, updated_at: new Date().toISOString() })
       }
-      log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date} — sending to ${config.bots.length} bot(s)`)
+      const isResearch = isResearchDay(cursor, config.researchDayEvery)
       const isFirstDay = cursor === 0
+      // First day shares research-day's wider budget: full rules + cold-start onboarding
+      // (discover_tools, read SOUL/IDENTITY/journal, query holdings/cooldown, web_fetch
+      // sanity check, write first journal entry) consistently spills past a 60s budget.
+      // Research-day budget is the right ceiling for that workload too, so reuse it
+      // instead of adding another knob.
+      const useExtendedBudget = isFirstDay || isResearch
+      const timeoutMs = useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs
+      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : ''].filter(Boolean).join(' ')
+      log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
+      // 系统侧 settle：T+1 收口。每天 chat **之前** 把所有 order_date < today 的 pending 单按
+      // reference_nav 结算（BUY → 持仓增加 + 释放 cash_in_transit；SELL → 现金回流 + 释放 pending_sell）。
+      // close_my_day 不做这件事，所以必须独立调一次。bot 在 BOT_ONLY 端口看不到 settle。
+      // Day 1 (cursor=0) 也调，no-op 安全（没有更早的 pending 单）。
+      if (config.fundMcpCli) {
+        for (const { botId } of setupRes.bots) {
+          try {
+            const r = await runFundCli(config.fundMcpCli, 'settle_pending_orders', ['--bot-id', botId, '--as-of-date', date, '--run-id', runId], { timeoutMs: 30_000 })
+            log(worldRoot, runId, `fund settle ${botId} ${date}: code=${r.code} ${r.stdout.slice(0, 200)}`)
+          } catch (err) {
+            log(worldRoot, runId, `fund settle ${botId} ${date} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+      }
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       const statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
-        const message = renderDailyMessage({ worldRoot, date, isFirstDay, quotesPath: quotesAbs, journalRelPath: JOURNAL_REL })
+        const message = renderDailyMessage({ worldRoot, date, isFirstDay, quotesPath: quotesAbs, journalRelPath: JOURNAL_REL, buyableFundCodes: config.buyableFundCodes })
         if (brokenBots.has(b.botId)) return writeSkippedDeadBot(worldRoot, runId, date, message, b)
-        return chatOneBot(worldRoot, runId, date, message, perBotTimeoutMs, b)
+        return chatOneBot(worldRoot, runId, date, message, timeoutMs, b)
       })
       for (const s of statuses) { if (s.status === 'timeout' || s.status === 'dead') brokenBots.add(s.bot) }
+      // 系统侧 close：每个 bot（不论 chat 状态如何）跑一次 close_my_day 落收盘快照。
+      // bot 在 BOT_ONLY 端口看不到 close_my_day，只能 world 触发；这是"每天收盘核算"的硬契约。
+      // snapshot 文本写到 <botDayDir>/close_my_day.json，方便后续审阅。
+      if (config.fundMcpCli) {
+        for (const { botId } of setupRes.bots) {
+          try {
+            const r = await runFundCli(config.fundMcpCli, 'close_my_day', ['--bot-id', botId, '--trade-date', date, '--run-id', runId], { timeoutMs: 30_000 })
+            const dir = P.botDayDir(worldRoot, runId, date, botId)
+            mkdirSync(dir, { recursive: true })
+            writeFileSync(join(dir, 'close_my_day.json'), r.stdout + '\n')
+            log(worldRoot, runId, `fund close ${botId} ${date}: code=${r.code} (snapshot saved)`)
+          } catch (err) {
+            log(worldRoot, runId, `fund close ${botId} ${date} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+      }
       days.push({ date, bots: statuses })
       log(worldRoot, runId, `day ${date} done: ${statuses.map(s => `${s.bot}=${s.status}`).join(' ')}`)
       const st = readState(worldRoot)

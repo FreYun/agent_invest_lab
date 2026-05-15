@@ -43,6 +43,8 @@ test('runWorld with loop=openclaw-pi: stub pi-server drives 1 trading day end-to
     calendar: P.calendarFile(worldRoot),
     concurrency: 1,
     perBotTimeoutSeconds: 30,
+    researchDayEvery: 0,
+    researchDayTimeoutSeconds: 300,
     rlConfigBase: cfgBase,
     rlOpenclawDir: undefined,
     shadowInclude: ['SOUL.md'],
@@ -52,6 +54,7 @@ test('runWorld with loop=openclaw-pi: stub pi-server drives 1 trading day end-to
     // spawn argv unconditionally references the loader.
     openclawRoot: '/home/rooot/.openclaw/openclaw',
     piServerEntry: STUB_PI,
+    simworldUpstreamUrl: 'http://127.0.0.1:1/mcp',
   }
 
   await runWorld({ worldRoot, config: cfg, runId: 'r1' })

@@ -6,8 +6,9 @@ export const DEFAULT_SHADOW_INCLUDE = [
   'IDENTITY.md', 'SOUL.md', 'AGENTS.md', 'USER.md',
   'METHODOLOGY.md', 'RESEARCH.md', 'MEMORY.md',
   'EQUIPPED_SKILLS.md', 'TOOLS.md', 'skills',
-  // bot 自带的 MCP 清单 (config/mcporter.json) — rl-ts applyWorkspaceMcporter 会读
-  'config',
+  // bot 自带的 MCP 清单 — rl-ts applyWorkspaceMcporter 会读。
+  // 不复制整个 config/，避免 config/research-loop.* 里的 workspace/mcp 覆盖 world 传入的 shadow workspace/run config。
+  'config/mcporter.json',
 ]
 
 export interface WorldConfig {
@@ -23,10 +24,41 @@ export interface WorldConfig {
   rlConfigBase: string
   rlOpenclawDir?: string
   shadowInclude: string[]
+  // 每隔 N 个交易日给一次更长的 chat 预算（"研究日"）。0 = 关闭，所有日都用 perBotTimeoutSeconds。
+  // 触发条件：(cursor + 1) % researchDayEvery === 0，即第 N / 2N / 3N 个交易日。
+  researchDayEvery: number
+  researchDayTimeoutSeconds: number
   loop: 'research-loop' | 'openclaw-pi'
   openclawRoot?: string
   piServerEntry?: string
   piSessionsDir?: string
+  // 系统侧基金账户管理（不让 bot 自己 init / close）：world setup 阶段调一次 init_fund_account
+  // 创建初始现金账户；每天 chat 完后调一次 close_my_day 落收盘快照。
+  // 走 fund-portfolio-mcp/cli_tools.py 子进程，绕过 MCP HTTP（bot 看不到这两个 tool）。
+  // 不填则跳过——非基金 bot / 不需要这套生命周期的 run 默认安全。
+  fundMcpCli?: string
+  fundInitialCapital?: number
+  // world replay 语义 = 每次 run 起点干净。fundInitReset=true 时 init 之前先清空该 bot
+  // 在 fund.db 里的所有行（accounts/holdings/orders/actions/snapshots/runs）。默认 true
+  // 当 fundMcpCli 已配置——非 reset 的延续场景请显式传 false。
+  fundInitReset?: boolean
+  // 本 run 显式给 bot 播报的可买基金白名单（day-1 prompt 注入）。
+  // user 每轮回测自己挑（典型 3-10 只代表性 ETF / 主题基金）。fund.db 里有 300+
+  // 个 fund_code，全播会污染上下文；这里收窄成 user 关心的小集合。
+  // fundMcpCli 启用时必填、非空。bot 仍可调 portfolio_get_buyable_funds 看全集。
+  buyableFundCodes?: string[]
+  // 必选。world 进程内起一个 streamable-http MCP 代理包住这个上游：
+  //   - tools/list 把每个工具的 simulated_datetime 从 inputSchema 里删掉
+  //   - tools/call 强制注入 simulated_datetime = <world_date> 15:00:00
+  // bot 的 mcporter.json 用 ${SIMWORLD_PROXY_URL} 占位符引用代理监听 URL，
+  // buildShadowWorkspace 拷贝时替换。
+  simworldUpstreamUrl: string
+  // 可选。fund-portfolio-mcp 的 streamable-http 上游 URL（默认 http://localhost:28172/mcp）。
+  // 提供时 world 会起一个 fund-portfolio-proxy 包住它：
+  //   - tools/list 把每个 writer 工具的 run_id 从 inputSchema 里删掉
+  //   - tools/call 强制注入 run_id = <本轮 runId>，让 bot 写入永远带审计标签
+  // bot 的 mcporter.json 用 ${FUND_PORTFOLIO_PROXY_URL} 占位符引用，buildShadowWorkspace 替换。
+  fundPortfolioUpstreamUrl?: string
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -85,6 +117,8 @@ export function loadWorldConfig(path: string): WorldConfig {
     : resolveMaybe(baseDir, 'calendar.json')
   const concurrency = typeof raw.concurrency === 'number' && raw.concurrency >= 1 ? Math.floor(raw.concurrency) : 4
   const perBotTimeoutSeconds = typeof raw.per_bot_timeout_seconds === 'number' && raw.per_bot_timeout_seconds > 0 ? Math.floor(raw.per_bot_timeout_seconds) : 1200
+  const researchDayEvery = typeof raw.research_day_every === 'number' && raw.research_day_every >= 0 ? Math.floor(raw.research_day_every) : 0
+  const researchDayTimeoutSeconds = typeof raw.research_day_timeout_seconds === 'number' && raw.research_day_timeout_seconds > 0 ? Math.floor(raw.research_day_timeout_seconds) : Math.max(perBotTimeoutSeconds, 300)
   const rlConfigBase = typeof raw.rl_config_base === 'string' && raw.rl_config_base.trim()
     ? resolveMaybe(baseDir, raw.rl_config_base)
     : resolveMaybe(baseDir, '../config/trading-rl-config.base.json')
@@ -125,5 +159,35 @@ export function loadWorldConfig(path: string): WorldConfig {
       : resolveMaybe(baseDir, '../../session')
   }
 
-  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, piSessionsDir }
+  const simworldUpstreamUrl = reqString(raw, 'simworld_upstream_url').trim()
+
+  // 可选；默认指向本机 fund-portfolio-mcp 默认端口（28172）。基金 run 才会被实际使用。
+  const fundPortfolioUpstreamUrl = typeof raw.fund_portfolio_upstream_url === 'string' && raw.fund_portfolio_upstream_url.trim()
+    ? raw.fund_portfolio_upstream_url.trim()
+    : 'http://localhost:28172/mcp'
+
+  const fundMcpCli = typeof raw.fund_mcp_cli === 'string' && raw.fund_mcp_cli.trim()
+    ? resolveMaybe(baseDir, raw.fund_mcp_cli)
+    : undefined
+  const fundInitialCapital = typeof raw.fund_initial_capital === 'number' && raw.fund_initial_capital > 0
+    ? raw.fund_initial_capital
+    : (fundMcpCli ? 1_000_000 : undefined)
+  const fundInitReset = typeof raw.fund_init_reset === 'boolean'
+    ? raw.fund_init_reset
+    : (fundMcpCli ? true : undefined)
+  let buyableFundCodes: string[] | undefined
+  if (raw.buyable_fund_codes !== undefined) {
+    if (!Array.isArray(raw.buyable_fund_codes) || !raw.buyable_fund_codes.every(c => typeof c === 'string' && /^\d{6}$/.test(c))) {
+      throw new Error('world config: "buyable_fund_codes" must be an array of 6-digit fund code strings')
+    }
+    buyableFundCodes = [...new Set(raw.buyable_fund_codes as string[])].sort()
+    if (buyableFundCodes.length === 0) {
+      throw new Error('world config: "buyable_fund_codes" cannot be empty when set — pick the funds bot is allowed to buy this run')
+    }
+  }
+  if (fundMcpCli && !buyableFundCodes) {
+    throw new Error('world config: "buyable_fund_codes" is required when "fund_mcp_cli" is set — list the fund codes bot can buy this run (e.g. [510300, 159915, 002611])')
+  }
+
+  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, piSessionsDir, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, fundPortfolioUpstreamUrl }
 }
