@@ -1,12 +1,12 @@
 import { join } from 'node:path'
 
-export const stateFile = (w: string) => join(w, 'state.json')
+export const runDir = (w: string, runId: string) => join(w, 'runs', runId)
+export const runStateFile = (w: string, runId: string) => join(runDir(w, runId), 'state.json')
 export const calendarFile = (w: string) => join(w, 'calendar.json')
 export const dayDir = (w: string, date: string) => join(w, 'days', date)
 export const quotesFile = (w: string, date: string) => join(dayDir(w, date), 'quotes.json')
 export const overviewFile = (w: string, date: string) => join(dayDir(w, date), 'overview.md')
 export const eventsFile = (w: string, date: string) => join(dayDir(w, date), 'events.json')
-export const runDir = (w: string, runId: string) => join(w, 'runs', runId)
 export const runConfigFile = (w: string, runId: string) => join(runDir(w, runId), 'trading-rl-config.json')
 export const rlOpenclawDir = (w: string, runId: string) => join(runDir(w, runId), 'rl-openclaw')
 export const workspacesDir = (w: string, runId: string) => join(runDir(w, runId), 'workspaces')
@@ -14,6 +14,8 @@ export const shadowWorkspaceDir = (w: string, runId: string, bot: string) => joi
 export const memoryDir = (w: string, runId: string) => join(runDir(w, runId), 'memory')
 export const memoryStoreFile = (w: string, runId: string) => join(memoryDir(w, runId), 'store.jsonl')
 export const memoryRuntimeFile = (w: string, runId: string) => join(memoryDir(w, runId), 'runtime.json')
+export const simworldProxyRuntimeFile = (w: string, runId: string) => join(runDir(w, runId), 'simworld-proxy.json')
+export const fundPortfolioProxyRuntimeFile = (w: string, runId: string) => join(runDir(w, runId), 'fund-portfolio-proxy.json')
 export const botDayDir = (w: string, runId: string, date: string, bot: string) => join(runDir(w, runId), date, bot)
 export const sentFile = (w: string, runId: string, date: string, bot: string) => join(botDayDir(w, runId, date, bot), 'sent.md')
 export const replyFile = (w: string, runId: string, date: string, bot: string) => join(botDayDir(w, runId, date, bot), 'reply.json')
@@ -21,3 +23,6 @@ export const statusFile = (w: string, runId: string, date: string, bot: string) 
 export const runLogFile = (w: string, runId: string) => join(runDir(w, runId), 'run.log')
 export const summaryFile = (w: string, runId: string) => join(runDir(w, runId), 'summary.json')
 export const stopFile = (w: string, runId: string) => join(runDir(w, runId), 'STOP')
+// One-line YYYY-MM-DD pin for loop processes (research-loop reads this via
+// WORLD_DATE_OVERRIDE_FILE) so their system prompt shows the world day, not host wall-clock.
+export const worldDateOverrideFile = (w: string, runId: string) => join(runDir(w, runId), 'world-date')
