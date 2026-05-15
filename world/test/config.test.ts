@@ -17,6 +17,7 @@ test('loadWorldConfig parses required fields and applies defaults', () => {
 research_loop: /opt/rl
 bots: [bot1, bot7]
 replay: { from: "2024-01-02", to: "2024-06-28" }
+simworld_upstream_url: http://127.0.0.1:18078/mcp
 `)
   const c = loadWorldConfig(p)
   assert.equal(c.researchLoop, '/opt/rl')
@@ -54,6 +55,7 @@ per_bot_timeout_seconds: 600
 rl_config_base: /cfgs/base.json
 rl_openclaw_dir: /tmp/oc
 shadow_include: [SOUL.md, skills]
+simworld_upstream_url: http://my-simworld:9999/mcp
 `)
   const c = loadWorldConfig(p)
   assert.equal(c.botsRoot, '/opt/bots')
@@ -65,14 +67,19 @@ shadow_include: [SOUL.md, skills]
   assert.equal(c.rlConfigBase, '/cfgs/base.json')
   assert.equal(c.rlOpenclawDir, '/tmp/oc')
   assert.deepEqual(c.shadowInclude, ['SOUL.md', 'skills'])
+  assert.equal(c.simworldUpstreamUrl, 'http://my-simworld:9999/mcp')
   rmSync(p, { force: true })
 })
 
 test('loadWorldConfig rejects missing/invalid required fields', () => {
-  assert.throws(() => loadWorldConfig(tmpYaml(`bots: [bot1]\nreplay: {from: "2024-01-02", to: "2024-01-03"}`)), /research_loop/)
-  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: []\nreplay: {from: "2024-01-02", to: "2024-01-03"}`)), /bots/)
-  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-13-99", to: "2024-01-03"}`)), /from/)
-  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-02-02", to: "2024-01-03"}`)), /after/)
+  const baseValid = `research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-01-02", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`
+  assert.throws(() => loadWorldConfig(tmpYaml(`bots: [bot1]\nreplay: {from: "2024-01-02", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`)), /research_loop/)
+  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: []\nreplay: {from: "2024-01-02", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`)), /bots/)
+  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-13-99", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`)), /from/)
+  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-02-02", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`)), /after/)
+  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-01-02", to: "2024-01-03"}`)), /simworld_upstream_url/)
+  // sanity: baseValid string actually loads
+  assert.doesNotThrow(() => loadWorldConfig(tmpYaml(baseValid)))
 })
 
 test('loop defaults to research-loop when field omitted', () => {
@@ -82,6 +89,7 @@ test('loop defaults to research-loop when field omitted', () => {
     'replay:',
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
+    'simworld_upstream_url: http://x/mcp',
   ].join('\n') + '\n'
   const p = tmpYaml(yaml)
   const cfg = loadWorldConfig(p)
@@ -97,6 +105,7 @@ test('loop=openclaw-pi requires openclaw_json file to exist', () => {
     'replay:',
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
+    'simworld_upstream_url: http://x/mcp',
     'loop: openclaw-pi',
     'openclaw_json: /tmp/does-not-exist-pi.json',
   ].join('\n') + '\n'
@@ -116,6 +125,7 @@ test('loop=openclaw-pi with valid paths populates pi fields', () => {
     'replay:',
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
+    'simworld_upstream_url: http://x/mcp',
     'loop: openclaw-pi',
     `openclaw_json: ${ocJson}`,
     `openclaw_root: ${ocRoot}`,
@@ -135,6 +145,7 @@ test('loop=openclaw-pi rejects unknown values', () => {
     'replay:',
     '  from: "2024-01-02"',
     '  to: "2024-01-03"',
+    'simworld_upstream_url: http://x/mcp',
     'loop: not-a-loop',
   ].join('\n') + '\n'
   const p = tmpYaml(yaml)

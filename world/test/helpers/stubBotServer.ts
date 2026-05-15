@@ -3,7 +3,10 @@
 //   STUB_CHAT_MODE = reply (默认) | error | exit | hang
 //   STUB_CHAT_DELAY_MS = 回复前延迟毫秒数（默认 0）
 //   STUB_REPLY_TEXT    = 自定义 reply 文本（默认 "stub reply"）
+//   STUB_ECHO_WORLD_DATE_FILE = 1 → reply 末尾追加 "[world-date=<file 内容>]"，
+//     用于断言 runLoop 在 chat 之前已把当天日期写进 WORLD_DATE_OVERRIDE_FILE。
 // 启动即发 server.ready。支持 ping / chat / shutdown。
+import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const args = process.argv.slice(2)
@@ -35,13 +38,20 @@ rl.on('line', (line) => {
     if (mode === 'hang') return
     setTimeout(() => {
       if (mode === 'error') { out({ id, error: { code: -32000, message: 'stub chat error' } }); return }
-      out({ method: 'message.delta', params: { text: replyText } })
+      let echoed = replyText
+      if (process.env.STUB_ECHO_WORLD_DATE_FILE === '1') {
+        const path = process.env.WORLD_DATE_OVERRIDE_FILE
+        let pinned = ''
+        if (path) { try { pinned = readFileSync(path, 'utf8').trim() } catch { /* missing */ } }
+        echoed = `${replyText} [world-date=${pinned}]`
+      }
+      out({ method: 'message.delta', params: { text: echoed } })
       out({
         id,
         result: {
-          reply: replyText,
+          reply: echoed,
           session_id: `stub-${sessionKey}`,
-          assistant_messages: [{ role: 'assistant', content: replyText }],
+          assistant_messages: [{ role: 'assistant', content: echoed }],
           tool_trace: [],
           usage: message.length,
           iterations: 1,

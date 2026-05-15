@@ -32,7 +32,12 @@ replay:
 concurrency: 4
 
 # 单 bot 单日 chat 超时（秒）；超时记 status=timeout，不阻塞当天其它 bot、不阻塞翻篇
-per_bot_timeout_seconds: 1200
+per_bot_timeout_seconds: 60
+
+# 每隔 N 个交易日给一次更长的 chat 预算（"研究日"，prompt 会显式提示 bot 多调研）。
+# 触发：(cursor + 1) % research_day_every === 0，即第 N / 2N / 3N 个交易日。0 = 关闭。
+research_day_every: 5
+research_day_timeout_seconds: 300
 
 # 给 research-loop 用的 rl-config 基底；默认相对本文件 → ../config/trading-rl-config.base.json
 # rl_config_base: /path/to/trading-rl-config.base.json
@@ -42,8 +47,10 @@ per_bot_timeout_seconds: 1200
 # 复制进去）。想用真实 .openclaw 目录就显式填它：
 # rl_openclaw_dir: /home/rooot/.openclaw
 
-# 影子 workspace 从 <bots_root>/<botId>/ 复制哪些条目（默认见 src/config.ts DEFAULT_SHADOW_INCLUDE）
-# shadow_include: [IDENTITY.md, SOUL.md, AGENTS.md, USER.md, METHODOLOGY.md, RESEARCH.md, MEMORY.md, EQUIPPED_SKILLS.md, TOOLS.md, skills]
+# 影子 workspace 从 <bots_root>/<botId>/ 复制哪些条目（默认见 src/config.ts DEFAULT_SHADOW_INCLUDE）。
+# 默认只复制 config/mcporter.json，不复制 config/research-loop.*，避免 bot 原 workspace 配置覆盖
+# world 传入的 shadow workspace / run 专属 rl-config。
+# shadow_include: [IDENTITY.md, SOUL.md, AGENTS.md, USER.md, METHODOLOGY.md, RESEARCH.md, MEMORY.md, EQUIPPED_SKILLS.md, TOOLS.md, skills, config/mcporter.json]
 
 # === Loop（agent runtime）选择 ===
 # 整 run 一种 loop，不混用。值：research-loop（默认）| openclaw-pi
@@ -66,3 +73,11 @@ per_bot_timeout_seconds: 1200
 #   <pi_sessions_dir>/<botId>/<sessionId>.jsonl
 # 不再像默认的临时文件那样跑完即删。默认相对本文件 → ../../session（即 <repo>/session/）。
 # pi_sessions_dir: /custom/path/to/session
+
+# === simworld-data MCP 代理（必选）===
+# world 进程内起一个 streamable-http MCP 代理包住这个上游：
+#   - tools/list 把每个工具的 simulated_datetime 从 inputSchema 里删掉（bot 看不到这个参数）
+#   - tools/call 强制注入 simulated_datetime = <当天world日期> 15:00:00（A股收盘）
+# bot 的 config/mcporter.json 用 ${SIMWORLD_PROXY_URL} 占位符引用代理监听 URL，
+# buildShadowWorkspace 拷贝时会替换为实际 URL。
+simworld_upstream_url: http://127.0.0.1:18078/mcp
