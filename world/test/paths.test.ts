@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as P from '../src/paths.ts'
+import { runStateFile } from '../src/paths.ts'
 
 const W = '/tmp/wr'
 const R = 'run1'
 
 test('path helpers compose under worldRoot', () => {
-  assert.equal(P.stateFile(W), '/tmp/wr/state.json')
   assert.equal(P.calendarFile(W), '/tmp/wr/calendar.json')
   assert.equal(P.dayDir(W, '2024-03-15'), '/tmp/wr/days/2024-03-15')
   assert.equal(P.quotesFile(W, '2024-03-15'), '/tmp/wr/days/2024-03-15/quotes.json')
@@ -25,4 +25,16 @@ test('path helpers compose under worldRoot', () => {
   assert.equal(P.runLogFile(W, R), '/tmp/wr/runs/run1/run.log')
   assert.equal(P.summaryFile(W, R), '/tmp/wr/runs/run1/summary.json')
   assert.equal(P.stopFile(W, R), '/tmp/wr/runs/run1/STOP')
+})
+
+test('runStateFile lives under runDir, not worldRoot', () => {
+  const w = '/tmp/wroot'
+  const runId = 'dash-2026-05-15T09-13-27'
+  const p = runStateFile(w, runId)
+  assert.equal(p, '/tmp/wroot/runs/dash-2026-05-15T09-13-27/state.json')
+})
+
+test('stateFile (legacy) no longer exists as an export', async () => {
+  const mod = await import('../src/paths.ts')
+  assert.equal((mod as Record<string, unknown>).stateFile, undefined)
 })
