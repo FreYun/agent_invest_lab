@@ -36,10 +36,10 @@ test('resumeWorld continues from state.cursor without re-running completed days'
   // 模拟"只完成了 1 天、状态 running"的中断态：删掉 day2/day3 的产物，回退 cursor
   rmSync(P.botDayDir(worldRoot, 'r1', '2024-03-15', 'bot1'), { recursive: true, force: true })
   rmSync(P.botDayDir(worldRoot, 'r1', '2024-03-18', 'bot1'), { recursive: true, force: true })
-  const s = readState(worldRoot); writeState(worldRoot, { ...s, status: 'running', cursor: 1, current_date: '2024-03-14' })
+  const s = readState(worldRoot, 'r1'); writeState(worldRoot, 'r1', { ...s, status: 'running', cursor: 1, current_date: '2024-03-14' })
 
-  await resumeWorld({ worldRoot, config, startBotServer: (b) => stubStart(b) })
-  const st = readState(worldRoot)
+  await resumeWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) })
+  const st = readState(worldRoot, 'r1')
   assert.equal(st.status, 'done')
   assert.equal(st.cursor, 3)
   assert.ok(existsSync(P.replyFile(worldRoot, 'r1', '2024-03-15', 'bot1')))
@@ -50,7 +50,7 @@ test('resumeWorld continues from state.cursor without re-running completed days'
 test('resumeWorld refuses when state status is not running', async () => {
   const { worldRoot, config, cleanup } = setupWorldDir(['bot1'], ['2024-03-14'])
   await runWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }) // status=done
-  await assert.rejects(() => resumeWorld({ worldRoot, config, startBotServer: (b) => stubStart(b) }), /not running|nothing to resume/i)
+  await assert.rejects(() => resumeWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }), /not running|nothing to resume/i)
   cleanup()
 })
 
@@ -58,10 +58,10 @@ test('resumeWorld refuses when state.loop differs from config.loop', async () =>
   const { worldRoot, config, cleanup } = setupWorldDir(['bot1'], ['2024-03-14'])
   await runWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }) // writes state with loop=research-loop
   // Force state.status back to running so the loop-mismatch check is the rejector (not the status check)
-  const s = readState(worldRoot)
-  writeState(worldRoot, { ...s, status: 'running' })
+  const s = readState(worldRoot, 'r1')
+  writeState(worldRoot, 'r1', { ...s, status: 'running' })
   // Now resume with loop=openclaw-pi
   const piConfig: WorldConfig = { ...config, loop: 'openclaw-pi', openclawRoot: '/tmp/oc', piServerEntry: '/tmp/oc/pi.ts' }
-  await assert.rejects(() => resumeWorld({ worldRoot, config: piConfig, startBotServer: (b) => stubStart(b) }), /loop/)
+  await assert.rejects(() => resumeWorld({ worldRoot, config: piConfig, runId: 'r1', startBotServer: (b) => stubStart(b) }), /loop/)
   cleanup()
 })
