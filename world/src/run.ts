@@ -427,10 +427,9 @@ async function teardown(worldRoot: string, runId: string, setupRes: SetupResult,
   // 1) 先把 state.json 翻成终态——dashboard 通过 status!=='running' 判断能否起新 run，
   //    任何 cleanup hang 都不能阻塞这一步。同时把 run 目录里的 state archive 也写下。
   let state: WorldState | undefined
-  try { state = readState(worldRoot) } catch { /* state.json 可能 setup 都没写出来 */ }
+  try { state = readState(worldRoot, runId) } catch { /* state.json 可能 setup 都没写出来 */ }
   if (state) {
-    try { writeState(worldRoot, { ...state, status: finalStatus, updated_at: new Date().toISOString() }) } catch { /* ignore */ }
-    try { writeFileSync(join(P.runDir(worldRoot, runId), 'state.json'), JSON.stringify({ ...state, status: finalStatus }, null, 2) + '\n') } catch { /* ignore */ }
+    try { writeState(worldRoot, runId, { ...state, status: finalStatus, updated_at: new Date().toISOString() }) } catch { /* ignore */ }
   }
   // 2) 关 server / memory / proxy；用 Promise.race 给整体 cleanup 一个 10s 硬顶。
   //    任何单独 close 卡住都会被这个超时罩住，绝不让 teardown 永远挂在等待 socket drain。
@@ -455,7 +454,7 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     setupRes = await setup(opts)
   } catch (err) {
     // 尽量记录 failed（state 可能还没建）
-    try { if (existsSync(P.stateFile(worldRoot))) { const s = readState(worldRoot); writeState(worldRoot, { ...s, status: 'failed', updated_at: new Date().toISOString() }) } } catch { /* ignore */ }
+    try { if (existsSync(P.runStateFile(worldRoot, runId))) { const s = readState(worldRoot, runId); writeState(worldRoot, runId, { ...s, status: 'failed', updated_at: new Date().toISOString() }) } } catch { /* ignore */ }
     throw err
   }
 
@@ -465,7 +464,7 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     memory_port: setupRes.memory.port, started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     loop: config.loop,
   }
-  writeState(worldRoot, initial)
+  writeState(worldRoot, runId, initial)
 
   await runLoop({ worldRoot, runId, config, setupRes, fromCursor: 0 })
 }
@@ -498,8 +497,8 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // chat goes out. See WORLD_DATE_OVERRIDE_FILE in startBotServer above.
       writeFileSync(P.worldDateOverrideFile(worldRoot, runId), date)
       {
-        const state = readState(worldRoot)
-        writeState(worldRoot, { ...state, current_date: date, updated_at: new Date().toISOString() })
+        const state = readState(worldRoot, runId)
+        writeState(worldRoot, runId, { ...state, current_date: date, updated_at: new Date().toISOString() })
       }
       const isResearch = isResearchDay(cursor, config.researchDayEvery)
       const isFirstDay = cursor === 0
@@ -551,8 +550,8 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       }
       days.push({ date, bots: statuses })
       log(worldRoot, runId, `day ${date} done: ${statuses.map(s => `${s.bot}=${s.status}`).join(' ')}`)
-      const st = readState(worldRoot)
-      writeState(worldRoot, { ...st, cursor: cursor + 1, updated_at: new Date().toISOString() })
+      const st = readState(worldRoot, runId)
+      writeState(worldRoot, runId, { ...st, cursor: cursor + 1, updated_at: new Date().toISOString() })
     }
     await teardown(worldRoot, runId, setupRes, 'done', days)
   } catch (err) {
@@ -567,20 +566,21 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
 export interface ResumeWorldOptions {
   worldRoot: string
   config: WorldConfig
+  runId: string
   startBotServer?: StartBotServer
 }
 
 export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
-  const { worldRoot, config } = opts
-  const state = readState(worldRoot)
+  const { worldRoot, config, runId } = opts
+  const state = readState(worldRoot, runId)
   if (state.status !== 'running') throw new Error(`cannot resume: state status is "${state.status}", nothing to resume`)
   if (state.loop !== config.loop) {
     throw new Error(`resume: state loop="${state.loop}" but world.yaml loop="${config.loop}" — refuse to resume across loop change`)
   }
   // 清掉可能残留的 STOP 哨兵（否则 resume 会立刻被它中止）
-  rmSync(P.stopFile(worldRoot, state.run_id), { force: true })
+  rmSync(P.stopFile(worldRoot, runId), { force: true })
   // setup（重启记忆服务、重建/复用影子 workspace、重起 bot server），但 trading_dates 取自 state
-  const setupRes = await setup({ worldRoot, config, runId: state.run_id, startBotServer: opts.startBotServer })
+  const setupRes = await setup({ worldRoot, config, runId, startBotServer: opts.startBotServer })
   // 若 calendar/replay 变了导致交易日序列对不上，拒绝
   if (setupRes.tradingDates.length !== state.trading_dates.length || setupRes.tradingDates[0] !== state.trading_dates[0] || setupRes.tradingDates[setupRes.tradingDates.length - 1] !== state.trading_dates[state.trading_dates.length - 1]) {
     for (const b of setupRes.bots) { try { await b.server.shutdown({ timeoutMs: 2000 }) } catch { /* ignore */ } }
@@ -588,15 +588,15 @@ export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
     throw new Error('resume: trading-date sequence changed since the run started; refuse to resume')
   }
   setupRes.currentDateRef.value = state.trading_dates[Math.min(state.cursor, state.trading_dates.length - 1)]
-  await runLoop({ worldRoot, runId: state.run_id, config, setupRes, fromCursor: state.cursor })
+  await runLoop({ worldRoot, runId, config, setupRes, fromCursor: state.cursor })
 }
 
 /** 由独立的 `world stop` 进程调用：写一个 STOP 哨兵，正在跑的 runLoop 会在下一天开始前发现它。 */
-export function requestStop(worldRoot: string): { ok: boolean; reason?: string } {
-  if (!existsSync(P.stateFile(worldRoot))) return { ok: false, reason: 'no state.json' }
-  const state = readState(worldRoot)
+export function requestStop(worldRoot: string, runId: string): { ok: boolean; reason?: string } {
+  if (!existsSync(P.runStateFile(worldRoot, runId))) return { ok: false, reason: `no state.json for run ${runId}` }
+  const state = readState(worldRoot, runId)
   if (state.status !== 'running') return { ok: false, reason: `state status is "${state.status}"` }
-  mkdirSync(P.runDir(worldRoot, state.run_id), { recursive: true })
-  writeFileSync(P.stopFile(worldRoot, state.run_id), `requested at ${new Date().toISOString()}\n`)
+  mkdirSync(P.runDir(worldRoot, runId), { recursive: true })
+  writeFileSync(P.stopFile(worldRoot, runId), `requested at ${new Date().toISOString()}\n`)
   return { ok: true }
 }
