@@ -203,14 +203,15 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // pi-server needs to be spawned with cwd=openclawRoot so tsx's tsconfig.json lookup picks up
   // openclaw's path aliases (openclaw/plugin-sdk/*). research-loop doesn't need this.
   const spawnCwd = config.loop === 'openclaw-pi' ? config.openclawRoot : undefined
-  // Lay pi state under <piSessionsDir>/agents/<botId>/ so it mirrors openclaw's
+  // pi sessions dir is per-run (not config-driven). Each run owns its own
+  // session tree so the same bot can run in two parallel runs without colliding.
+  const piSessionsDirForRun = config.loop === 'openclaw-pi' ? P.piSessionsDir(worldRoot, runId) : undefined
+  // Lay pi state under <piSessionsDirForRun>/agents/<botId>/ so it mirrors openclaw's
   // own ~/.openclaw/agents/<id>/ layout. That lets dashboards/auditors point at
-  // <piSessionsDir> as a "world openclaw root" and scan sessions/sessions.json
+  // <piSessionsDirForRun> as a "world openclaw root" and scan sessions/sessions.json
   // exactly the same way they scan the real openclaw state tree.
   const piAgentDirFor = (botId: string): string | undefined =>
-    config.loop === 'openclaw-pi' && config.piSessionsDir
-      ? join(config.piSessionsDir, 'agents', botId, 'agent')
-      : undefined
+    piSessionsDirForRun ? join(piSessionsDirForRun, 'agents', botId, 'agent') : undefined
   const startBotServer: StartBotServer = opts.startBotServer
     ?? ((botId, argv) => {
       const agentDir = piAgentDirFor(botId)
@@ -220,11 +221,11 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
       //   *.jsonl + *.state.json all land under <piSessionsDir>/agents/<botId>/sessions/, never
       //   touching ~/.openclaw/agents/<id>/sessions/. pi-stdio-server reads STATE_DIR to compute
       //   the sessionFile path so the index file matches the jsonl filename.
-      const piEnv: Record<string, string> = agentDir && config.piSessionsDir
+      const piEnv: Record<string, string> = agentDir && piSessionsDirForRun
         ? {
             OPENCLAW_AGENT_DIR: agentDir,
             PI_CODING_AGENT_DIR: agentDir,
-            OPENCLAW_STATE_DIR: config.piSessionsDir,
+            OPENCLAW_STATE_DIR: piSessionsDirForRun,
           }
         : {}
       const proxyEnv = proxyEnvSupplement()
@@ -302,11 +303,11 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     patchPiOpenclawJsonMemory(rlOpenclawDir, memory.url)
     // Pi 的 agents dir 隔离：seed once 把每个 bot 的 auth-profiles / models 从真实 ~/.openclaw/agents/<bot>/agent
     // 拷到 lab 自己的 piSessionsDir/<bot>/agent。之后 lab agent 与 openclaw agent 完全脱钩演化。
-    if (config.piSessionsDir && config.openclawRoot) {
-      mkdirSync(config.piSessionsDir, { recursive: true })
+    if (piSessionsDirForRun && config.openclawRoot) {
+      mkdirSync(piSessionsDirForRun, { recursive: true })
       const sourceAgentsDir = join(config.openclawRoot, '..', 'agents')
       for (const botId of config.bots) {
-        if (!isAbsolute(botId)) seedPiAgentBot(config.piSessionsDir, sourceAgentsDir, botId)
+        if (!isAbsolute(botId)) seedPiAgentBot(piSessionsDirForRun, sourceAgentsDir, botId)
       }
     }
   } else {

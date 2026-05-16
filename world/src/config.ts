@@ -31,7 +31,6 @@ export interface WorldConfig {
   loop: 'research-loop' | 'openclaw-pi'
   openclawRoot?: string
   piServerEntry?: string
-  piSessionsDir?: string
   // 系统侧基金账户管理（不让 bot 自己 init / close）：world setup 阶段调一次 init_fund_account
   // 创建初始现金账户；每天 chat 完后调一次 close_my_day 落收盘快照。
   // 走 fund-portfolio-mcp/cli_tools.py 子进程，绕过 MCP HTTP（bot 看不到这两个 tool）。
@@ -138,7 +137,6 @@ export function loadWorldConfig(path: string): WorldConfig {
 
   let openclawRoot: string | undefined
   let piServerEntry: string | undefined
-  let piSessionsDir: string | undefined
   if (loop === 'openclaw-pi') {
     if (!existsSync(openclawJson)) {
       throw new Error(`world config: openclaw_json not found (required for openclaw-pi loop): ${openclawJson}`)
@@ -152,11 +150,11 @@ export function loadWorldConfig(path: string): WorldConfig {
     if (!existsSync(piServerEntry)) {
       throw new Error(`world config: pi_server_entry not found: ${piServerEntry}`)
     }
-    // pi session 持久化目录。pi-server 会把每次 chat 的 jsonl 落到 <piSessionsDir>/<botId>/<sessionId>.jsonl，
-    // 不再像默认的临时文件那样 chat 结束即删。默认相对 world.yaml → ../../session（即 <repo>/session）。
-    piSessionsDir = typeof raw.pi_sessions_dir === 'string' && raw.pi_sessions_dir.trim()
-      ? resolveMaybe(baseDir, raw.pi_sessions_dir)
-      : resolveMaybe(baseDir, '../../session')
+    // pi_sessions_dir is now per-run (computed in run.ts as <runDir>/pi-sessions).
+    // Old world.yaml entries are parsed-but-ignored to keep configs portable.
+    if (typeof raw.pi_sessions_dir === 'string' && raw.pi_sessions_dir.trim()) {
+      process.stderr.write(`world config WARNING: "pi_sessions_dir" is deprecated and ignored (now auto = <runDir>/pi-sessions per run).\n`)
+    }
   }
 
   const simworldUpstreamUrl = reqString(raw, 'simworld_upstream_url').trim()
@@ -189,5 +187,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     throw new Error('world config: "buyable_fund_codes" is required when "fund_mcp_cli" is set — list the fund codes bot can buy this run (e.g. [510300, 159915, 002611])')
   }
 
-  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, piSessionsDir, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, fundPortfolioUpstreamUrl }
+  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, fundPortfolioUpstreamUrl }
 }
