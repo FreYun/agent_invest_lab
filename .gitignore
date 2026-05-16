@@ -2,3 +2,13 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.log
+# dashboard "新建回测" 把 world.yaml 的副本写到 world/config/world-tmp-*.yaml
+# （写在同目录是为了让 calendar / fund_mcp_cli 等相对路径还能解析）
+world/config/world-tmp-*.yaml
+
+# runtime artifacts
+.playwright-mcp/
+bots/*/memory/
+data/
+session/
+*.bak

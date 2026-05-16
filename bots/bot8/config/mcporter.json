@@ -1,15 +1,13 @@
 {
-    "mcpServers": {
-        "image-gen-mcp": {
-            "url": "http://localhost:18085/mcp"
-        },
-        "media-data-pack": {
-            "type": "streamableHttp",
-            "url": "http://localhost:18075/mcp"
-        },
-        "zsxq-mcp": {
-            "url": "http://localhost:18080/mcp"
-        }
+  "mcpServers": {
+    "fund-portfolio-mcp": {
+      "url": "${FUND_PORTFOLIO_PROXY_URL}",
+      "transport": "streamable-http"
     },
-    "imports": []
+    "simworld-data": {
+      "url": "${SIMWORLD_PROXY_URL}",
+      "transport": "streamable-http"
+    }
+  },
+  "imports": []
 }
