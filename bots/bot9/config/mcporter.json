@@ -1,14 +1,13 @@
 {
-    "mcpServers": {
-        "compliance-mcp": {
-            "url": "http://localhost:18090/mcp"
-        },
-        "image-gen-mcp": {
-            "url": "http://localhost:18085/mcp"
-        },
-        "research-mcp": {
-            "url": "http://research-mcp.jijinmima.cn/mcp"
-        }
+  "mcpServers": {
+    "fund-portfolio-mcp": {
+      "url": "${FUND_PORTFOLIO_PROXY_URL}",
+      "transport": "streamable-http"
     },
-    "imports": []
+    "simworld-data": {
+      "url": "${SIMWORLD_PROXY_URL}",
+      "transport": "streamable-http"
+    }
+  },
+  "imports": []
 }
