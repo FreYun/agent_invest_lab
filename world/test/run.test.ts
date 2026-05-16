@@ -397,7 +397,6 @@ test('botServerArgv: openclaw-pi does NOT append --sessions-dir (piSessionsDir f
     loop: 'openclaw-pi',
     openclawRoot: '/tmp/oc',
     piServerEntry: '/tmp/oc/src/agents/agent_invest_pi_stdio_server.ts',
-    piSessionsDir: '/home/rooot/agent_invest_lab/session',
     simworldUpstreamUrl: 'http://127.0.0.1:1/mcp',
   }
   const argv = botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/runs/r1/rl-openclaw/openclaw.json')

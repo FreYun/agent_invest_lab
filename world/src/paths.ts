@@ -26,3 +26,4 @@ export const stopFile = (w: string, runId: string) => join(runDir(w, runId), 'ST
 // One-line YYYY-MM-DD pin for loop processes (research-loop reads this via
 // WORLD_DATE_OVERRIDE_FILE) so their system prompt shows the world day, not host wall-clock.
 export const worldDateOverrideFile = (w: string, runId: string) => join(runDir(w, runId), 'world-date')
+export const piSessionsDir = (w: string, runId: string) => join(runDir(w, runId), 'pi-sessions')
