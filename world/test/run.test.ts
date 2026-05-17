@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -562,4 +563,18 @@ test('patchPiOpenclawJsonMemory: leaves file alone when mcp exists but has no me
   const after = JSON.parse(readFileSync(p, 'utf8'))
   assert.equal(after.mcp.servers.foo, 'bar')
   assert.equal('mem0' in after.mcp, false)
+})
+
+test('cli_tools get_my_history requires --run-id (strict layer contract)', () => {
+  // 验证 cli_tools.py 在 --run-id 缺失时退出非零，证明 strict 链路打通。
+  // 跑真实 cli_tools.py，需要 fund-portfolio-mcp 的 uv 环境就绪。
+  const fundDir = join(HERE, '..', '..', 'fund-portfolio-mcp')
+  const r = spawnSync('uv', ['run', 'python', 'cli_tools.py', 'get_my_history', '--bot-id', 'bot_does_not_exist'],
+                      { cwd: fundDir, encoding: 'utf8' })
+  if (r.error && (r.error as NodeJS.ErrnoException).code === 'ENOENT') {
+    // uv 不在 PATH（CI 环境可能没装）—— 跳过而不是 fail
+    return
+  }
+  assert.notStrictEqual(r.status, 0, `expected non-zero exit when --run-id missing, got ${r.status}, stderr: ${r.stderr}`)
+  assert.match(r.stderr, /--run-id/, `argparse error should mention --run-id, got: ${r.stderr}`)
 })
