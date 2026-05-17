@@ -360,8 +360,15 @@ function selectBot(botId){
   if (bot) renderDetail(bot)
 }
 function formatRunLabel(run){
+  // run_id 里的时间分量是 UTC（toISOString 来源），上海客户视角要 +8 显示。
   const m = run.runId.match(/^dash-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/)
-  const stamp = m ? `${m[1]} ${m[2]}:${m[3]}:${m[4]}` : run.runId
+  let stamp = run.runId
+  if (m) {
+    const utc = new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`)
+    const sh = new Date(utc.getTime() + 8 * 3600 * 1000)
+    const pad = (n) => String(n).padStart(2, '0')
+    stamp = `${sh.getUTCFullYear()}-${pad(sh.getUTCMonth() + 1)}-${pad(sh.getUTCDate())} ${pad(sh.getUTCHours())}:${pad(sh.getUTCMinutes())}:${pad(sh.getUTCSeconds())}`
+  }
   return run.latestDate ? `${stamp} · ${run.latestDate}` : stamp
 }
 function runOptionsHtml(bot){
