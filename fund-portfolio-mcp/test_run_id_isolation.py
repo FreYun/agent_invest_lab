@@ -8,7 +8,9 @@
 
 种子数据：同 bot 两个 run（runA / runB），各 1 行 active 持仓 + 1 行已结算 BUY 单。
 """
+import asyncio
 import importlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -116,3 +118,26 @@ def test_seed_data_inserts_both_runs(tmp_db):
     ).fetchone()[0]
     assert snapshots_count == 2
     conn.close()
+
+
+# === Strict layer: portfolio_get_my_history ===
+
+def test_get_my_history_empty_run_id_returns_error(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_history("botX"))  # run_id 缺省 = ""
+    data = json.loads(payload)
+    assert data["success"] is False, data
+    assert "run_id 缺失" in data["message"], data["message"]
+
+
+def test_get_my_history_filters_by_run_id(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_history("botX", run_id="runA"))
+    data = json.loads(payload)
+    assert data["success"], data
+    codes = [h["fund_code"] for h in data["holdings"]]
+    assert codes == ["510300"], f"runA 应只看到 510300, 实际: {codes}"
+    orders_codes = [o["fund_code"] for o in data["orders"]]
+    assert orders_codes == ["510300"], f"runA 应只看到 510300 订单, 实际: {orders_codes}"

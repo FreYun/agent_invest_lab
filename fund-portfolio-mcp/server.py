@@ -1559,28 +1559,26 @@ async def portfolio_get_my_history(
       summary     当前 pending 单计数与冻结金额合计
 
     传 fund_code 可只看那只基金；不传 = 全部。
-    run_id 非空 → 只返回该 run 自己的 holdings/orders/资金状态；空字符串保留旧的跨 run 视图（仅 admin 调试用）。"""
+    run_id 必填（proxy 自动注入）：只返回该 run 自己的 holdings/orders/资金状态。"""
+    err = _require_run_id(run_id)
+    if err:
+        return err
     with get_conn() as conn:
         account = _get_account(conn, bot_id)
         if not account:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无账户"}, ensure_ascii=False)
 
-        h_args: list = [bot_id]
-        h_sql = "SELECT * FROM fund_bot_holdings WHERE bot_id=?"
-        if run_id:
-            h_sql += " AND run_id=?"
-            h_args.append(run_id)
+        h_args: list = [bot_id, run_id]
+        h_sql = "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND run_id=?"
         if fund_code:
             h_sql += " AND fund_code=?"
             h_args.append(fund_code)
         h_sql += " ORDER BY status, fund_code"
         holdings = [dict(r) for r in conn.execute(h_sql, h_args).fetchall()]
 
-        o_args: list = [bot_id]
-        o_sql = "SELECT * FROM fund_bot_orders WHERE bot_id=?"
-        if run_id:
-            o_sql += " AND (order_run_id=? OR settle_run_id=?)"
-            o_args.extend([run_id, run_id])
+        o_args: list = [bot_id, run_id, run_id]
+        o_sql = ("SELECT * FROM fund_bot_orders WHERE bot_id=? "
+                 "AND (order_run_id=? OR settle_run_id=?)")
         if fund_code:
             o_sql += " AND fund_code=?"
             o_args.append(fund_code)
@@ -1590,17 +1588,11 @@ async def portfolio_get_my_history(
 
         # 估值：active 持仓 latest_nav × shares。新机制 SELL 在 T 日就已扣 shares，持仓不再含已卖部分。
         market_value = sum(float(h.get("market_value") or 0.0) for h in holdings if h.get("status") == "active")
-        # cash / in_transit / receivable 用本 run 视角，避免被其它 run 写入 accounts 时污染。
-        # 没传 run_id 时（admin 调试路径）回退到 accounts 表行（与旧行为一致）。
-        if run_id:
-            view = _bot_run_cash_view(conn, bot_id, run_id)
-            cash = float(view["cash_available"])
-            in_transit = float(view["cash_in_transit"])
-            receivable = float(view["cash_receivable"])
-        else:
-            cash = float(account["cash"] or 0.0)
-            in_transit = float(account.get("cash_in_transit") or 0.0)
-            receivable = float(account.get("cash_receivable") or 0.0)
+        # cash / in_transit / receivable 用本 run 视角（_bot_run_cash_view 从 orders 回放），不依赖 accounts.cash 脏值。
+        view = _bot_run_cash_view(conn, bot_id, run_id)
+        cash = float(view["cash_available"])
+        in_transit = float(view["cash_in_transit"])
+        receivable = float(view["cash_receivable"])
         total = cash + in_transit + receivable + market_value
 
         pending = [o for o in orders if o.get("status") == "pending"]
