@@ -2185,7 +2185,7 @@ async def portfolio_get_my_trades(
       as_of_date    截止日（YYYY-MM-DD），可见订单 = order_date < as_of_date
       limit         返回最近 N 单（默认 100；传 0 = 全量）
       fund_code     可选，只看某只基金的单
-      run_id        非空 → 只看 order_run_id 或 settle_run_id 等于本 run 的订单；空 = 跨 run 全量
+      run_id        必填，proxy 自动注入；只看 order_run_id 或 settle_run_id 等于本 run 的订单
 
     返回：
       orders        list（按 order_date desc, order_id desc）每单含：
@@ -2201,6 +2201,9 @@ async def portfolio_get_my_trades(
 
     回测安全：order_date >= as_of_date 的单一律不返回（含 pending），不会暴露未来意图。
     """
+    err = _require_run_id(run_id)
+    if err:
+        return err
     as_of_date = _normalize_trade_date(as_of_date)
     with get_conn() as conn:
         account = _get_account(conn, bot_id)
@@ -2211,11 +2214,9 @@ async def portfolio_get_my_trades(
                " order_date, confirm_date, order_amount, reference_nav, "
                " confirm_nav, confirmed_shares, confirmed_amount, fee, action_reason "
                "FROM fund_bot_orders "
-               "WHERE bot_id=? AND order_date < ?")
-        args: list = [bot_id, as_of_date]
-        if run_id:
-            sql += " AND (order_run_id=? OR settle_run_id=?)"
-            args.extend([run_id, run_id])
+               "WHERE bot_id=? AND order_date < ? "
+               "AND (order_run_id=? OR settle_run_id=?)")
+        args: list = [bot_id, as_of_date, run_id, run_id]
         if fund_code:
             sql += " AND fund_code=?"
             args.append(fund_code)
