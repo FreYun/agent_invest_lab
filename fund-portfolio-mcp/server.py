@@ -1069,20 +1069,26 @@ async def init_fund_account(bot_id: str, initial_capital: float, allocations_jso
 
 
 @mcp.tool()
-async def get_fund_holdings(bot_id: str) -> str:
-    """获取 bot 当前基金持仓。返回持仓明细 + 账户概况 + 大类配置。"""
+async def get_fund_holdings(bot_id: str, run_id: str = "") -> str:
+    """获取 bot 当前基金持仓。返回持仓明细 + 账户概况 + 大类配置。
+    run_id 可选：非空 → 只看该 run 的 active 持仓；空 → 跨 run 全量视图（admin/dashboard 默认）。"""
     with get_conn() as conn:
         account = _get_account(conn, bot_id)
         if not account:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无账户"}, ensure_ascii=False)
 
-        rows = conn.execute(
+        sql = (
             "SELECT h.*, i.fund_company, i.fund_manager, i.purchase_status "
             "FROM fund_bot_holdings h "
             "LEFT JOIN fund_info i ON h.fund_code = i.fund_code "
-            "WHERE h.bot_id = ? AND h.status = 'active' ORDER BY h.market_value DESC",
-            (bot_id,)
-        ).fetchall()
+            "WHERE h.bot_id = ? AND h.status = 'active'"
+        )
+        args = [bot_id]
+        if run_id:
+            sql += " AND h.run_id = ?"
+            args.append(run_id)
+        sql += " ORDER BY h.market_value DESC"
+        rows = conn.execute(sql, args).fetchall()
 
         holdings = []
         invested_value = 0.0
@@ -3143,13 +3149,18 @@ async def select_all_fund_paradigms(trade_date: str, run_id: str = "", bot_ids_j
 
 
 @mcp.tool()
-async def get_fund_review_history(bot_id: str, limit: int = 10) -> str:
-    """查询 bot 最近的巡检历史（含调仓动作和关联订单）。"""
+async def get_fund_review_history(bot_id: str, limit: int = 10, run_id: str = "") -> str:
+    """查询 bot 最近的巡检历史（含调仓动作和关联订单）。
+    run_id 可选：非空 → 只看该 run 的 reviews；空 → 跨 run 全量（admin 默认）。"""
     with get_conn() as conn:
-        reviews = conn.execute(
-            "SELECT * FROM fund_bot_reviews WHERE bot_id = ? ORDER BY review_date DESC LIMIT ?",
-            (bot_id, limit)
-        ).fetchall()
+        sql = "SELECT * FROM fund_bot_reviews WHERE bot_id = ?"
+        params: list = [bot_id]
+        if run_id:
+            sql += " AND run_id = ?"
+            params.append(run_id)
+        sql += " ORDER BY review_date DESC LIMIT ?"
+        params.append(limit)
+        reviews = conn.execute(sql, params).fetchall()
 
         result = []
         for r in reviews:
@@ -3659,17 +3670,21 @@ async def record_all_fund_snapshots(trade_date: str = "", run_id: str = "") -> s
 
 
 @mcp.tool()
-async def get_fund_curve(bot_id: str, start_date: str = "", end_date: str = "") -> str:
-    """获取 bot 的净值曲线（每日快照序列）。"""
+async def get_fund_curve(bot_id: str, start_date: str = "", end_date: str = "", run_id: str = "") -> str:
+    """获取 bot 的净值曲线（每日快照序列）。
+    run_id 可选：非空 → 只看该 run；空 → 跨 run 全量（admin 默认）。"""
     with get_conn() as conn:
         query = "SELECT * FROM fund_bot_daily_snapshots WHERE bot_id = ?"
-        params = [bot_id]
+        params: list = [bot_id]
         if start_date:
             query += " AND trade_date >= ?"
             params.append(start_date)
         if end_date:
             query += " AND trade_date <= ?"
             params.append(end_date)
+        if run_id:
+            query += " AND run_id = ?"
+            params.append(run_id)
         query += " ORDER BY trade_date"
 
         rows = conn.execute(query, params).fetchall()
@@ -3680,24 +3695,30 @@ async def get_fund_curve(bot_id: str, start_date: str = "", end_date: str = "") 
 
 
 @mcp.tool()
-async def get_fund_position_snapshots(bot_id: str, trade_date: str = "") -> str:
-    """获取某日的持仓级快照。默认取最近一天。"""
+async def get_fund_position_snapshots(bot_id: str, trade_date: str = "", run_id: str = "") -> str:
+    """获取某日的持仓级快照。默认取最近一天。
+    run_id 可选：非空 → 只看该 run；空 → 跨 run 全量（admin 默认）。"""
     with get_conn() as conn:
         if not trade_date:
-            latest = conn.execute(
-                "SELECT MAX(trade_date) as d FROM fund_bot_position_snapshots WHERE bot_id = ?",
-                (bot_id,)
-            ).fetchone()
+            latest_sql = "SELECT MAX(trade_date) as d FROM fund_bot_position_snapshots WHERE bot_id = ?"
+            latest_args: list = [bot_id]
+            if run_id:
+                latest_sql += " AND run_id = ?"
+                latest_args.append(run_id)
+            latest = conn.execute(latest_sql, latest_args).fetchone()
             trade_date = latest["d"] if latest and latest["d"] else ""
 
         if not trade_date:
             return json.dumps({"success": False, "message": "无快照数据"}, ensure_ascii=False)
 
-        rows = conn.execute(
-            "SELECT * FROM fund_bot_position_snapshots "
-            "WHERE bot_id = ? AND trade_date = ? ORDER BY weight DESC",
-            (bot_id, trade_date)
-        ).fetchall()
+        sql = ("SELECT * FROM fund_bot_position_snapshots "
+               "WHERE bot_id = ? AND trade_date = ?")
+        args: list = [bot_id, trade_date]
+        if run_id:
+            sql += " AND run_id = ?"
+            args.append(run_id)
+        sql += " ORDER BY weight DESC"
+        rows = conn.execute(sql, args).fetchall()
 
         return json.dumps({
             "success": True, "bot_id": bot_id, "trade_date": trade_date,
