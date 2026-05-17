@@ -193,10 +193,13 @@ export interface DailyContextData {
 async function fetchAccountSnapshot(opts: {
   fundMcpCli: string
   botId: string
+  runId: string
   asOfDate: string
 }): Promise<AccountSnapshot | null> {
   try {
-    const r = await runFundCli(opts.fundMcpCli, 'get_my_history', ['--bot-id', opts.botId, '--limit', '30'], { timeoutMs: 30_000 })
+    const r = await runFundCli(opts.fundMcpCli, 'get_my_history',
+      ['--bot-id', opts.botId, '--run-id', opts.runId, '--limit', '30'],
+      { timeoutMs: 30_000 })
     if (r.code !== 0) return null
     const d = JSON.parse(r.stdout) as Record<string, unknown>
     if (!d.success) return null
@@ -254,12 +257,14 @@ async function fetchAccountSnapshot(opts: {
 async function fetchPerformance(opts: {
   fundMcpCli: string
   botId: string
+  runId: string
   asOfDate: string
   dailySeriesLimit: number
 }): Promise<PerformanceData | null> {
   try {
     const r = await runFundCli(opts.fundMcpCli, 'get_my_performance', [
       '--bot-id', opts.botId,
+      '--run-id', opts.runId,
       '--as-of-date', opts.asOfDate,
       '--daily-series-limit', String(opts.dailySeriesLimit),
     ], { timeoutMs: 30_000 })
@@ -653,14 +658,14 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
   // Account snapshot also feeds fundSeries (knows which codes are held), so we
   // chain fundSeries after account; everything else can run concurrently with it.
   const accountPromise: Promise<AccountSnapshot | null> = opts.fundMcpCli
-    ? fetchAccountSnapshot({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, asOfDate: opts.asOfDate })
+    ? fetchAccountSnapshot({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate })
     : Promise.resolve(null)
   // Performance is the primary source of truth for PnL trend (its daily_series
   // mirrors close_my_day output) plus the broader metrics block. Keep the file
   // reader as a fallback for legacy runs whose close_my_day persisted before
   // the cli_tools init_db() fix.
   const perfPromise: Promise<PerformanceData | null> = opts.fundMcpCli
-    ? fetchPerformance({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, asOfDate: opts.asOfDate, dailySeriesLimit: pnlTrendDays })
+    ? fetchPerformance({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate, dailySeriesLimit: pnlTrendDays })
     : Promise.resolve(null)
   const pnlFilePromise = fetchPnlTrend({ worldRoot: opts.worldRoot, runId: opts.runId, botId: opts.botId, asOfDate: opts.asOfDate, windowDays: pnlTrendDays })
   const indexPromise: Promise<IndexQuote[]> = opts.simworldUrl
