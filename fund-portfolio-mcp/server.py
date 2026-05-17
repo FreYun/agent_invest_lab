@@ -1872,14 +1872,14 @@ async def portfolio_get_my_performance(
             buys = conn.execute(
                 "SELECT COALESCE(SUM(order_amount), 0) AS bought, COALESCE(SUM(fee), 0) AS bfees "
                 "FROM fund_bot_orders WHERE bot_id=? AND fund_code=? AND order_type='buy' "
-                "  AND status='confirmed' AND order_date BETWEEN ? AND ?",
-                (bot_id, h["fund_code"], d0, d1),
+                "  AND status='confirmed' AND order_date BETWEEN ? AND ? AND order_run_id=?",
+                (bot_id, h["fund_code"], d0, d1, run_id),
             ).fetchone()
             sells = conn.execute(
                 "SELECT COALESCE(SUM(confirmed_amount), 0) AS proceeds, COALESCE(SUM(fee), 0) AS sfees "
                 "FROM fund_bot_orders WHERE bot_id=? AND fund_code=? AND order_type='sell' "
-                "  AND status='confirmed' AND order_date BETWEEN ? AND ?",
-                (bot_id, h["fund_code"], d0, d1),
+                "  AND status='confirmed' AND order_date BETWEEN ? AND ? AND order_run_id=?",
+                (bot_id, h["fund_code"], d0, d1, run_id),
             ).fetchone()
             total_invested = float(buys["bought"] or 0.0)
             total_proceeds = float(sells["proceeds"] or 0.0)

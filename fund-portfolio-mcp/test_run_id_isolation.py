@@ -227,3 +227,80 @@ def test_get_fund_holdings_with_run_id_filters(reload_server, tmp_db):
     assert data["success"], data
     codes = [h["fund_code"] for h in data["holdings"]]
     assert codes == ["008528"], f"指定 runB 应只看到 008528, 实际: {codes}"
+
+
+# === Followup: completed_positions buys/sells filter by run_id ===
+
+def test_get_my_performance_completed_positions_filtered_by_run_id(reload_server, tmp_db):
+    """两个 run 在同一基金各自有一次完整 round-trip：runA 买 1000 卖 1200，
+    runB 买 2000 卖 2500。runA 的 completed_positions 应只算 runA 自己的 buys/sells，
+    总 invested=1000、proceeds=1200，不能把 runB 的混进去。"""
+    import sqlite3
+    conn = sqlite3.connect(tmp_db)
+    bot_id = "botRT"
+
+    # 账户行（accounts PK 是 bot_id，所以只能一行；取最近 run）
+    conn.execute(
+        "INSERT INTO fund_bot_accounts (bot_id, initial_capital, cash, run_id) "
+        "VALUES (?, 1_000_000.0, 800_000.0, 'runB')",
+        (bot_id,),
+    )
+
+    # 同 fund 510888，每个 run 各一次完整 round-trip（buy 在 d0, sell 在 d1）
+    for run, d0, d1, buy_amt, sell_amt in (
+        ("runA", "2026-01-02", "2026-01-09", 1000.0, 1200.0),
+        ("runB", "2026-01-03", "2026-01-09", 2000.0, 2500.0),
+    ):
+        # 已平仓持仓
+        conn.execute(
+            "INSERT INTO fund_bot_holdings "
+            "(bot_id, fund_code, fund_name, share_class, asset_class, role, entry_date, exit_date, "
+            " entry_nav, latest_nav, shares, amount_invested, market_value, status, run_id) "
+            "VALUES (?, '510888', 'TestFund', 'A', '股票类', '核心', ?, ?, "
+            " 1.0, 1.0, 0, 0, 0, 'closed', ?)",
+            (bot_id, d0, d1, run),
+        )
+        # buy 单
+        conn.execute(
+            "INSERT INTO fund_bot_orders "
+            "(bot_id, fund_code, fund_name, order_type, order_date, confirm_date, order_amount, "
+            " reference_nav, confirm_nav, confirmed_shares, confirmed_amount, fee, action_reason, "
+            " status, order_run_id, settle_run_id) "
+            "VALUES (?, '510888', 'TestFund', 'buy', ?, ?, ?, 1.0, 1.0, ?, ?, 0, '建仓', "
+            " 'confirmed', ?, ?)",
+            (bot_id, d0, d0, buy_amt, buy_amt, buy_amt, run, run),
+        )
+        # sell 单（confirmed_amount 是 proceeds）
+        conn.execute(
+            "INSERT INTO fund_bot_orders "
+            "(bot_id, fund_code, fund_name, order_type, order_date, confirm_date, order_amount, "
+            " reference_nav, confirm_nav, confirmed_shares, confirmed_amount, fee, action_reason, "
+            " status, order_run_id, settle_run_id) "
+            "VALUES (?, '510888', 'TestFund', 'sell', ?, ?, ?, 1.2, 1.2, ?, ?, 0, '清仓', "
+            " 'confirmed', ?, ?)",
+            (bot_id, d1, d1, sell_amt, sell_amt, sell_amt, run, run),
+        )
+
+    # 至少一行 daily_snapshot, 避免 portfolio_get_my_performance 早 return
+    conn.execute(
+        "INSERT INTO fund_bot_daily_snapshots "
+        "(bot_id, trade_date, run_id, initial_capital, cash, invested_value, total_value, "
+        " net_value, daily_return_pct, cumulative_return_pct, max_drawdown_pct, "
+        " equity_weight, bond_weight, gold_weight, cash_weight, holdings_json) "
+        "VALUES (?, '2026-01-10', 'runA', 1000000, 1000000, 0, 1000000, 1.0, 0, 0, 0, "
+        " 1, 0, 0, 0, '[]')",
+        (bot_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_performance(bot_id, "2026-01-11", run_id="runA"))
+    data = json.loads(payload)
+    assert data["success"], data
+    cp = data["completed_positions"]
+    assert len(cp) == 1, f"runA 应只看到 1 个 round-trip, 实际: {len(cp)}"
+    rt = cp[0]
+    assert rt["total_invested"] == 1000.0, f"runA 投入应是 1000, 实际: {rt['total_invested']}"
+    assert rt["total_proceeds"] == 1200.0, f"runA 回收应是 1200, 实际: {rt['total_proceeds']}"
+    # 如果 buys/sells SELECT 没按 run_id 过滤，total_invested 会变成 3000 (1000+2000)
