@@ -5,12 +5,12 @@ fund-portfolio-mcp tools without going through MCP HTTP. Bypasses MCP entirely
 same DB.
 
 Usage:
-  python cli_tools.py init_fund_account     --bot-id bot1 --initial-capital 1000000 [--reset]
-  python cli_tools.py settle_pending_orders --bot-id bot1 --as-of-date 2024-03-15
-  python cli_tools.py close_my_day          --bot-id bot1 --trade-date 2024-03-14
+  python cli_tools.py init_fund_account     --bot-id bot1 --run-id <runid> --initial-capital 1000000 [--reset]
+  python cli_tools.py settle_pending_orders --bot-id bot1 --run-id <runid> --as-of-date 2024-03-15
+  python cli_tools.py close_my_day          --bot-id bot1 --run-id <runid> --trade-date 2024-03-14
   python cli_tools.py get_buyable_funds                # 列出 lab 里 fund_nav 覆盖到的全部可交易代码
-  python cli_tools.py get_my_history        --bot-id bot1 [--limit 30] [--fund-code 510300]
-  python cli_tools.py get_my_performance    --bot-id bot1 --as-of-date 2024-03-15 [--daily-series-limit 120]
+  python cli_tools.py get_my_history        --bot-id bot1 --run-id <runid> [--limit 30] [--fund-code 510300]
+  python cli_tools.py get_my_performance    --bot-id bot1 --run-id <runid> --as-of-date 2024-03-15 [--daily-series-limit 120]
 
 Stdout is the raw JSON the underlying tool returns (so callers can parse it).
 Exit code is 0 on tool invocation success (regardless of the returned
@@ -85,11 +85,15 @@ async def _amain() -> str:
     # server.py 的同名 @mcp.tool 实现，输出格式一致。
     p_hist = sub.add_parser("get_my_history")
     p_hist.add_argument("--bot-id", required=True)
+    p_hist.add_argument("--run-id", required=True,
+                        help="本轮 run id（world 透传）。read 工具 strict 之后必填。")
     p_hist.add_argument("--limit", type=int, default=30)
     p_hist.add_argument("--fund-code", default="")
 
     p_perf = sub.add_parser("get_my_performance")
     p_perf.add_argument("--bot-id", required=True)
+    p_perf.add_argument("--run-id", required=True,
+                        help="本轮 run id（world 透传）。")
     p_perf.add_argument("--as-of-date", required=True)
     p_perf.add_argument("--daily-series-limit", type=int, default=120)
 
@@ -108,9 +112,9 @@ async def _amain() -> str:
     if args.cmd == "get_buyable_funds":
         return await portfolio_get_buyable_funds()
     if args.cmd == "get_my_history":
-        return await portfolio_get_my_history(args.bot_id, args.limit, args.fund_code)
+        return await portfolio_get_my_history(args.bot_id, args.limit, args.fund_code, args.run_id)
     if args.cmd == "get_my_performance":
-        return await portfolio_get_my_performance(args.bot_id, args.as_of_date, args.daily_series_limit)
+        return await portfolio_get_my_performance(args.bot_id, args.as_of_date, args.daily_series_limit, args.run_id)
     raise SystemExit(f"unknown cmd {args.cmd!r}")
 
 
