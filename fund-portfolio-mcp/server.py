@@ -1748,6 +1748,7 @@ async def portfolio_get_my_performance(
       bot_id              账户
       as_of_date          截止日（YYYY-MM-DD），可见数据 = trade_date < as_of_date
       daily_series_limit  返回最近 N 行 daily_series（默认 120 个交易日；传 0 = 全量）
+      run_id              必填，proxy 自动注入；缺失时返回错误。
 
     返回 5 块：
       summary            起始/最新日、累计收益、最大回撤、年化、波动、夏普(rf=0)、最好/最差日、胜负平
@@ -1775,6 +1776,9 @@ async def portfolio_get_my_performance(
     所有数据严格 < as_of_date。给定日期当天还没 portfolio_close_my_day 时本来就不会被算进去；
     提前一天的话也不会含 as_of_date 当日的快照——回测里禁止偷看未来。
     """
+    err = _require_run_id(run_id)
+    if err:
+        return err
     as_of_date = _normalize_trade_date(as_of_date)
     with get_conn() as conn:
         account = _get_account(conn, bot_id)
@@ -1785,14 +1789,9 @@ async def portfolio_get_my_performance(
             "SELECT trade_date, initial_capital, cash, invested_value, total_value, net_value, "
             " daily_return_pct, cumulative_return_pct, max_drawdown_pct "
             "FROM fund_bot_daily_snapshots "
-            "WHERE bot_id=? AND trade_date < ?"
+            "WHERE bot_id=? AND trade_date < ? AND run_id=? ORDER BY trade_date"
         )
-        snap_args: list = [bot_id, as_of_date]
-        if run_id:
-            snap_sql += " AND run_id=?"
-            snap_args.append(run_id)
-        snap_sql += " ORDER BY trade_date"
-        snaps = conn.execute(snap_sql, snap_args).fetchall()
+        snaps = conn.execute(snap_sql, (bot_id, as_of_date, run_id)).fetchall()
         if not snaps:
             return json.dumps({
                 "success": True,
@@ -1842,13 +1841,9 @@ async def portfolio_get_my_performance(
         ord_sql = (
             "SELECT order_type, order_amount, confirmed_amount, confirmed_shares, fee, status, order_date "
             "FROM fund_bot_orders "
-            "WHERE bot_id=? AND order_date < ? AND status='confirmed'"
+            "WHERE bot_id=? AND order_date < ? AND status='confirmed' AND (order_run_id=? OR settle_run_id=?)"
         )
-        ord_args: list = [bot_id, as_of_date]
-        if run_id:
-            ord_sql += " AND (order_run_id=? OR settle_run_id=?)"
-            ord_args.extend([run_id, run_id])
-        orders = conn.execute(ord_sql, ord_args).fetchall()
+        orders = conn.execute(ord_sql, (bot_id, as_of_date, run_id, run_id)).fetchall()
         buy_count = sum(1 for o in orders if o["order_type"] == "buy")
         sell_count = sum(1 for o in orders if o["order_type"] == "sell")
         total_buy_amount = sum(float(o["order_amount"] or 0.0) for o in orders if o["order_type"] == "buy")
@@ -1861,14 +1856,9 @@ async def portfolio_get_my_performance(
         closed_sql = (
             "SELECT fund_code, fund_name, entry_date, exit_date "
             "FROM fund_bot_holdings "
-            "WHERE bot_id=? AND status='closed' AND exit_date < ?"
+            "WHERE bot_id=? AND status='closed' AND exit_date < ? AND run_id=? ORDER BY exit_date"
         )
-        closed_args: list = [bot_id, as_of_date]
-        if run_id:
-            closed_sql += " AND run_id=?"
-            closed_args.append(run_id)
-        closed_sql += " ORDER BY exit_date"
-        closed_holdings = conn.execute(closed_sql, closed_args).fetchall()
+        closed_holdings = conn.execute(closed_sql, (bot_id, as_of_date, run_id)).fetchall()
         completed_positions = []
         for h in closed_holdings:
             d0 = h["entry_date"] or "0000-00-00"
@@ -1920,27 +1910,21 @@ async def portfolio_get_my_performance(
         } for s in series_rows]
 
         # 区间业绩（fund_bot_performance；区间口径不年化；rf=1.8% 年化按 252 个交易日折算到日化）
-        # 取最新一日的 5 个 period 行（trade_date < as_of_date，禁止偷看未来）；同日多 run 取 MAX(run_id)。
+        # 取本 run 最新一日的 5 个 period 行（trade_date < as_of_date，禁止偷看未来）。
         perf_date_row = conn.execute(
             "SELECT MAX(trade_date) AS d FROM fund_bot_performance "
-            "WHERE bot_id = ? AND trade_date < ?",
-            (bot_id, as_of_date),
+            "WHERE bot_id = ? AND trade_date < ? AND run_id = ?",
+            (bot_id, as_of_date, run_id),
         ).fetchone()
         perf_anchor_date = perf_date_row["d"] if perf_date_row and perf_date_row["d"] else None
         interval_metrics: dict = {}
         if perf_anchor_date:
-            perf_run_row = conn.execute(
-                "SELECT MAX(run_id) AS r FROM fund_bot_performance "
-                "WHERE bot_id = ? AND trade_date = ?",
-                (bot_id, perf_anchor_date),
-            ).fetchone()
-            perf_run = perf_run_row["r"] if perf_run_row and perf_run_row["r"] is not None else ""
             perf_rows = conn.execute(
                 "SELECT period, return_pct, max_drawdown_pct, volatility_pct, sharpe_ratio, "
                 "  calmar_ratio, data_points, window_target_days, fallback "
                 "FROM fund_bot_performance "
                 "WHERE bot_id = ? AND trade_date = ? AND run_id = ?",
-                (bot_id, perf_anchor_date, perf_run),
+                (bot_id, perf_anchor_date, run_id),
             ).fetchall()
             for pr in perf_rows:
                 interval_metrics[pr["period"]] = {
@@ -1964,8 +1948,8 @@ async def portfolio_get_my_performance(
                 "SELECT fund_code, fund_name, asset_class, role, market_value, "
                 "       actual_weight, holding_days, unrealized_pnl_pct "
                 "FROM fund_bot_holdings "
-                "WHERE bot_id = ? AND status = 'active' ORDER BY fund_code",
-                (bot_id,),
+                "WHERE bot_id = ? AND status = 'active' AND run_id = ? ORDER BY fund_code",
+                (bot_id, run_id),
             ).fetchall()
             for h in held:
                 fc = h["fund_code"]
