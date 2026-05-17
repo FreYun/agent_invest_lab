@@ -205,3 +205,25 @@ def test_get_my_trades_filters_by_run_id(reload_server, tmp_db):
     assert data["success"], data
     codes = [o["fund_code"] for o in data["orders"]]
     assert codes == ["008528"], f"runB 应只看到 008528 订单, 实际: {codes}"
+
+
+# === Soft layer: get_fund_holdings (admin) ===
+
+def test_get_fund_holdings_no_run_id_returns_all(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.get_fund_holdings("botX"))
+    data = json.loads(payload)
+    assert data["success"], data
+    codes = sorted(h["fund_code"] for h in data["holdings"])
+    assert codes == ["008528", "510300"], f"admin 默认应跨 run, 实际: {codes}"
+
+
+def test_get_fund_holdings_with_run_id_filters(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.get_fund_holdings("botX", run_id="runB"))
+    data = json.loads(payload)
+    assert data["success"], data
+    codes = [h["fund_code"] for h in data["holdings"]]
+    assert codes == ["008528"], f"指定 runB 应只看到 008528, 实际: {codes}"
