@@ -8,9 +8,7 @@
 
 种子数据：同 bot 两个 run（runA / runB），各 1 行 active 持仓 + 1 行已结算 BUY 单。
 """
-import asyncio
 import importlib
-import json
 import os
 import sqlite3
 import tempfile
@@ -41,7 +39,6 @@ def _seed_two_runs(db_path: str, bot_id: str = "botX"):
     """同 bot 在 runA / runB 各落 1 行 active 持仓、1 行已结算 BUY 单、1 行日快照。
     每天 trade_date 一致，模拟 run 重跑同一天的场景。"""
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
     # 账户：accounts 表 PK 是 bot_id，只能一行——按 spec 设计取最近 run 视角。
     conn.execute(
         "INSERT INTO fund_bot_accounts (bot_id, initial_capital, cash, cash_in_transit, run_id) "
@@ -108,5 +105,14 @@ def test_seed_data_inserts_both_runs(tmp_db):
     rows = conn.execute(
         "SELECT run_id, fund_code FROM fund_bot_holdings WHERE bot_id='botX' ORDER BY run_id"
     ).fetchall()
-    conn.close()
     assert rows == [("runA", "510300"), ("runB", "008528")]
+    # 同时确认 orders / daily_snapshots 也都进库了——三张表任一漏插都让后续 strict 测试误报。
+    orders_count = conn.execute(
+        "SELECT COUNT(*) FROM fund_bot_orders WHERE bot_id='botX'"
+    ).fetchone()[0]
+    assert orders_count == 2
+    snapshots_count = conn.execute(
+        "SELECT COUNT(*) FROM fund_bot_daily_snapshots WHERE bot_id='botX'"
+    ).fetchone()[0]
+    assert snapshots_count == 2
+    conn.close()
