@@ -15,6 +15,12 @@ export interface WorldState {
   started_at: string
   updated_at: string
   loop: 'research-loop' | 'openclaw-pi'
+  /** PID of the world orchestrator process that owns this run. Stale across restarts
+   *  if the process died without teardown — that's the signal external readers (e.g.
+   *  the dashboard) use to detect orphan runs and self-heal them to 'aborted'. */
+  pid?: number
+  /** Set by self-heal when an orphan run is reclaimed. Plain string, audit-only. */
+  aborted_reason?: string
 }
 
 export function stateExists(worldRoot: string, runId: string): boolean {

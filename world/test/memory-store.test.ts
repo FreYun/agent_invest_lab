@@ -61,3 +61,35 @@ test('new MemoryStore loads existing file', () => {
   assert.equal(s2.search('半导体', { agent_id: 'bot7', limit: 5 }).length, 1)
   cleanup()
 })
+
+test('findLatestByPrefix returns the latest matching record for an agent; null when nothing matches', () => {
+  const { file, cleanup } = tmpStore()
+  const s = new MemoryStore(file)
+  // bot7 写了两版策略（不同日期）+ 一个普通笔记；bot1 也写了一份策略
+  s.add({ text: '# MY_STRATEGY\nv1: 第一版策略，激进风格', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-15' })
+  s.add({ text: '今天看好半导体', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-15' })
+  s.add({ text: '# MY_STRATEGY\nv2: 第二版策略，更稳健', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-16' })
+  s.add({ text: '# MY_STRATEGY\nbot1 的策略', agent_id: 'bot1', user_id: 'bot1', created_at: '2024-03-15' })
+
+  // bot7 应该取到 v2（最新 created_at）
+  const bot7Strategy = s.findLatestByPrefix('bot7', '# MY_STRATEGY')
+  assert.ok(bot7Strategy)
+  assert.match(bot7Strategy!.text, /v2: 第二版策略/)
+  assert.equal(bot7Strategy!.agent_id, 'bot7')
+
+  // bot1 独立，取自己的
+  const bot1Strategy = s.findLatestByPrefix('bot1', '# MY_STRATEGY')
+  assert.ok(bot1Strategy)
+  assert.match(bot1Strategy!.text, /bot1 的策略/)
+
+  // 不存在前缀的 agent → null
+  assert.equal(s.findLatestByPrefix('bot7', '# NONEXISTENT'), null)
+
+  // agent 不存在 → null（不会取到别的 agent 的策略——cross-agent isolation）
+  assert.equal(s.findLatestByPrefix('bot999', '# MY_STRATEGY'), null)
+
+  // 前缀必须是 startsWith，不是 contains
+  s.add({ text: '中间嵌着 # MY_STRATEGY 的笔记', agent_id: 'bot8', user_id: 'bot8', created_at: '2024-03-15' })
+  assert.equal(s.findLatestByPrefix('bot8', '# MY_STRATEGY'), null)
+  cleanup()
+})

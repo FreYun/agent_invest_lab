@@ -6,11 +6,13 @@ import { loadCalendar, computeTradingDates } from './calendar.ts'
 import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
 import { buildShadowWorkspace } from './shadowWorkspace.ts'
-import { renderDailyMessage } from './message.ts'
+import { renderDailyMessage, STRATEGY_MEM0_PREFIX } from './message.ts'
+import { fetchDailyContext } from './daily-context.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
 import { createSimworldProxy, type SimworldProxyHandle } from './simworld-proxy/server.ts'
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
+import { createStrategyServer, type StrategyServerHandle } from './strategy-server/server.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import * as P from './paths.ts'
 
@@ -157,8 +159,18 @@ interface SetupResult {
   memory: MemoryServerHandle
   simworldProxy: SimworldProxyHandle
   fundPortfolioProxy: FundPortfolioProxyHandle | null
+  strategyServer: StrategyServerHandle
   bots: { botId: string; server: BotServer }[]
   currentDateRef: { value: string }
+  // 进程内共享的 MemoryStore 实例；与 memory-server 是同一份。Day 1 结束后 extractStrategies 用它
+  // 反查 bot 写下的策略文档（text 以 STRATEGY_MEM0_PREFIX 起头），落盘到 runDir/strategies/<bot>.md。
+  memoryStore: MemoryStore
+  // Kill the named bot's server and spawn a fresh one in its slot. Used by runLoop
+  // after a per-day chat timeout so the next day doesn't race with the still-in-flight
+  // request on the server side (research-loop-ts doesn't serialize same-session chats
+  // and has no cancel — without restart, the dropped chat keeps issuing tool calls
+  // against the next day's currentDateRef, mem0 timestamps, and session jsonl).
+  restartBot: (botId: string) => Promise<void>
 }
 
 function formatBotNotification(botId: string, method: string, params: Record<string, unknown>): string | null {
@@ -283,7 +295,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // buildShadowWorkspace 拷贝 config/mcporter.json 时替换为下面的 url。
   const simworldProxy = await createSimworldProxy({ upstreamUrl: config.simworldUpstreamUrl, getCurrentDate })
   writeFileSync(P.simworldProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: simworldProxy.port, url: simworldProxy.url, upstream: config.simworldUpstreamUrl }, null, 2) + '\n')
-  log(worldRoot, runId, `simworld-data proxy at ${simworldProxy.url} (upstream ${config.simworldUpstreamUrl})`)
+  log(worldRoot, runId, `simworld-data proxy at ${simworldProxy.url} (upstream ${config.simworldUpstreamUrl}); ${simworldProxy.tools.length} tools captured for daily prompt`)
   const templateVars: Record<string, string> = { SIMWORLD_PROXY_URL: simworldProxy.url }
 
   // fund-portfolio-mcp 代理（仅当 fundMcpCli 配置时启用——基金 run 才需要）：
@@ -297,6 +309,15 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     log(worldRoot, runId, `fund-portfolio proxy at ${fundPortfolioProxy.url} (upstream ${config.fundPortfolioUpstreamUrl}, run_id=${runId})`)
     templateVars.FUND_PORTFOLIO_PROXY_URL = fundPortfolioProxy.url
   }
+
+  // strategy-server（始终启用，进程内）：bot 通过 update_my_strategy / get_my_strategy 工具
+  // 管理自己的 strategy 文档。写入 runDir/strategies/<bot>.md 与 revisions.jsonl；与 Day 1
+  // 由 extractStrategies 从 mem0 抽出来的初版完全共用同一份文件——后者只在 Day 1 收尾跑一次
+  // 作为冷启动，之后所有修订都走这个 MCP 工具。bot 的 mcporter.json 用 ${STRATEGY_SERVER_URL} 引用。
+  const strategyServer = await createStrategyServer({ worldRoot, runId, getCurrentDate })
+  writeFileSync(P.strategyServerRuntimeFile(worldRoot, runId), JSON.stringify({ port: strategyServer.port, url: strategyServer.url }, null, 2) + '\n')
+  log(worldRoot, runId, `strategy-server at ${strategyServer.url}`)
+  templateVars.STRATEGY_SERVER_URL = strategyServer.url
 
   // 按 loop 分支生成 server 配置：research-loop 写 trading-rl-config.json；pi 直接 patch 已经复制的 openclaw.json 的 mcp.mem0。
   if (config.loop === 'openclaw-pi') {
@@ -316,23 +337,34 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
 
   // 影子 workspace + bot server
   const bots: { botId: string; server: BotServer }[] = []
+  const spawnBotServer = async (botId: string): Promise<BotServer> => {
+    const srcWs = isAbsolute(botId) ? botId : join(config.botsRoot, botId)
+    if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
+    const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
+    buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars })
+    const argv = botServerArgv(config, botId, shadow, loopConfigPath(config, worldRoot, runId))
+    return startBotServer(botId, argv)
+  }
+  const restartBot: SetupResult['restartBot'] = async (botId) => {
+    const idx = bots.findIndex(b => b.botId === botId)
+    if (idx < 0) throw new Error(`restartBot: unknown botId ${botId}`)
+    try { await bots[idx].server.shutdown({ timeoutMs: 5000 }) } catch { /* ignore — we're replacing it */ }
+    const server = await spawnBotServer(botId)
+    bots[idx] = { botId, server }
+  }
   try {
     for (const botId of config.bots) {
-      const srcWs = isAbsolute(botId) ? botId : join(config.botsRoot, botId)
-      if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
-      const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
-      buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars })
-      const argv = botServerArgv(config, botId, shadow, loopConfigPath(config, worldRoot, runId))
-      const server = await startBotServer(botId, argv)
+      const server = await spawnBotServer(botId)
       bots.push({ botId, server })
       log(worldRoot, runId, `bot ${botId}: server ready`)
     }
   } catch (err) {
-    // 启动阶段失败：关掉已起的 bot server + 记忆服务 + 代理
+    // 启动阶段失败：关掉已起的 bot server + 记忆服务 + 代理 + strategy-server
     for (const b of bots) { try { await b.server.shutdown({ timeoutMs: 2000 }) } catch { /* ignore */ } }
     try { await memory.close() } catch { /* ignore */ }
     try { await simworldProxy.close() } catch { /* ignore */ }
     if (fundPortfolioProxy) try { await fundPortfolioProxy.close() } catch { /* ignore */ }
+    try { await strategyServer.close() } catch { /* ignore */ }
     throw err
   }
 
@@ -364,7 +396,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     }
   }
 
-  return { tradingDates, memory, simworldProxy, fundPortfolioProxy, bots, currentDateRef }
+  return { tradingDates, memory, simworldProxy, fundPortfolioProxy, strategyServer, bots, currentDateRef, memoryStore: store, restartBot }
 }
 
 // 必须跟 lab-fund-bot-only.service / lab-fund-readonly.service 的 FUND_BUYABLE_CODES_FILE
@@ -372,6 +404,38 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
 const BUYABLE_CODES_FILE = '/home/rooot/agent_invest_lab/data/lab-fund-buyable.json'
 
 interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string }
+
+/** Day 1 结束后调用一次。扫 in-process MemoryStore，按 STRATEGY_MEM0_PREFIX 反查每个 bot 写的策略
+ *  文档，落盘到 runDir/strategies/<botId>.md。后续日（含 resume）从同一文件读回注入 Day N prompt。
+ *  Idempotent：每次都覆盖写最新一条；bot 没写 / agent_id 对不上 / 文本没以前缀起头 → 跳过（Day N
+ *  prompt 不带 strategyBlock，bot 退化到完全自由发挥）。 */
+function extractStrategies(worldRoot: string, runId: string, store: MemoryStore, bots: { botId: string }[]): void {
+  const dir = P.strategiesDir(worldRoot, runId)
+  mkdirSync(dir, { recursive: true })
+  for (const { botId } of bots) {
+    const rec = store.findLatestByPrefix(botId, STRATEGY_MEM0_PREFIX)
+    if (!rec) {
+      log(worldRoot, runId, `strategy extract ${botId}: NOT FOUND (bot Day 1 没写 "${STRATEGY_MEM0_PREFIX}" 起头的 mem0；Day N prompt 将不带策略块)`)
+      continue
+    }
+    try {
+      writeFileSync(P.strategyFile(worldRoot, runId, botId), rec.text + '\n')
+      const preview = rec.text.replace(/\s+/g, ' ').slice(0, 120)
+      log(worldRoot, runId, `strategy extract ${botId}: ok (${rec.text.length} chars; preview: ${preview}${rec.text.length > 120 ? '…' : ''})`)
+    } catch (err) {
+      log(worldRoot, runId, `strategy extract ${botId} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+}
+
+/** Day N 渲染 prompt 前从落盘文件读 bot 的 Day 1 策略；文件缺失或读失败 → 返回 undefined，
+ *  renderDailyMessage 自动跳过 strategyBlock。Resume 场景：Day 1 已完成时文件已存在，直接读到。 */
+function loadStrategy(worldRoot: string, runId: string, botId: string): string | undefined {
+  const f = P.strategyFile(worldRoot, runId, botId)
+  if (!existsSync(f)) return undefined
+  try { return readFileSync(f, 'utf8') }
+  catch { return undefined }
+}
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -440,6 +504,7 @@ async function teardown(worldRoot: string, runId: string, setupRes: SetupResult,
       setupRes.memory.close(),
       setupRes.simworldProxy.close(),
       ...(setupRes.fundPortfolioProxy ? [setupRes.fundPortfolioProxy.close()] : []),
+      setupRes.strategyServer.close(),
     ]),
     new Promise<void>(resolve => setTimeout(resolve, 10_000)),
   ])
@@ -464,6 +529,7 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     trading_dates: setupRes.tradingDates, cursor: 0, bots: config.bots,
     memory_port: setupRes.memory.port, started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     loop: config.loop,
+    pid: process.pid,
   }
   writeState(worldRoot, runId, initial)
 
@@ -483,15 +549,35 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   const days: DaySummary[] = []
   const perBotTimeoutMs = config.perBotTimeoutSeconds * 1000
   const researchDayTimeoutMs = config.researchDayTimeoutSeconds * 1000
-  // 一旦某个 bot 在某天 timeout/dead，它的 server 可能还在处理上一天的请求（research-loop-ts 不串行化），
-  // 之后的每一天都直接记 dead、不再向它发 chat。
+  // dead = bot server 进程已经退出，无可挽救 → 加入 brokenBots，剩余日子直接 writeSkippedDeadBot
+  // 跳过。timeout 不进这个集合：当天记 timeout，但下一天循环顶部会 restartBot 重启该 bot 的
+  // server（kill 老的、spawn 新的），这样后续日子能恢复正常 chat。重启的必要性：research-loop-ts
+  // 不串行化、也没有 chat cancel —— 客户端 timeout 后老 chat 还在 server 端跑，会继续发 tool 调用，
+  // 这些调用会读到「下一天」的 currentDateRef / mem0 当前日期 / fund-portfolio 模拟时间，并跟新一天
+  // 的 chat 并发写同一个 session jsonl。
   const brokenBots = new Set<string>()
+  const needsRestart = new Set<string>()
   let aborted = false
   const onSigint = (): void => { aborted = true; log(worldRoot, runId, 'SIGINT received — will abort after current day') }
   process.on('SIGINT', onSigint)
   try {
     for (let cursor = fromCursor; cursor < dates.length; cursor++) {
       if (aborted || existsSync(P.stopFile(worldRoot, runId))) { log(worldRoot, runId, 'stop requested — aborting'); await teardown(worldRoot, runId, setupRes, 'aborted', days); return }
+      // Drain pending restarts BEFORE today's chat goes out. Each timeout from yesterday
+      // owns a still-in-flight chat on its bot's server; we kill+spawn so today's chat
+      // hits a clean server with no leftover tool-call stream.
+      if (needsRestart.size > 0) {
+        for (const botId of needsRestart) {
+          try {
+            await setupRes.restartBot(botId)
+            log(worldRoot, runId, `bot ${botId}: server restarted after prior timeout`)
+          } catch (err) {
+            log(worldRoot, runId, `bot ${botId}: server restart FAILED (${err instanceof Error ? err.message : String(err)}) — banning for rest of run`)
+            brokenBots.add(botId)
+          }
+        }
+        needsRestart.clear()
+      }
       const date = dates[cursor]
       setupRes.currentDateRef.value = date
       // Pin the loop processes' system-prompt date to today's world day before any
@@ -528,11 +614,45 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       }
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       const statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
-        const message = renderDailyMessage({ worldRoot, date, isFirstDay, quotesPath: quotesAbs, journalRelPath: JOURNAL_REL, buyableFundCodes: config.buyableFundCodes })
+        // Prefetch the per-bot daily context (account snapshot, recent PnL,
+        // held-fund NAV, major indices) so the bot doesn't have to spend
+        // round-trips re-discovering routine inputs every morning. Talks to
+        // simworld via the upstream URL (proxy adds simulated_datetime only
+        // on the bot path — we don't need that overhead from world's side).
+        // Best-effort: each fetcher returns null on error, renderer just
+        // skips the corresponding block. A simworld blip won't break the day.
+        const dailyContext = await fetchDailyContext({
+          worldRoot, runId, botId: b.botId, asOfDate: date,
+          fundMcpCli: config.fundMcpCli,
+          simworldUrl: config.simworldUpstreamUrl,
+          // dates[0] anchors the benchmark cumulative %. Without it the
+          // benchmark fetcher can't decide "since when"; with it the bot sees
+          // alpha-since-run-start in the PnL trend block.
+          runStartDate: dates[0],
+        })
+        // Day N (cursor > 0)：把 Day 1 落盘的策略读回来注入。Day 1 自身不带 strategyBlock——
+        // bot 还没写。loadStrategy 读不到文件就返回 undefined，renderDailyMessage 自动跳过该块。
+        const strategy = isFirstDay ? undefined : loadStrategy(worldRoot, runId, b.botId)
+        const message = renderDailyMessage({
+          worldRoot, date, isFirstDay,
+          quotesPath: quotesAbs, journalRelPath: JOURNAL_REL,
+          buyableFundCodes: config.buyableFundCodes,
+          simworldTools: setupRes.simworldProxy.tools,
+          dailyContext, strategy,
+          // 仅 Day 1 fullRules 用到——message.ts 自己门控；这里无脑传即可，Day N 会丢弃。
+          tradingDaysTotal: setupRes.tradingDates.length,
+        })
         if (brokenBots.has(b.botId)) return writeSkippedDeadBot(worldRoot, runId, date, message, b)
         return chatOneBot(worldRoot, runId, date, message, timeoutMs, b)
       })
-      for (const s of statuses) { if (s.status === 'timeout' || s.status === 'dead') brokenBots.add(s.bot) }
+      for (const s of statuses) {
+        if (s.status === 'dead') brokenBots.add(s.bot)
+        else if (s.status === 'timeout') needsRestart.add(s.bot)
+      }
+      // Day 1 收尾：从 in-process MemoryStore 抽出每个 bot 写的策略文档（# MY_STRATEGY 起头），
+      // 落盘到 runDir/strategies/<bot>.md。后续日的 chat 会从这里读回注入 prompt。idempotent，
+      // resume 时如果 cursor=0 重新跑 Day 1 会覆盖更新；cursor>0 resume 时文件早就在了，不调。
+      if (cursor === 0) extractStrategies(worldRoot, runId, setupRes.memoryStore, setupRes.bots)
       // 系统侧 close：每个 bot（不论 chat 状态如何）跑一次 close_my_day 落收盘快照。
       // bot 在 BOT_ONLY 端口看不到 close_my_day，只能 world 触发；这是"每天收盘核算"的硬契约。
       // snapshot 文本写到 <botDayDir>/close_my_day.json，方便后续审阅。
@@ -589,6 +709,10 @@ export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
     throw new Error('resume: trading-date sequence changed since the run started; refuse to resume')
   }
   setupRes.currentDateRef.value = state.trading_dates[Math.min(state.cursor, state.trading_dates.length - 1)]
+  // Adopt the run for THIS process so orphan-detection sees a fresh PID; the prior
+  // PID may have died (that's how we got here) or, worse, been recycled to an
+  // unrelated process — leaving the stale one would mis-direct future health checks.
+  writeState(worldRoot, runId, { ...state, pid: process.pid, updated_at: new Date().toISOString() })
   await runLoop({ worldRoot, runId, config, setupRes, fromCursor: state.cursor })
 }
 

@@ -65,6 +65,20 @@ export class MemoryStore {
     return rec
   }
 
+  /** 找 agent_id 下 text 以 prefix 开头的最新一条记录（按 created_at 降序，并列时取最后写入）。
+   *  用途：world 在 Day 1 结束后抽取 bot 写的策略文档（约定 prefix `# MY_STRATEGY`）。
+   *  未找到返回 null。 */
+  findLatestByPrefix(agent_id: string, prefix: string): MemoryRecord | null {
+    let best: MemoryRecord | null = null
+    for (const rec of this.records) {
+      if (rec.agent_id !== agent_id) continue
+      if (!rec.text.startsWith(prefix)) continue
+      if (!best || rec.created_at > best.created_at) best = rec
+      // created_at 相同时后写的覆盖前写的（自然遍历顺序），无需额外比较
+    }
+    return best
+  }
+
   search(query: string, opts: { agent_id?: string; limit: number }): SearchHit[] {
     const q = tokenize(query)
     if (q.length === 0) return []

@@ -104,6 +104,9 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   assert.equal(st.cursor, 2)
   assert.equal(st.run_id, 'r1')
   assert.ok(st.memory_port > 0)
+  // pid stamped at run start (orphan-detection signal) and survives writeState
+  // spreads through the loop + teardown.
+  assert.equal(st.pid, process.pid)
 
   for (const d of ['2024-03-14', '2024-03-15']) {
     for (const b of ['bot1', 'bot7']) {
@@ -114,11 +117,15 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
       assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r1', d, b), 'utf8')).status, 'ok')
     }
   }
-  // 首日发完整规则（含 simworld-data + portfolio_* 提示），次日发精简规则 + AUTONOMY 自治块
+  // 首日发完整规则（含 simworld-data + portfolio_* 提示 + 策略写作要求）；
+  // 次日发精简规则——不再注入 AUTONOMY（embedded strategy 已删），节奏由 bot 自己在 Day 1 写的策略决定
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /simworld-data/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /portfolio_place_buy_order/)
+  // Day 1 prompt 要求 bot 写策略（含 MY_STRATEGY 前缀指令）
+  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /# MY_STRATEGY/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /规则同前/)
-  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /今天的节奏由你定/)
+  // Day N 不再有 AUTONOMY block
+  assert.doesNotMatch(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /今天的节奏由你定/)
   // 影子 workspace + journal
   assert.match(readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'SOUL.md'), 'utf8'), /soul bot7/)
   assert.ok(existsSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'memory', 'trading', 'journal.md')))
@@ -151,6 +158,39 @@ test('runWorld: a hanging bot is recorded as timeout but does not block the othe
   assert.equal(readState(worldRoot, 'r2').status, 'done')
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r2', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r2', '2024-03-14', 'bot7'), 'utf8')).status, 'timeout')
+  cleanup()
+})
+
+test('runWorld: a bot that times out on day N recovers on day N+1 after server restart', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1', 'bot7'], dates: ['2024-03-14', '2024-03-15'] })
+  config.perBotTimeoutSeconds = 1
+  config.researchDayTimeoutSeconds = 1
+  // bot7 spawn #1 (setup) hangs; spawn #2 (after restart) replies normally.
+  // bot1 always replies normally.
+  let bot7Spawns = 0
+  const start = (botId: string, _argv: string[]) => {
+    const env: Record<string, string> = {}
+    if (botId === 'bot7') {
+      bot7Spawns += 1
+      if (bot7Spawns === 1) env.STUB_CHAT_MODE = 'hang'
+    }
+    return BotServer.start(botId, {
+      argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+      readyTimeoutMs: 5000,
+      env,
+    })
+  }
+  await runWorld({ worldRoot, config, runId: 'rrestart', startBotServer: start })
+  assert.equal(readState(worldRoot, 'rrestart').status, 'done')
+  // bot1: ok both days
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-15', 'bot1'), 'utf8')).status, 'ok')
+  // bot7: day1 timeout → server restarted before day2 → day2 ok
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-14', 'bot7'), 'utf8')).status, 'timeout')
+  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-15', 'bot7'), 'utf8')).status, 'ok')
+  assert.equal(bot7Spawns, 2, 'bot7 should have been spawned twice (initial + restart)')
+  const runLog = readFileSync(P.runLogFile(worldRoot, 'rrestart'), 'utf8')
+  assert.match(runLog, /bot bot7: server restarted after prior timeout/)
   cleanup()
 })
 
@@ -293,9 +333,9 @@ test('proxyEnvSupplement: idempotent on NODE_OPTIONS that already has --use-env-
   assert.equal((sup.NODE_OPTIONS.match(/--use-env-proxy/g) ?? []).length, 1)
 })
 
-test('runWorld: every-5 cadence still drives the budget split (first/research → extended; other days → per-bot), but the prompt is uniform (no day-type banner — bot self-paces via AUTONOMY)', async () => {
-  // 用 5 个连续交易日 + 一个 dummy bot。Prompt 这层已经去掉研究日/交易日 banner（统一让 bot 自己定节奏）；
-  // 但 budget 仍然受 researchDayEvery 控制——首日 + 第 5 天用 researchDayTimeoutSeconds，其余用 perBotTimeoutSeconds。
+test('runWorld: every-5 cadence still drives the budget split (first/research → extended; other days → per-bot), but the prompt has no day-type banner or AUTONOMY (节奏由 bot 自己 Day 1 写的策略决定)', async () => {
+  // 用 5 个连续交易日 + 一个 dummy bot。Prompt 已去掉 AUTONOMY 和研究日/交易日 banner；
+  // budget 仍然受 researchDayEvery 控制——首日 + 第 5 天用 researchDayTimeoutSeconds，其余用 perBotTimeoutSeconds。
   const dates = ['2024-03-14', '2024-03-15', '2024-03-18', '2024-03-19', '2024-03-20']
   const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates })
   config.researchDayEvery = 5
@@ -303,13 +343,14 @@ test('runWorld: every-5 cadence still drives the budget split (first/research �
   config.perBotTimeoutSeconds = 3
   await runWorld({ worldRoot, config, runId: 'rcad', startBotServer: stubStartBotServer })
   const sentOf = (d: string) => readFileSync(P.sentFile(worldRoot, 'rcad', d, 'bot1'), 'utf8')
-  // First day: full rules (no AUTONOMY, no banners) — cold start, hand-holding mode.
+  // First day: full rules (no AUTONOMY, no banners) — cold start; 含策略写作要求
   assert.doesNotMatch(sentOf(dates[0]), /今天的节奏由你定/)
   assert.doesNotMatch(sentOf(dates[0]), /今天是研究日/)
   assert.doesNotMatch(sentOf(dates[0]), /今天是普通交易日/)
-  // Day 2..5 (non-first): AUTONOMY block present, identical regardless of research-day-ness.
+  assert.match(sentOf(dates[0]), /# MY_STRATEGY/, 'Day 1 must include strategy-writing instruction')
+  // Day 2..5 (non-first): 也没有 AUTONOMY，也没有 banner——uniform 精简 prompt
   for (const d of dates.slice(1)) {
-    assert.match(sentOf(d), /今天的节奏由你定/, `${d} should carry AUTONOMY block`)
+    assert.doesNotMatch(sentOf(d), /今天的节奏由你定/, `${d} should NOT carry AUTONOMY (deleted as embedded strategy)`)
     assert.doesNotMatch(sentOf(d), /今天是研究日/, `${d} prompt must not carry the deprecated research-day banner`)
     assert.doesNotMatch(sentOf(d), /今天是普通交易日/, `${d} prompt must not carry the deprecated trading-day banner`)
   }
