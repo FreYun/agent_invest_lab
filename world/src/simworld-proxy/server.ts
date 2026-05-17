@@ -22,7 +22,15 @@ export interface SimworldProxyOptions {
 export interface SimworldProxyHandle {
   port: number
   url: string
+  /** Upstream-advertised tools (name + one-line description). Empty if probe
+   *  failed at startup — daily prompt renders without the tool list block. */
+  tools: SimworldToolSummary[]
   close(): Promise<void>
+}
+
+export interface SimworldToolSummary {
+  name: string
+  description: string
 }
 
 const INJECT_KEY = 'simulated_datetime'
@@ -221,9 +229,20 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     server.listen(opts.port ?? 0, host, () => { server.off('error', reject); resolve() })
   })
   const port = (server.address() as AddressInfo).port
+
+  // One-shot upstream tools/list probe at startup so daily prompts can list
+  // every simworld-data tool. Best-effort: on failure bot still has the
+  // discover_tools fallback hint in the prompt.
+  const tools = await probeUpstreamTools(opts.upstreamUrl).catch(err => {
+    const msg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`simworld-proxy: tools/list probe failed (${msg}); daily prompt will omit tool list\n`)
+    return [] as SimworldToolSummary[]
+  })
+
   return {
     port,
     url: `http://${host}:${port}/mcp`,
+    tools,
     // server.close() alone waits for ALL active connections to drain — bot 的 MCP
     // streamable-http long session 不主动断 → close() callback 永远不 fire → teardown 卡死。
     // closeAllConnections() 强制 reset 所有 socket，再 close()。3s 硬顶兜底（极端情况）。
@@ -234,4 +253,56 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
       server.close(() => { clearTimeout(timer); done() })
     }),
   }
+}
+
+/** MCP handshake against upstream → tools/list → [{name, first-line desc}].
+ *  Streamable-HTTP transport: initialize returns an mcp-session-id header that
+ *  every subsequent request must carry. Body may be SSE (`event: …\ndata: …`)
+ *  or pure JSON; we accept both. */
+async function probeUpstreamTools(upstreamUrl: string): Promise<SimworldToolSummary[]> {
+  const baseHeaders = { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream' }
+  const initResp = await fetch(upstreamUrl, {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'world-simworld-proxy', version: '0.1' } } }),
+  })
+  if (!initResp.ok) throw new Error(`initialize HTTP ${initResp.status}`)
+  const sid = initResp.headers.get('mcp-session-id')
+  await initResp.text() // drain body to free the connection
+  if (!sid) throw new Error('upstream did not return mcp-session-id')
+
+  const sessionHeaders = { ...baseHeaders, 'mcp-session-id': sid }
+  await fetch(upstreamUrl, { method: 'POST', headers: sessionHeaders, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) }).then(r => r.text())
+
+  const listResp = await fetch(upstreamUrl, { method: 'POST', headers: sessionHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) })
+  if (!listResp.ok) throw new Error(`tools/list HTTP ${listResp.status}`)
+  const text = await listResp.text()
+  const payload = parseToolsListPayload(text)
+  const tools = (payload && typeof payload === 'object' && 'result' in payload && isObject((payload as Record<string, unknown>).result))
+    ? ((payload as { result: Record<string, unknown> }).result.tools)
+    : null
+  if (!Array.isArray(tools)) throw new Error('tools/list result missing tools array')
+
+  // Try graceful session teardown so the upstream doesn't leak a dangling
+  // session for every run. Failure is silent — server will GC eventually.
+  fetch(upstreamUrl, { method: 'DELETE', headers: sessionHeaders }).catch(() => { /* best-effort */ })
+
+  return tools
+    .filter((t): t is Record<string, unknown> => isObject(t) && typeof t.name === 'string')
+    .map(t => ({
+      name: String(t.name),
+      description: (typeof t.description === 'string' ? t.description : '').trim().split('\n')[0].trim(),
+    }))
+}
+
+function parseToolsListPayload(text: string): unknown {
+  if (text.startsWith('event:') || text.includes('\ndata:')) {
+    for (const ev of text.split(/\n\n/)) {
+      const dataLine = ev.split('\n').find(l => l.startsWith('data:'))
+      if (!dataLine) continue
+      try { return JSON.parse(dataLine.slice(5).trim()) } catch { /* try next event */ }
+    }
+    return null
+  }
+  try { return JSON.parse(text) } catch { return null }
 }

@@ -36,12 +36,15 @@ test('resumeWorld continues from state.cursor without re-running completed days'
   // 模拟"只完成了 1 天、状态 running"的中断态：删掉 day2/day3 的产物，回退 cursor
   rmSync(P.botDayDir(worldRoot, 'r1', '2024-03-15', 'bot1'), { recursive: true, force: true })
   rmSync(P.botDayDir(worldRoot, 'r1', '2024-03-18', 'bot1'), { recursive: true, force: true })
-  const s = readState(worldRoot, 'r1'); writeState(worldRoot, 'r1', { ...s, status: 'running', cursor: 1, current_date: '2024-03-14' })
+  // Stale pid simulates "previous orchestrator died" — resume must adopt the
+  // run for THIS process so future orphan checks see a live owner, not a ghost.
+  const s = readState(worldRoot, 'r1'); writeState(worldRoot, 'r1', { ...s, status: 'running', cursor: 1, current_date: '2024-03-14', pid: 1 })
 
   await resumeWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) })
   const st = readState(worldRoot, 'r1')
   assert.equal(st.status, 'done')
   assert.equal(st.cursor, 3)
+  assert.equal(st.pid, process.pid)
   assert.ok(existsSync(P.replyFile(worldRoot, 'r1', '2024-03-15', 'bot1')))
   assert.ok(existsSync(P.replyFile(worldRoot, 'r1', '2024-03-18', 'bot1')))
   cleanup()

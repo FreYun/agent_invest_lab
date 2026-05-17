@@ -5,4 +5,10 @@ description = "基金直投组合管理 MCP 服务 — 基金数据查询、持�
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.0.0",
+    "requests>=2.34.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
 ]

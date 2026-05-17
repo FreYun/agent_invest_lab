@@ -3,13 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "world": "./main.ts" },
+  "bin": {
+    "world": "./main.ts"
+  },
   "scripts": {
     "start": "node --experimental-strip-types main.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
-    "check": "node --experimental-strip-types main.ts --help && tsc -p tsconfig.json --noEmit"
+    "check": "node --experimental-strip-types main.ts --help && tsc -p tsconfig.json --noEmit",
+    "backtest": "node --experimental-strip-types src/backtest-dashboard/server.ts"
   },
-  "engines": { "node": ">=22.6.0" },
-  "dependencies": { "yaml": "^2.8.4" },
-  "devDependencies": { "@types/node": "^22.19.17", "typescript": "^5.9.3" }
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "dependencies": {
+    "yaml": "^2.8.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "typescript": "^5.9.3"
+  }
 }

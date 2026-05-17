@@ -122,14 +122,16 @@ CREATE TABLE IF NOT EXISTS fund_top_stocks (
 -- ============================================================
 
 -- 7. Bot 账户主表
---    cash             = 可用现金（available）
---    cash_in_transit  = pending BUY 冻结的现金；T+1 settle 时从 in_transit 扣减并下账
---    run_id           = 最近一次写入本行的 run_id（init_fund_account 时也填）。审计用。
+--    cash               = 可用现金（available；place_buy 只看这一列）
+--    cash_in_transit    = pending BUY 冻结的现金；T+1 settle 时从 in_transit 扣减并下账
+--    cash_receivable    = T 日已卖出、T+1 才到账的赎回款净额；settle 时 receivable→cash
+--    run_id             = 最近一次写入本行的 run_id（init_fund_account 时也填）。审计用。
 CREATE TABLE IF NOT EXISTS fund_bot_accounts (
     bot_id              TEXT PRIMARY KEY,
     initial_capital     REAL NOT NULL,
     cash                REAL NOT NULL,
     cash_in_transit     REAL NOT NULL DEFAULT 0,
+    cash_receivable     REAL NOT NULL DEFAULT 0,
     run_id              TEXT,
     created_at          TEXT DEFAULT (datetime('now')),
     updated_at          TEXT DEFAULT (datetime('now'))
@@ -243,6 +245,7 @@ CREATE TABLE IF NOT EXISTS fund_bot_daily_snapshots (
     run_id                  TEXT NOT NULL DEFAULT '',
     initial_capital         REAL,
     cash                    REAL,
+    cash_receivable         REAL NOT NULL DEFAULT 0,
     invested_value          REAL,
     total_value             REAL,
     net_value               REAL,
@@ -355,6 +358,51 @@ CREATE TABLE IF NOT EXISTS fund_paradigm_runs (
     UNIQUE (bot_id, trade_date)
 );
 
+-- 20. 基金 NAV 派生业绩表（区间口径，不年化；与 fund_bot_performance 结构对齐）
+-- 数据来源 = fund_nav 的 acc_nav 序列（累计净值，含分红再投资）+ daily_return_pct。
+-- 不同于老的 fund_performance 表（外部 upsert 灌入的多周期业绩 + 同类排名），
+-- 这张表是**系统从 NAV 自动派生的区间业绩**，全部按当前 rf=1.8% / 252 个交易日重算。
+-- 一行 = (fund_code, trade_date, period)。fund_nav 是全局的不分 run，所以 PK 没有 run_id。
+-- 口径完全对齐 fund_bot_performance（return/MDD/vol/sharpe/calmar 都不年化，rf_daily 同口径）。
+CREATE TABLE IF NOT EXISTS fund_nav_performance (
+    fund_code           TEXT NOT NULL,
+    trade_date          TEXT NOT NULL,
+    period              TEXT NOT NULL,            -- '1m' | '3m' | '6m' | '1y' | 'since_inception'
+    return_pct          REAL,                     -- 区间收益（acc_nav[end]/acc_nav[start] - 1）
+    max_drawdown_pct    REAL,                     -- 区间最大回撤（acc_nav 序列 peak-to-trough）
+    volatility_pct      REAL,                     -- 区间日收益率标准差（不年化）
+    sharpe_ratio        REAL,                     -- (mean_daily - rf_daily) / stdev_daily（不年化）
+    calmar_ratio        REAL,                     -- return_pct / abs(max_drawdown_pct)；MDD≈0 时 NULL
+    data_points         INTEGER,                  -- 该窗口实际样本数
+    window_target_days  INTEGER,                  -- 目标窗口交易日数（21/63/126/252；since_inception=NULL）
+    fallback            INTEGER NOT NULL DEFAULT 0,  -- 1 = 数据不足，已兜底使用 since_inception
+    updated_at          TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (fund_code, trade_date, period)
+);
+
+-- 19. Bot 账户业绩表（区间口径，不年化；每日随快照一起刷新）
+-- 数据来源 = fund_bot_daily_snapshots 的 net_value 序列。
+-- 一行 = (bot, trade_date, run_id, period) —— 长表布局，对齐 fund_performance 的约定。
+-- 区间口径：return/volatility/sharpe/calmar 都不做年化处理，反映真实窗口内的数字。
+-- rf = 1.8% 年化 → rf_daily = 1.8/252 %/day；sharpe = (mean_d - rf_d) / stdev_d。
+-- 不满窗口（如刚建仓 5 天 < 21 天 1m）→ 兜底使用 since_inception 全量序列，fallback=1 标识。
+CREATE TABLE IF NOT EXISTS fund_bot_performance (
+    bot_id              TEXT NOT NULL,
+    trade_date          TEXT NOT NULL,
+    run_id              TEXT NOT NULL DEFAULT '',
+    period              TEXT NOT NULL,            -- '1m' | '3m' | '6m' | '1y' | 'since_inception'
+    return_pct          REAL,                     -- 区间收益（end_nav/start_nav - 1）
+    max_drawdown_pct    REAL,                     -- 区间最大回撤（peak-to-trough on net_value）
+    volatility_pct      REAL,                     -- 区间日收益率标准差（不年化）
+    sharpe_ratio        REAL,                     -- (mean_daily - rf_daily) / stdev_daily（不年化）
+    calmar_ratio        REAL,                     -- return_pct / abs(max_drawdown_pct)；MDD≈0 时 NULL
+    data_points         INTEGER,                  -- 该窗口实际样本数
+    window_target_days  INTEGER,                  -- 目标窗口交易日数（21/63/126/252；since_inception=NULL）
+    fallback            INTEGER NOT NULL DEFAULT 0,  -- 1 = 数据不足，已兜底使用 since_inception
+    updated_at          TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (bot_id, trade_date, run_id, period)
+);
+
 -- ============================================================
 -- 索引
 -- ============================================================
@@ -376,6 +424,8 @@ CREATE INDEX IF NOT EXISTS idx_fund_alloc_runs_run_id ON fund_allocation_runs(ru
 CREATE INDEX IF NOT EXISTS idx_fund_selection_runs_bot_date ON fund_selection_runs(bot_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_fund_capability_bot_date ON fund_capability_circle(bot_id, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_fund_paradigm_bot_date ON fund_paradigm_runs(bot_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_fund_bot_perf_bot_date ON fund_bot_performance(bot_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_fund_nav_perf_code_date ON fund_nav_performance(fund_code, trade_date);
 -- run_id 相关索引在 _migrate_run_id_columns 末尾建（依赖加列动作先跑完，老库才有这些列）。
 """
 
@@ -402,11 +452,17 @@ def _migrate_paradigm_columns(conn):
 
 
 def _migrate_freeze_columns(conn):
-    """新增 cash_in_transit / pending_sell_shares 字段，支持 pending 期间的资金/份额冻结。"""
+    """新增 cash_in_transit / pending_sell_shares 字段，支持 pending 期间的资金/份额冻结。
+    cash_receivable 是新机制 SELL T+0/T+1 资金到账延迟的暂存列。
+    daily_snapshots.cash_receivable 用于把"在途赎回款"写入收盘快照。"""
     if not _column_exists(conn, "fund_bot_accounts", "cash_in_transit"):
         conn.execute("ALTER TABLE fund_bot_accounts ADD COLUMN cash_in_transit REAL NOT NULL DEFAULT 0")
+    if not _column_exists(conn, "fund_bot_accounts", "cash_receivable"):
+        conn.execute("ALTER TABLE fund_bot_accounts ADD COLUMN cash_receivable REAL NOT NULL DEFAULT 0")
     if not _column_exists(conn, "fund_bot_holdings", "pending_sell_shares"):
         conn.execute("ALTER TABLE fund_bot_holdings ADD COLUMN pending_sell_shares REAL NOT NULL DEFAULT 0")
+    if not _column_exists(conn, "fund_bot_daily_snapshots", "cash_receivable"):
+        conn.execute("ALTER TABLE fund_bot_daily_snapshots ADD COLUMN cash_receivable REAL NOT NULL DEFAULT 0")
 
 
 def _migrate_run_id_columns(conn):
@@ -437,7 +493,9 @@ def _migrate_run_id_columns(conn):
             """CREATE TABLE fund_bot_daily_snapshots (
                 bot_id TEXT NOT NULL, trade_date TEXT NOT NULL,
                 run_id TEXT NOT NULL DEFAULT '',
-                initial_capital REAL, cash REAL, invested_value REAL, total_value REAL,
+                initial_capital REAL, cash REAL,
+                cash_receivable REAL NOT NULL DEFAULT 0,
+                invested_value REAL, total_value REAL,
                 net_value REAL, daily_return_pct REAL, cumulative_return_pct REAL,
                 max_drawdown_pct REAL, equity_weight REAL, bond_weight REAL,
                 gold_weight REAL, cash_weight REAL, holdings_json TEXT,

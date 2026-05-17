@@ -22,7 +22,10 @@ python3 server.py --transport streamable-http --port 28173
 ## 关键不变量
 
 1. **NAV 唯一来源**：所有 portfolio_* 工具需要净值时一律按 `(fund_code, trade_date)` 严格查询 `fund_nav` 表，找不到直接报错——外部 loop 必须保证净值齐全。
-2. **T+1 结算 + 资金/份额冻结**：BUY 立即冻 cash → cash_in_transit；SELL 立即冻 holding.shares → pending_sell_shares。次日由系统侧 `settle_pending_fund_orders` 用下单时锁的 `reference_nav` 收口。
+2. **T+1 结算（资金侧）**：
+   - **BUY**：T 日立即扣 cash → cash_in_transit；T+1 settle 时把 cash_in_transit 释放、加 holding.shares。
+   - **SELL**：T 日立即扣 holding.shares、`cash_receivable += (gross - fee)`；T+1 settle 时把 cash_receivable 转入 cash（不再动 holdings）。
+   - 两者都用下单时锁的 `reference_nav` 收口，且赎回费按 order_date 那天的持有天数 T 日就锁死。
 3. **回测安全**：所有 `as_of_date` 入参都用**严格 `<`**——绝不暴露 `as_of_date >= trade_date` 的快照、订单、持仓数据。给定 trade_date 的当日数据在 `close_my_day` 真正调用前不会被算进任何"历史"查询。
 4. **bot 视野隔离**：每个工具都按 `bot_id` 过滤；bot A 的工具调用看不到 bot B 的任何数据。
 
@@ -149,15 +152,16 @@ portfolio_place_sell_order(bot_id, fund_code, shares, trade_date, reason="")
 |---|---|---|
 | `shares` | float | 申报份额（注意是份额不是金额），必须 > 0 |
 
-**行为**：
-1. 校验账户、有 active 持仓、`shares ≤ holding.shares - holding.pending_sell_shares`
-2. 用 trade_date 当日 NAV 作 reference_nav
-3. 立即 `holding.pending_sell_shares += shares`（**冻结**份额）；现金不动
-4. T+1 settle 时按 reference_nav 实际扣份额、加现金、释放冻结
+**行为（T+0 份额变动 / T+1 资金到账）**：
+1. 校验账户、有 active 持仓、`shares ≤ holding.shares`
+2. 用 trade_date 当日 NAV 作 reference_nav；按 order_date 持有天数算赎回费（**T 日就锁死**，settle 不再重算）
+3. **T 日**就扣 `holding.shares`、按比例扣 `amount_invested`；全部卖出 → status='closed', exit_date=T
+4. **T 日**就把净额（gross−fee）入到 `account.cash_receivable`（在途赎回款，下买单**不能**用）
+5. T+1 settle 时仅做 `cash_receivable → cash` 的转账 + 收口 order，不再动 holdings / actions
 
-**返回**：`{success, order_id, reference_nav, shares, estimated_gross, estimated_fee, estimated_proceeds, estimated_fee_rate_pct, holding_days_at_order, pending_sell_shares_after, ...}`
+**返回**：`{success, order_id, reference_nav, shares, gross, fee, proceeds, fee_rate_pct, holding_days_at_order, cash_receivable_after, ...}`
 
-**注意**：`estimated_fee` 是按下单时的持有天数算的赎回费；真正落账的赎回费按 settle 时点的真实持有天数从阶梯表重算（公募规则：申请日决定档位；本系统也按 order_date 算 holding_days）。
+**注意**：赎回费在 T 日下单时就按 `order_date - entry_date` 的持有天数 + 阶梯表锁定，写入 `order.fee` / `order.confirmed_amount`。settle 不再重算，避免与 T 日已扣的 receivable 不一致。
 
 **典型拒绝路径**：
 - `bot X 无 YYYYYY 的活跃持仓`
@@ -322,8 +326,9 @@ settle_pending_fund_orders(bot_id, as_of_date)
 ```
 
 把所有 `order_date < as_of_date` 的 pending 单按各自锁的 `reference_nav` 收口：
-- BUY → cash_in_transit -= order_amount，holdings.shares 增加
-- SELL → holdings.shares 减少，holding.pending_sell_shares 释放，cash 回流
+- **BUY** → `cash_in_transit -= order_amount`，新增 `holdings.shares`、写一条 ADD action
+- **SELL（新机制）** → `cash += order.confirmed_amount`，`cash_receivable -= order.confirmed_amount`；不动 holdings、不再写 actions（T 日已完成）
+- **SELL（老机制兼容）** → `order.confirmed_amount IS NULL` 的存量订单走老路径：扣 shares + 加 cash + 释放 pending_sell_shares
 
 这一步**不是 bot 自己干**——bot 只管下单 + 关日，结算由外部 loop 触发。
 
@@ -462,5 +467,5 @@ portfolio_get_my_trades(bot_id="bot7", as_of_date="2025-12-13", limit=50)
 ## 相关文件
 
 - 工具实现：[fund-portfolio-mcp/server.py](../server.py)（搜 `^async def portfolio_`）
-- DB schema：[fund-portfolio-mcp/db.py](../db.py)（`fund_bot_*` 7 张表 + `cash_in_transit` / `pending_sell_shares` 冻结列）
+- DB schema：[fund-portfolio-mcp/db.py](../db.py)（`fund_bot_*` 7 张表 + `cash_in_transit`（BUY 冻结）/ `cash_receivable`（SELL 在途）/ `pending_sell_shares`（仅老路径用）三个延迟现金/份额列）
 - BOT_ONLY 模式（老的极简模式，跟新链路不冲突，不推荐）：见 server.py 顶部 `_BOT_ONLY_ALLOWED` 注释
