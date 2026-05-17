@@ -227,6 +227,217 @@ def _calc_max_drawdown(nav_list: list[float]) -> float:
     return max_dd
 
 
+# fund_bot_performance 区间业绩计算的常量。
+# rf 1.8% 年化由用户指定；交易日按 252 天换算到日化 rf。
+# 所有指标都是区间口径（不年化），用户明确要求"区间波动率，不要年化"。
+_BOT_PERF_RF_ANNUAL_PCT = 1.8
+_BOT_PERF_TRADING_DAYS_PER_YEAR = 252
+_BOT_PERF_RF_DAILY_PCT = _BOT_PERF_RF_ANNUAL_PCT / _BOT_PERF_TRADING_DAYS_PER_YEAR
+# 窗口口径（交易日，不是自然日）。since_inception 取全量序列。
+_BOT_PERF_PERIODS: list[tuple[str, int | None]] = [
+    ("1m", 21),
+    ("3m", 63),
+    ("6m", 126),
+    ("1y", 252),
+    ("since_inception", None),
+]
+
+
+def _stdev(values: list[float]) -> float:
+    """样本标准差（N-1 分母）。空 / 单点返回 0.0。"""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / (n - 1)
+    return var ** 0.5
+
+
+def _compute_bot_performance(conn, bot_id: str, trade_date: str, run_id: str = "") -> None:
+    """从 fund_bot_daily_snapshots 的 net_value/daily_return_pct 序列计算区间业绩，写
+    fund_bot_performance 5 行（period = 1m/3m/6m/1y/since_inception）。
+
+    区间口径（不年化）：
+      - return_pct          = end_nav / start_nav - 1
+      - volatility_pct      = stdev(daily_return_pct in window)   ← 不乘 √252
+      - sharpe_ratio        = (mean(daily) - rf_daily) / stdev(daily)
+      - calmar_ratio        = return_pct / abs(max_drawdown_pct)
+      - max_drawdown_pct    = peak-to-trough on net_value within the window
+
+    不满窗口（如建仓 10 天 < 21 天 1m）→ 兜底使用 since_inception 全量序列，fallback=1 标识。
+
+    必须在 fund_bot_daily_snapshots 写入今日快照之后调用——本函数依赖那一行做计算输入。
+    同日多 run 时按 MAX(run_id) 取每日一条历史样本（与 _compute_fund_snapshot 的 hist_navs 同口径）。
+    """
+    # 加载历史（含今日；今日快照已经写入）；同日多 run 取 MAX(run_id) 一条。
+    rows = conn.execute(
+        "SELECT trade_date, net_value, daily_return_pct "
+        "FROM fund_bot_daily_snapshots AS s "
+        "WHERE bot_id = ? AND trade_date <= ? AND run_id = ("
+        "  SELECT MAX(run_id) FROM fund_bot_daily_snapshots "
+        "  WHERE bot_id = s.bot_id AND trade_date = s.trade_date) "
+        "ORDER BY trade_date",
+        (bot_id, trade_date)
+    ).fetchall()
+    if not rows:
+        return
+
+    total = len(rows)
+
+    for period, target in _BOT_PERF_PERIODS:
+        # 选窗口
+        if target is None or total < (target or 0):
+            window = list(rows)
+            data_points = total
+            fallback = 1 if (target is not None and total < target) else 0
+            window_target = target  # since_inception → NULL
+        else:
+            window = list(rows[-target:])
+            data_points = target
+            fallback = 0
+            window_target = target
+
+        if not window:
+            continue
+
+        # 区间收益
+        first_nav = float(window[0]["net_value"]) if window[0]["net_value"] is not None else 1.0
+        last_nav = float(window[-1]["net_value"]) if window[-1]["net_value"] is not None else 1.0
+        return_pct = (last_nav / first_nav - 1.0) * 100 if first_nav else 0.0
+
+        # 区间最大回撤（peak-to-trough on net_value within window）
+        nav_list = [float(r["net_value"]) for r in window if r["net_value"] is not None]
+        max_dd_pct = _calc_max_drawdown(nav_list) if nav_list else 0.0
+
+        # 区间波动率 + 区间夏普（都不年化）
+        daily_returns = [float(r["daily_return_pct"]) for r in window if r["daily_return_pct"] is not None]
+        volatility_pct: float | None
+        sharpe_ratio: float | None
+        if len(daily_returns) >= 2:
+            mean_d = sum(daily_returns) / len(daily_returns)
+            std_d = _stdev(daily_returns)
+            volatility_pct = std_d
+            if std_d > 1e-9:
+                sharpe_ratio = (mean_d - _BOT_PERF_RF_DAILY_PCT) / std_d
+            else:
+                sharpe_ratio = None
+        else:
+            volatility_pct = None
+            sharpe_ratio = None
+
+        # 区间卡玛：MDD≈0 → NULL（避免无穷大）
+        if max_dd_pct is not None and abs(max_dd_pct) > 1e-9:
+            calmar_ratio: float | None = return_pct / abs(max_dd_pct)
+        else:
+            calmar_ratio = None
+
+        conn.execute(
+            "INSERT OR REPLACE INTO fund_bot_performance "
+            "(bot_id, trade_date, run_id, period, return_pct, max_drawdown_pct, "
+            " volatility_pct, sharpe_ratio, calmar_ratio, data_points, "
+            " window_target_days, fallback, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (
+                bot_id, trade_date, run_id or "", period,
+                _r(return_pct, 4),
+                _r(max_dd_pct, 4) if max_dd_pct is not None else None,
+                _r(volatility_pct, 6) if volatility_pct is not None else None,
+                _r(sharpe_ratio, 6) if sharpe_ratio is not None else None,
+                _r(calmar_ratio, 6) if calmar_ratio is not None else None,
+                data_points,
+                window_target,
+                fallback,
+            )
+        )
+
+
+def _compute_fund_nav_performance(conn, fund_code: str, trade_date: str) -> None:
+    """从 fund_nav 的 acc_nav/daily_return_pct 序列计算单基金的区间业绩，写
+    fund_nav_performance 5 行（period = 1m/3m/6m/1y/since_inception）。
+
+    与 _compute_bot_performance 的口径完全对齐（区间，不年化，rf=1.8%/252）：
+      - 用 acc_nav（累计净值）算 return_pct 和 max_drawdown_pct（含分红再投资）
+      - 用 daily_return_pct 算 volatility_pct 和 sharpe_ratio（已含分红的口径）
+      - 不满窗口 → fallback 到 since_inception 全量
+    """
+    rows = conn.execute(
+        "SELECT nav_date, acc_nav, daily_return_pct FROM fund_nav "
+        "WHERE fund_code = ? AND nav_date <= ? ORDER BY nav_date",
+        (fund_code, trade_date)
+    ).fetchall()
+    if not rows:
+        return
+
+    total = len(rows)
+    for period, target in _BOT_PERF_PERIODS:
+        if target is None or total < (target or 0):
+            window = list(rows)
+            data_points = total
+            fallback = 1 if (target is not None and total < target) else 0
+            window_target = target
+        else:
+            window = list(rows[-target:])
+            data_points = target
+            fallback = 0
+            window_target = target
+
+        if not window:
+            continue
+
+        # 区间收益（acc_nav 端点）
+        first_acc = float(window[0]["acc_nav"]) if window[0]["acc_nav"] is not None else None
+        last_acc = float(window[-1]["acc_nav"]) if window[-1]["acc_nav"] is not None else None
+        if first_acc and last_acc:
+            return_pct = (last_acc / first_acc - 1.0) * 100
+        else:
+            return_pct = 0.0
+
+        # 区间最大回撤（acc_nav 序列 peak-to-trough）
+        acc_navs = [float(r["acc_nav"]) for r in window if r["acc_nav"] is not None]
+        max_dd_pct = _calc_max_drawdown(acc_navs) if acc_navs else 0.0
+
+        # 区间波动 + 区间夏普（不年化）
+        daily_returns = [float(r["daily_return_pct"]) for r in window if r["daily_return_pct"] is not None]
+        volatility_pct: float | None
+        sharpe_ratio: float | None
+        if len(daily_returns) >= 2:
+            mean_d = sum(daily_returns) / len(daily_returns)
+            std_d = _stdev(daily_returns)
+            volatility_pct = std_d
+            if std_d > 1e-9:
+                sharpe_ratio = (mean_d - _BOT_PERF_RF_DAILY_PCT) / std_d
+            else:
+                sharpe_ratio = None
+        else:
+            volatility_pct = None
+            sharpe_ratio = None
+
+        # 区间卡玛
+        if max_dd_pct is not None and abs(max_dd_pct) > 1e-9:
+            calmar_ratio: float | None = return_pct / abs(max_dd_pct)
+        else:
+            calmar_ratio = None
+
+        conn.execute(
+            "INSERT OR REPLACE INTO fund_nav_performance "
+            "(fund_code, trade_date, period, return_pct, max_drawdown_pct, "
+            " volatility_pct, sharpe_ratio, calmar_ratio, data_points, "
+            " window_target_days, fallback, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (
+                fund_code, trade_date, period,
+                _r(return_pct, 4),
+                _r(max_dd_pct, 4) if max_dd_pct is not None else None,
+                _r(volatility_pct, 6) if volatility_pct is not None else None,
+                _r(sharpe_ratio, 6) if sharpe_ratio is not None else None,
+                _r(calmar_ratio, 6) if calmar_ratio is not None else None,
+                data_points,
+                window_target,
+                fallback,
+            )
+        )
+
+
 _BUY_ACTION_TYPES = {"ADD", "BUY", "INCREASE", "INIT"}
 _SELL_ACTION_TYPES = {"REDUCE", "SELL", "DECREASE", "TAKE_PROFIT", "STOP_LOSS", "EXIT"}
 
@@ -298,8 +509,11 @@ def _fund_info_defaults(conn, fund_code: str) -> dict:
     }
 
 
-def _replay_fund_account_state(conn, bot_id: str, trade_date: str) -> dict:
+def _replay_fund_account_state(conn, bot_id: str, trade_date: str, run_id: str = "") -> dict:
     """按截至 trade_date 的已确认动作重建账户状态。
+
+    run_id 非空时仅回放该 run 自己的 actions，多 run 不串味；空字符串保留旧行为
+    （读 read-only 路径才允许，写入路径必须传 run_id 避免污染其它 run 的现态）。
 
     返回:
       {
@@ -318,14 +532,18 @@ def _replay_fund_account_state(conn, bot_id: str, trade_date: str) -> dict:
     positions: dict[str, dict] = {}
     last_exit_dates: dict[str, str] = {}
 
-    actions = conn.execute(
+    sql = (
         "SELECT fund_code, action_type, amount, shares, nav_used, fee, action_date "
         "FROM fund_bot_actions "
         "WHERE bot_id=? AND fund_code IS NOT NULL AND fund_code != '' "
         "  AND action_date IS NOT NULL AND action_date <= ? "
-        "ORDER BY action_date, action_id",
-        (bot_id, trade_date),
-    ).fetchall()
+    )
+    params: list = [bot_id, trade_date]
+    if run_id:
+        sql += "  AND run_id = ? "
+        params.append(run_id)
+    sql += "ORDER BY action_date, action_id"
+    actions = conn.execute(sql, params).fetchall()
 
     for action in actions:
         fund_code = action["fund_code"]
@@ -377,15 +595,20 @@ def _replay_fund_account_state(conn, bot_id: str, trade_date: str) -> dict:
             current["shares"] += shares
             current["cost"] += amount if amount > 0 else shares * nav_used
         elif action_type in _SELL_ACTION_TYPES:
-            if amount > 0:
-                cash += max(amount - fee, 0.0)
+            # 防 phantom cash：SELL action 在 actions 表里登记的可能比该 run 实际持有的份额多
+            # （上游污染或下单时读到的 holdings 含其它 run 数据导致超额下单）。
+            # 老逻辑无条件按 amount 入账现金 → 凭空冒出净值。
+            # 修复：先按"实际可卖份额"截断，再按截断比例入账现金；超额部分既不卖也不入账。
             current = positions.get(fund_code)
-            if not current or current["shares"] <= 1e-6:
-                continue
-            sell_shares = min(shares, current["shares"]) if shares > 0 else 0.0
-            if sell_shares <= 1e-6:
-                continue
-            shares_before = current["shares"]
+            available = float(current["shares"]) if current else 0.0
+            if available <= 1e-6 or shares <= 0:
+                continue  # 没份额 / 没解析出请求份额 → 整笔作废，cash 也不动
+            sell_shares = min(shares, available)
+            cap_ratio = sell_shares / shares  # 实际成交占请求的比例（<=1.0）
+            effective_amount = (amount or sell_shares * nav_used) * cap_ratio
+            effective_fee = fee * cap_ratio
+            cash += max(effective_amount - effective_fee, 0.0)
+            shares_before = available
             proportion = min(sell_shares / shares_before, 1.0)
             current["cost"] -= current["cost"] * proportion
             current["shares"] -= sell_shares
@@ -402,7 +625,7 @@ def _replay_fund_account_state(conn, bot_id: str, trade_date: str) -> dict:
     return {"cash": cash, "positions": active_positions, "last_exit_dates": last_exit_dates}
 
 
-def _replay_and_repair_fund_holdings(conn, bot_id: str, trade_date: str) -> int:
+def _replay_and_repair_fund_holdings(conn, bot_id: str, trade_date: str, run_id: str = "") -> int:
     """按截至 trade_date 的 action 历史重建账户，并回写当前 active holdings / cash。
 
     口径：
@@ -411,9 +634,11 @@ def _replay_and_repair_fund_holdings(conn, bot_id: str, trade_date: str) -> int:
       shares -= amount/real_nav, cash += amount-fee
     - 成本按卖出份额占 shares_before 的比例扣减
 
+    run_id 非空时只回放该 run 自己的 actions，确保多 run 并行时彼此 holdings 互不干扰。
+
     Returns: 修复后的 active 持仓数量
     """
-    state = _replay_fund_account_state(conn, bot_id, trade_date)
+    state = _replay_fund_account_state(conn, bot_id, trade_date, run_id=run_id)
     positions = state["positions"]
     last_exit_dates = state["last_exit_dates"]
     cash_v = float(state["cash"] or 0.0)
@@ -423,10 +648,17 @@ def _replay_and_repair_fund_holdings(conn, bot_id: str, trade_date: str) -> int:
         (_r(cash_v), bot_id),
     )
 
-    active_rows = conn.execute(
-        "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND status='active'",
-        (bot_id,),
-    ).fetchall()
+    # run_id 非空时只看本 run 的 active 行；空字符串保留旧行为（cross-run，仅 admin 调试）。
+    if run_id:
+        active_rows = conn.execute(
+            "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND run_id=? AND status='active'",
+            (bot_id, run_id),
+        ).fetchall()
+    else:
+        active_rows = conn.execute(
+            "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND status='active'",
+            (bot_id,),
+        ).fetchall()
     active_by_code = {row["fund_code"]: dict(row) for row in active_rows}
 
     total_market_value = 0.0
@@ -486,15 +718,15 @@ def _replay_and_repair_fund_holdings(conn, bot_id: str, trade_date: str) -> int:
                 "(bot_id, fund_code, fund_name, share_class, asset_class, role, "
                 "entry_date, entry_nav, latest_nav, shares, amount_invested, "
                 "market_value, unrealized_pnl, unrealized_pnl_pct, "
-                "target_weight, actual_weight, holding_days, high_nav, status, thesis) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'active', ?)",
+                "target_weight, actual_weight, holding_days, high_nav, status, thesis, run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'active', ?, ?)",
                 (
                     bot_id, fund_code, payload["fund_name"], payload["share_class"], payload["asset_class"],
                     payload["role"], payload["entry_date"], _r(payload["entry_nav"], 6),
                     _r(payload["latest_nav"], 6), _r(payload["shares"], 6), _r(payload["amount_invested"]),
                     _r(payload["market_value"]), _r(payload["unrealized_pnl"]),
                     _r(payload["unrealized_pnl_pct"], 4), _r(actual_weight, 6),
-                    payload["holding_days"], _r(payload["high_nav"], 6), payload["thesis"],
+                    payload["holding_days"], _r(payload["high_nav"], 6), payload["thesis"], run_id,
                 ),
             )
         repaired += 1
@@ -672,7 +904,18 @@ async def get_fund_detail(fund_code: str) -> str:
 
 @mcp.tool()
 async def get_fund_perf(fund_code: str) -> str:
-    """获取基金所有区间的绩效数据。"""
+    """获取基金所有区间的绩效数据。
+
+    返回两块业绩：
+      intervals          → 老 fund_performance 表的外部 upsert 业绩（含同类排名）；
+                            按最新 as_of_date 取该日全部 period 行。
+      nav_intervals      → fund_nav_performance 表的 NAV 派生业绩（与 bot 账户业绩同口径，
+                            区间不年化，rf=1.8%/252）；按最新 trade_date 取该日全部 period 行。
+                            字段：return_pct / max_drawdown_pct / volatility_pct /
+                            sharpe_ratio / calmar_ratio / data_points / window_target_days /
+                            fallback（1=数据不足兜底到 since_inception）。
+    任一表无数据时对应字段返回空列表；两个都没数据才认为是真"无绩效"。
+    """
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT as_of_date, period, return_pct, rank_pct, rank_text, "
@@ -680,15 +923,44 @@ async def get_fund_perf(fund_code: str) -> str:
             "FROM fund_performance WHERE fund_code = ? ORDER BY as_of_date DESC",
             (fund_code,)
         ).fetchall()
+        if rows:
+            latest_date = rows[0]["as_of_date"]
+            intervals = [dict(r) for r in rows if r["as_of_date"] == latest_date]
+        else:
+            intervals = []
 
-        if not rows:
+        nav_rows = conn.execute(
+            "SELECT trade_date, period, return_pct, max_drawdown_pct, "
+            " volatility_pct, sharpe_ratio, calmar_ratio, "
+            " data_points, window_target_days, fallback "
+            "FROM fund_nav_performance WHERE fund_code = ? ORDER BY trade_date DESC",
+            (fund_code,)
+        ).fetchall()
+        if nav_rows:
+            latest_nav_date = nav_rows[0]["trade_date"]
+            nav_intervals_rows = [r for r in nav_rows if r["trade_date"] == latest_nav_date]
+            nav_intervals = [{
+                **dict(r),
+                "fallback": bool(r["fallback"]),
+            } for r in nav_intervals_rows]
+        else:
+            nav_intervals = []
+
+        if not intervals and not nav_intervals:
             return json.dumps({"success": False, "message": f"基金 {fund_code} 无绩效数据"}, ensure_ascii=False)
 
-        latest_date = rows[0]["as_of_date"]
-        intervals = [dict(r) for r in rows if r["as_of_date"] == latest_date]
-
         return json.dumps({
-            "success": True, "fund_code": fund_code, "intervals": intervals,
+            "success": True,
+            "fund_code": fund_code,
+            "intervals": intervals,
+            "nav_intervals": nav_intervals,
+            # 暴露 NAV 派生业绩的计算口径，方便 bot 知道这套数字是怎么算的
+            "nav_perf_meta": {
+                "rf_annual_pct": _BOT_PERF_RF_ANNUAL_PCT,
+                "rf_daily_pct": _r(_BOT_PERF_RF_DAILY_PCT, 6),
+                "trading_days_per_year": _BOT_PERF_TRADING_DAYS_PER_YEAR,
+                "windows_trading_days": {"1m": 21, "3m": 63, "6m": 126, "1y": 252, "since_inception": None},
+            },
         }, ensure_ascii=False)
 
 
@@ -965,7 +1237,7 @@ async def save_fund_holdings(bot_id: str, holdings_json: str, cash: float = -1, 
             )
 
         # 有 action 历史的持仓，统一用回放纠正金额；纯占位的新建仓不受影响（actions 表无记录）
-        repaired = _replay_and_repair_fund_holdings(conn, bot_id, today)
+        repaired = _replay_and_repair_fund_holdings(conn, bot_id, today, run_id=run_id)
 
     return json.dumps({
         "success": True, "bot_id": bot_id,
@@ -982,11 +1254,58 @@ async def save_fund_holdings(bot_id: str, holdings_json: str, cash: float = -1, 
 # ============================================================
 
 
-def _get_active_holding(conn, bot_id: str, fund_code: str):
+def _get_active_holding(conn, bot_id: str, fund_code: str, run_id: str = ""):
+    """run_id 非空时严格只看本 run 的 active 行；空字符串保留旧行为（cross-run）。
+    bot 自助路径必须传 run_id，避免新 run 误读到老 run 残留的 active holding。"""
+    if run_id:
+        return conn.execute(
+            "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND run_id=? AND status='active'",
+            (bot_id, fund_code, run_id),
+        ).fetchone()
     return conn.execute(
         "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND status='active'",
         (bot_id, fund_code),
     ).fetchone()
+
+
+def _bot_run_cash_view(conn, bot_id: str, run_id: str, as_of_date: str = "") -> dict:
+    """给 bot 暴露的"本 run 视角下的资金状态"。
+
+    accounts.cash / cash_in_transit / cash_receivable 当前 PK=bot_id 单列，会被跨 run 写入污染；
+    所以读 cash 不再直接信任 accounts 行，而是按本 run 的 actions+pending orders 重算：
+
+      cash_total_after_settle = _replay_fund_account_state(run_id)["cash"]   # 假设所有 pending 已 settle
+      in_transit             = sum(本 run 自己的 pending BUY order_amount)
+      receivable             = sum(本 run 自己的 pending SELL confirmed_amount)
+      cash_available         = cash_total_after_settle - in_transit - receivable
+
+    口径推导：
+      - place_buy_order: 写 pending order；BUY 的 ADD action 在 settle 时才写
+        → replay 未感知 → cash_total 没扣 → 用 in_transit 补扣
+      - place_sell_order: T 日就写 REDUCE action（amount=gross）+ pending order
+        → replay 把 cash 直接加上 → 实际仍在 receivable → 用 receivable 补扣
+    """
+    as_of_date = as_of_date or datetime.now().strftime("%Y-%m-%d")
+    state = _replay_fund_account_state(conn, bot_id, as_of_date, run_id=run_id)
+    cash_total = float(state["cash"] or 0.0)
+    in_transit_row = conn.execute(
+        "SELECT COALESCE(SUM(order_amount), 0) AS s FROM fund_bot_orders "
+        "WHERE bot_id=? AND order_run_id=? AND order_type='buy' AND status='pending'",
+        (bot_id, run_id),
+    ).fetchone()
+    in_transit = float(in_transit_row["s"] or 0.0)
+    recv_row = conn.execute(
+        "SELECT COALESCE(SUM(confirmed_amount), 0) AS s FROM fund_bot_orders "
+        "WHERE bot_id=? AND order_run_id=? AND order_type='sell' AND status='pending'",
+        (bot_id, run_id),
+    ).fetchone()
+    receivable = float(recv_row["s"] or 0.0)
+    cash_available = cash_total - in_transit - receivable
+    return {
+        "cash_available": cash_available,
+        "cash_in_transit": in_transit,
+        "cash_receivable": receivable,
+    }
 
 
 def _strict_nav(conn, fund_code: str, trade_date: str) -> float | None:
@@ -1051,7 +1370,8 @@ async def portfolio_place_buy_order(
         nav = _strict_nav(conn, fund_code, trade_date)
         if nav is None:
             return json.dumps({"success": False, "message": f"fund_nav 缺失 ({fund_code}, {trade_date})；外部 loop 须保证净值齐全"}, ensure_ascii=False)
-        cash = float(account["cash"] or 0.0)
+        view = _bot_run_cash_view(conn, bot_id, run_id, trade_date)
+        cash = float(view["cash_available"])
         if amount > cash + 1e-6:
             return json.dumps({"success": False, "message": f"现金不足：amount={amount} > cash={cash:.2f}"}, ensure_ascii=False)
 
@@ -1068,7 +1388,9 @@ async def portfolio_place_buy_order(
         )
         order_id = cur.lastrowid
         new_cash = cash - amount
-        new_in_transit = float(account["cash_in_transit"] or 0.0) + amount
+        new_in_transit = float(view["cash_in_transit"]) + amount
+        # accounts 表 PK 仍是 bot_id；这里写本 run 的"快照"值，便于人工 debug。
+        # bot 的真实视图永远走 _bot_run_cash_view（按 run_id 回放），不依赖 accounts.cash 的脏值。
         conn.execute(
             "UPDATE fund_bot_accounts SET cash=?, cash_in_transit=?, run_id=?, updated_at=datetime('now') WHERE bot_id=?",
             (_r(new_cash), _r(new_in_transit), run_id, bot_id)
@@ -1100,19 +1422,24 @@ async def portfolio_place_sell_order(
     reason: str = "",
     run_id: str = "",
 ) -> str:
-    """Bot 在 T 日自助下卖出单（按当日 NAV，T+1 settle）。
+    """Bot 在 T 日自助下卖出单（T+0 份额变动 / T+1 资金到账）。
 
-    行为：
-      - 用 trade_date 当日 NAV 作 reference_nav；order_amount 字段存"想卖出的份额"
-      - 立即把 holding.pending_sell_shares += shares（冻结），份额暂不出账户
-      - status='pending'；T+1 settle 时实际扣 shares、加 cash、释放 pending 份额
+    新机制（与 BUY 的"T 日扣现金、T+1 加份额"对称）：
+      - 用 trade_date 当日 NAV 锁定 reference_nav
+      - 按 order_date 那天的真实持有天数算赎回费（T 日就锁死，settle 不再重算）
+      - T 日：扣 holding.shares、按比例扣 amount_invested；全部卖出 → status='closed', exit_date=T
+              cash_receivable += (gross - fee)（在途赎回款，T+1 才转入 cash，下买单不能用）
+              fund_bot_actions 同步插入 REDUCE 一条（action_date=trade_date）
+              order 写入：reference_nav / fee / confirmed_shares / confirmed_amount 都是最终值
+              status='pending'、confirm_date=NULL（settle 时再填）
+      - T+1：settle 仅做 cash_receivable→cash 的转账 + 收口 order，不再动 holdings / actions
 
     校验：
       - 账户存在；持仓存在且 active
-      - shares > 0 且 ≤ holding.shares - holding.pending_sell_shares（已冻结的不能再卖）
+      - shares > 0 且 ≤ holding.shares（新机制 shares 实时反映可卖额，pending_sell_shares 保持 0）
       - trade_date 在 fund_nav 有 nav
 
-    返回 JSON 带 order_id / reference_nav / estimated_proceeds / estimated_fee。
+    pending_sell_shares 字段保留只是兼容存量旧路径订单，新订单不再用份额冻结。
     """
     err = _require_run_id(run_id)
     if err:
@@ -1124,7 +1451,8 @@ async def portfolio_place_sell_order(
         account = _get_account(conn, bot_id)
         if not account:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无账户"}, ensure_ascii=False)
-        holding = _get_active_holding(conn, bot_id, fund_code)
+        # 按 run_id 找持仓——bot 只能卖本 run 自己持有的 shares，不能误碰其它 run 的存量行。
+        holding = _get_active_holding(conn, bot_id, fund_code, run_id=run_id)
         if not holding:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无 {fund_code} 的活跃持仓"}, ensure_ascii=False)
         nav = _strict_nav(conn, fund_code, trade_date)
@@ -1136,27 +1464,66 @@ async def portfolio_place_sell_order(
         if shares > sellable + 1e-6:
             return json.dumps({"success": False, "message": f"可卖份额不足：want={shares} sellable={sellable:.4f} (total={total_shares:.4f}, pending_sell={already_pending:.4f})"}, ensure_ascii=False)
 
-        # 估算赎回费 — 按当前 holding_days + 当前阶梯算（settle 时按真实持有天数重算）
+        # 赎回费按 order_date 那天的真实持有天数算（T 日就锁死，不再到 settle 时重算）
         _, redeem_tiers = _fund_fee_rates(conn, fund_code)
         holding_days = _calc_holding_days(holding["entry_date"] or trade_date, trade_date)
         rf_rate = _redeem_fee_rate(redeem_tiers, holding_days)
         gross = shares * nav
-        est_fee = gross * rf_rate
-        est_proceeds = gross - est_fee
+        fee = gross * rf_rate
+        proceeds = gross - fee
 
+        # T 日扣 holding.shares + amount_invested 按比例扣减
+        new_shares = total_shares - shares
+        if new_shares <= 1e-6:
+            conn.execute(
+                "UPDATE fund_bot_holdings SET status='closed', exit_date=?, shares=0, "
+                "amount_invested=0, market_value=0, latest_nav=?, run_id=? WHERE holding_id=?",
+                (trade_date, _r(nav, 6), run_id, holding["holding_id"])
+            )
+        else:
+            ratio_left = new_shares / total_shares
+            new_cost = float(holding["amount_invested"] or 0.0) * ratio_left
+            new_mv = new_shares * nav
+            conn.execute(
+                "UPDATE fund_bot_holdings SET shares=?, amount_invested=?, latest_nav=?, "
+                "market_value=?, unrealized_pnl=?, unrealized_pnl_pct=?, run_id=? WHERE holding_id=?",
+                (_r(new_shares, 6), _r(new_cost), _r(nav, 6), _r(new_mv),
+                 _r(new_mv - new_cost),
+                 _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
+                 run_id, holding["holding_id"])
+            )
+
+        # account.cash_receivable += proceeds；cash 不动（T+1 settle 时再划转）
+        new_receivable = float(account["cash_receivable"] or 0.0) + proceeds
+        conn.execute(
+            "UPDATE fund_bot_accounts SET cash_receivable=?, run_id=?, updated_at=datetime('now') "
+            "WHERE bot_id=?",
+            (_r(new_receivable), run_id, bot_id)
+        )
+
+        # 插入 REDUCE action（action_date=trade_date）。amount 存 gross，与现行 replay 口径一致。
+        conn.execute(
+            "INSERT INTO fund_bot_actions "
+            "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
+            "nav_used, amount, shares, fee, reason, action_date, run_id) "
+            "VALUES (NULL, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
+            (bot_id, fund_code, _r(nav, 6), _r(gross), _r(shares, 6), _r(fee),
+             reason or f"T 日赎回 (nav={nav:.4f} 持有 {holding_days} 天 赎回费 {rf_rate*100:.2f}%)",
+             trade_date, run_id)
+        )
+
+        # 插入 order：confirmed_shares / confirmed_amount / fee 在 T 日就是最终值；settle 只补 confirm_date
         cur = conn.execute(
             "INSERT INTO fund_bot_orders "
             "(review_id, bot_id, fund_code, fund_name, order_type, order_date, confirm_date, "
-            " order_amount, reference_nav, action_reason, status, order_run_id) "
-            "VALUES (NULL, ?, ?, ?, 'sell', ?, NULL, ?, ?, ?, 'pending', ?)",
-            (bot_id, fund_code, holding["fund_name"], trade_date, _r(shares, 6), _r(nav, 6), reason or "", run_id)
+            " order_amount, reference_nav, confirm_nav, confirmed_shares, confirmed_amount, "
+            " fee, action_reason, status, order_run_id) "
+            "VALUES (NULL, ?, ?, ?, 'sell', ?, NULL, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?)",
+            (bot_id, fund_code, holding["fund_name"], trade_date,
+             _r(shares, 6), _r(nav, 6), _r(shares, 6), _r(proceeds), _r(fee),
+             reason or "", run_id)
         )
         order_id = cur.lastrowid
-        new_pending = already_pending + shares
-        conn.execute(
-            "UPDATE fund_bot_holdings SET pending_sell_shares=?, run_id=? WHERE holding_id=?",
-            (_r(new_pending, 6), run_id, holding["holding_id"])
-        )
 
     return json.dumps({
         "success": True,
@@ -1166,14 +1533,14 @@ async def portfolio_place_sell_order(
         "trade_date": trade_date,
         "reference_nav": _r(nav, 6),
         "shares": _r(shares, 6),
-        "estimated_gross": _r(gross),
-        "estimated_fee": _r(est_fee),
-        "estimated_proceeds": _r(est_proceeds),
-        "estimated_fee_rate_pct": round(rf_rate * 100, 4),
+        "gross": _r(gross),
+        "fee": _r(fee),
+        "proceeds": _r(proceeds),
+        "fee_rate_pct": round(rf_rate * 100, 4),
         "holding_days_at_order": holding_days,
         "status": "pending",
-        "pending_sell_shares_after": _r(new_pending, 6),
-        "note": "T+1 settle 后实际扣份额、加 cash；赎回费以真实持有天数重算",
+        "cash_receivable_after": _r(new_receivable),
+        "note": "T 日已扣 shares；proceeds 已锁定 cash_receivable，T+1 settle 后转入 cash",
     }, ensure_ascii=False)
 
 
@@ -1182,6 +1549,7 @@ async def portfolio_get_my_history(
     bot_id: str,
     limit: int = 30,
     fund_code: str = "",
+    run_id: str = "",
 ) -> str:
     """Bot 查看自己的账户/持仓/订单历史，一次返回 4 块：
 
@@ -1190,7 +1558,8 @@ async def portfolio_get_my_history(
       orders      最近 N 单订单（pending + confirmed + 其他），按 order_date desc
       summary     当前 pending 单计数与冻结金额合计
 
-    传 fund_code 可只看那只基金；不传 = 全部。"""
+    传 fund_code 可只看那只基金；不传 = 全部。
+    run_id 非空 → 只返回该 run 自己的 holdings/orders/资金状态；空字符串保留旧的跨 run 视图（仅 admin 调试用）。"""
     with get_conn() as conn:
         account = _get_account(conn, bot_id)
         if not account:
@@ -1198,6 +1567,9 @@ async def portfolio_get_my_history(
 
         h_args: list = [bot_id]
         h_sql = "SELECT * FROM fund_bot_holdings WHERE bot_id=?"
+        if run_id:
+            h_sql += " AND run_id=?"
+            h_args.append(run_id)
         if fund_code:
             h_sql += " AND fund_code=?"
             h_args.append(fund_code)
@@ -1206,6 +1578,9 @@ async def portfolio_get_my_history(
 
         o_args: list = [bot_id]
         o_sql = "SELECT * FROM fund_bot_orders WHERE bot_id=?"
+        if run_id:
+            o_sql += " AND (order_run_id=? OR settle_run_id=?)"
+            o_args.extend([run_id, run_id])
         if fund_code:
             o_sql += " AND fund_code=?"
             o_args.append(fund_code)
@@ -1213,11 +1588,20 @@ async def portfolio_get_my_history(
         o_args.append(int(max(1, limit)))
         orders = [dict(r) for r in conn.execute(o_sql, o_args).fetchall()]
 
-        # 估值：用每只持仓 latest_nav × shares（含 pending sell 那部分，因为份额没出账）
+        # 估值：active 持仓 latest_nav × shares。新机制 SELL 在 T 日就已扣 shares，持仓不再含已卖部分。
         market_value = sum(float(h.get("market_value") or 0.0) for h in holdings if h.get("status") == "active")
-        cash = float(account["cash"] or 0.0)
-        in_transit = float(account.get("cash_in_transit") or 0.0)
-        total = cash + in_transit + market_value
+        # cash / in_transit / receivable 用本 run 视角，避免被其它 run 写入 accounts 时污染。
+        # 没传 run_id 时（admin 调试路径）回退到 accounts 表行（与旧行为一致）。
+        if run_id:
+            view = _bot_run_cash_view(conn, bot_id, run_id)
+            cash = float(view["cash_available"])
+            in_transit = float(view["cash_in_transit"])
+            receivable = float(view["cash_receivable"])
+        else:
+            cash = float(account["cash"] or 0.0)
+            in_transit = float(account.get("cash_in_transit") or 0.0)
+            receivable = float(account.get("cash_receivable") or 0.0)
+        total = cash + in_transit + receivable + market_value
 
         pending = [o for o in orders if o.get("status") == "pending"]
         pending_buy_amount = sum(float(o["order_amount"] or 0.0) for o in pending if o["order_type"] == "buy")
@@ -1230,6 +1614,7 @@ async def portfolio_get_my_history(
                 "initial_capital": _r(float(account["initial_capital"] or 0.0)),
                 "cash_available": _r(cash),
                 "cash_in_transit": _r(in_transit),
+                "cash_receivable": _r(receivable),
                 "market_value": _r(market_value),
                 "total_value": _r(total),
             },
@@ -1269,22 +1654,25 @@ async def portfolio_close_my_day(bot_id: str, trade_date: str, run_id: str = "")
             return json.dumps(snap, ensure_ascii=False)
         account = _get_account(conn, bot_id)
 
+        # 持仓/pending 单都严格只看本 run 的行——避免 bot 看到其它 run 的残留状态。
         holdings_rows = conn.execute(
-            "SELECT * FROM fund_bot_holdings WHERE bot_id=? ORDER BY status, fund_code",
-            (bot_id,),
+            "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND run_id=? ORDER BY status, fund_code",
+            (bot_id, run_id),
         ).fetchall()
         pendings = conn.execute(
             "SELECT order_id, fund_code, fund_name, order_type, order_date, order_amount, "
             " reference_nav, action_reason, created_at "
-            "FROM fund_bot_orders WHERE bot_id=? AND status='pending' "
+            "FROM fund_bot_orders WHERE bot_id=? AND status='pending' AND order_run_id=? "
             "ORDER BY order_date, order_id",
-            (bot_id,),
+            (bot_id, run_id),
         ).fetchall()
 
-        cash = float(account["cash"] or 0.0)
-        in_transit = float(account["cash_in_transit"] or 0.0)
+        view = _bot_run_cash_view(conn, bot_id, run_id, trade_date)
+        cash = float(view["cash_available"])
+        in_transit = float(view["cash_in_transit"])
+        receivable = float(view["cash_receivable"])
         active_mv = sum(float(h["market_value"] or 0.0) for h in holdings_rows if h["status"] == "active")
-        total = cash + in_transit + active_mv
+        total = cash + in_transit + receivable + active_mv
         initial = float(account["initial_capital"] or 0.0)
         net_value = total / initial if initial else 1.0
 
@@ -1333,6 +1721,7 @@ async def portfolio_close_my_day(bot_id: str, trade_date: str, run_id: str = "")
             "initial_capital": _r(initial),
             "cash_available": _r(cash),
             "cash_in_transit": _r(in_transit),
+            "cash_receivable": _r(receivable),
             "market_value": _r(active_mv),
             "total_value": _r(total),
             "net_value": _r(net_value, 6),
@@ -1359,6 +1748,7 @@ async def portfolio_get_my_performance(
     bot_id: str,
     as_of_date: str,
     daily_series_limit: int = 120,
+    run_id: str = "",
 ) -> str:
     """Bot 查看自己的历史投资表现，**严格只看 as_of_date 之前的数据**（trade_date < as_of_date）。
 
@@ -1367,11 +1757,28 @@ async def portfolio_get_my_performance(
       as_of_date          截止日（YYYY-MM-DD），可见数据 = trade_date < as_of_date
       daily_series_limit  返回最近 N 行 daily_series（默认 120 个交易日；传 0 = 全量）
 
-    返回 4 块：
+    返回 5 块：
       summary            起始/最新日、累计收益、最大回撤、年化、波动、夏普(rf=0)、最好/最差日、胜负平
       trades_summary     已成交的 buy / sell 数量 / 总额 / 总手续费 / 完整轮次数
       completed_positions  已平仓持仓（每笔 round-trip 的进出 / 持有天数 / 单笔收益率）
       daily_series       逐日净值时间序列（限量取最近 N 天，按 trade_date 升序）
+      interval_metrics   区间业绩表，分两块：
+                         metrics              → 账户级（fund_bot_performance），5 个 period 一次性返回：
+                                                 - 1m / 3m / 6m / 1y：21/63/126/252 个交易日窗口；不满窗口兜底到 since_inception，fallback=true 标识
+                                                 - since_inception：建仓以来全量
+                                                 每个 period 返回 {return_pct, max_drawdown_pct, volatility_pct,
+                                                 sharpe_ratio, calmar_ratio, data_points, window_target_days, fallback}
+                         holdings_performance → 当前 active 持仓的每只基金（fund_nav_performance），
+                                                 key = fund_code，value 含 {fund_name, asset_class, role,
+                                                 market_value, actual_weight, holding_days, unrealized_pnl_pct,
+                                                 perf_as_of_date, metrics: {1m, 3m, 6m, 1y, since_inception}}
+                                                 日期对齐 as_of_perf_date；个别基金当日没 perf 时 perf_as_of_date
+                                                 回退到 ≤ as_of_perf_date 的最近一日（不越过 as_of_date 偷看未来）
+                         所有指标都是**区间口径不年化**；rf=1.8% 年化按 252 个交易日折算到日化 rf。
+                         sharpe = (mean_daily_return - rf_daily) / stdev_daily_return；
+                         calmar = return_pct / abs(max_drawdown_pct)。
+                         账户业绩源 = fund_bot_daily_snapshots.net_value 序列；
+                         基金业绩源 = fund_nav.acc_nav + daily_return_pct 序列。
 
     所有数据严格 < as_of_date。给定日期当天还没 portfolio_close_my_day 时本来就不会被算进去；
     提前一天的话也不会含 as_of_date 当日的快照——回测里禁止偷看未来。
@@ -1382,14 +1789,18 @@ async def portfolio_get_my_performance(
         if not account:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无账户"}, ensure_ascii=False)
 
-        snaps = conn.execute(
+        snap_sql = (
             "SELECT trade_date, initial_capital, cash, invested_value, total_value, net_value, "
             " daily_return_pct, cumulative_return_pct, max_drawdown_pct "
             "FROM fund_bot_daily_snapshots "
-            "WHERE bot_id=? AND trade_date < ? "
-            "ORDER BY trade_date",
-            (bot_id, as_of_date),
-        ).fetchall()
+            "WHERE bot_id=? AND trade_date < ?"
+        )
+        snap_args: list = [bot_id, as_of_date]
+        if run_id:
+            snap_sql += " AND run_id=?"
+            snap_args.append(run_id)
+        snap_sql += " ORDER BY trade_date"
+        snaps = conn.execute(snap_sql, snap_args).fetchall()
         if not snaps:
             return json.dumps({
                 "success": True,
@@ -1436,12 +1847,16 @@ async def portfolio_get_my_performance(
         worst = min(snaps, key=lambda s: float(s["daily_return_pct"] or 1e9))
 
         # 交易统计：只统计 confirmed 单 + order_date < as_of_date
-        orders = conn.execute(
+        ord_sql = (
             "SELECT order_type, order_amount, confirmed_amount, confirmed_shares, fee, status, order_date "
             "FROM fund_bot_orders "
-            "WHERE bot_id=? AND order_date < ? AND status='confirmed'",
-            (bot_id, as_of_date),
-        ).fetchall()
+            "WHERE bot_id=? AND order_date < ? AND status='confirmed'"
+        )
+        ord_args: list = [bot_id, as_of_date]
+        if run_id:
+            ord_sql += " AND (order_run_id=? OR settle_run_id=?)"
+            ord_args.extend([run_id, run_id])
+        orders = conn.execute(ord_sql, ord_args).fetchall()
         buy_count = sum(1 for o in orders if o["order_type"] == "buy")
         sell_count = sum(1 for o in orders if o["order_type"] == "sell")
         total_buy_amount = sum(float(o["order_amount"] or 0.0) for o in orders if o["order_type"] == "buy")
@@ -1451,13 +1866,17 @@ async def portfolio_get_my_performance(
         # 已平仓持仓 = 每笔 round-trip
         # 注意：holding.amount_invested 是"平仓时刻剩余成本基"（被部分卖出按比例摊薄过），
         # 不能当 round-trip 的本金。要按持仓周期内全部 buy 单 order_amount 之和当本金。
-        closed_holdings = conn.execute(
+        closed_sql = (
             "SELECT fund_code, fund_name, entry_date, exit_date "
             "FROM fund_bot_holdings "
-            "WHERE bot_id=? AND status='closed' AND exit_date < ? "
-            "ORDER BY exit_date",
-            (bot_id, as_of_date),
-        ).fetchall()
+            "WHERE bot_id=? AND status='closed' AND exit_date < ?"
+        )
+        closed_args: list = [bot_id, as_of_date]
+        if run_id:
+            closed_sql += " AND run_id=?"
+            closed_args.append(run_id)
+        closed_sql += " ORDER BY exit_date"
+        closed_holdings = conn.execute(closed_sql, closed_args).fetchall()
         completed_positions = []
         for h in closed_holdings:
             d0 = h["entry_date"] or "0000-00-00"
@@ -1508,6 +1927,96 @@ async def portfolio_get_my_performance(
             "max_drawdown_pct": _r(float(s["max_drawdown_pct"] or 0.0), 4),
         } for s in series_rows]
 
+        # 区间业绩（fund_bot_performance；区间口径不年化；rf=1.8% 年化按 252 个交易日折算到日化）
+        # 取最新一日的 5 个 period 行（trade_date < as_of_date，禁止偷看未来）；同日多 run 取 MAX(run_id)。
+        perf_date_row = conn.execute(
+            "SELECT MAX(trade_date) AS d FROM fund_bot_performance "
+            "WHERE bot_id = ? AND trade_date < ?",
+            (bot_id, as_of_date),
+        ).fetchone()
+        perf_anchor_date = perf_date_row["d"] if perf_date_row and perf_date_row["d"] else None
+        interval_metrics: dict = {}
+        if perf_anchor_date:
+            perf_run_row = conn.execute(
+                "SELECT MAX(run_id) AS r FROM fund_bot_performance "
+                "WHERE bot_id = ? AND trade_date = ?",
+                (bot_id, perf_anchor_date),
+            ).fetchone()
+            perf_run = perf_run_row["r"] if perf_run_row and perf_run_row["r"] is not None else ""
+            perf_rows = conn.execute(
+                "SELECT period, return_pct, max_drawdown_pct, volatility_pct, sharpe_ratio, "
+                "  calmar_ratio, data_points, window_target_days, fallback "
+                "FROM fund_bot_performance "
+                "WHERE bot_id = ? AND trade_date = ? AND run_id = ?",
+                (bot_id, perf_anchor_date, perf_run),
+            ).fetchall()
+            for pr in perf_rows:
+                interval_metrics[pr["period"]] = {
+                    "return_pct": pr["return_pct"],
+                    "max_drawdown_pct": pr["max_drawdown_pct"],
+                    "volatility_pct": pr["volatility_pct"],
+                    "sharpe_ratio": pr["sharpe_ratio"],
+                    "calmar_ratio": pr["calmar_ratio"],
+                    "data_points": pr["data_points"],
+                    "window_target_days": pr["window_target_days"],
+                    "fallback": bool(pr["fallback"]),
+                }
+
+        # 持仓基金的区间业绩（fund_nav_performance）。
+        # 日期口径与账户业绩一致：锚定 perf_anchor_date；该基金当日没数据时，
+        # 兜底取 ≤ perf_anchor_date 的最近一日（不会越过 as_of_date 偷看未来）。
+        # 只返回当前 active 持仓的基金，已平仓的不返回。
+        holdings_performance: dict = {}
+        if perf_anchor_date:
+            held = conn.execute(
+                "SELECT fund_code, fund_name, asset_class, role, market_value, "
+                "       actual_weight, holding_days, unrealized_pnl_pct "
+                "FROM fund_bot_holdings "
+                "WHERE bot_id = ? AND status = 'active' ORDER BY fund_code",
+                (bot_id,),
+            ).fetchall()
+            for h in held:
+                fc = h["fund_code"]
+                fund_perf_date_row = conn.execute(
+                    "SELECT MAX(trade_date) AS d FROM fund_nav_performance "
+                    "WHERE fund_code = ? AND trade_date <= ?",
+                    (fc, perf_anchor_date),
+                ).fetchone()
+                fund_perf_date = fund_perf_date_row["d"] if fund_perf_date_row and fund_perf_date_row["d"] else None
+                metrics: dict = {}
+                if fund_perf_date:
+                    for r in conn.execute(
+                        "SELECT period, return_pct, max_drawdown_pct, volatility_pct, "
+                        "       sharpe_ratio, calmar_ratio, data_points, "
+                        "       window_target_days, fallback "
+                        "FROM fund_nav_performance "
+                        "WHERE fund_code = ? AND trade_date = ?",
+                        (fc, fund_perf_date),
+                    ).fetchall():
+                        metrics[r["period"]] = {
+                            "return_pct": r["return_pct"],
+                            "max_drawdown_pct": r["max_drawdown_pct"],
+                            "volatility_pct": r["volatility_pct"],
+                            "sharpe_ratio": r["sharpe_ratio"],
+                            "calmar_ratio": r["calmar_ratio"],
+                            "data_points": r["data_points"],
+                            "window_target_days": r["window_target_days"],
+                            "fallback": bool(r["fallback"]),
+                        }
+                holdings_performance[fc] = {
+                    "fund_name": h["fund_name"],
+                    "asset_class": h["asset_class"],
+                    "role": h["role"],
+                    "market_value": _r(float(h["market_value"] or 0.0)) if h["market_value"] is not None else None,
+                    "actual_weight": h["actual_weight"],
+                    "holding_days": h["holding_days"],
+                    "unrealized_pnl_pct": h["unrealized_pnl_pct"],
+                    # 该基金 perf 锚定日期；与 perf_anchor_date 不一致时说明这只基金当日没 perf，
+                    # 已兜底取最近一日；bot 看到日期不齐时知道是哪只基金 NAV 没跟上。
+                    "perf_as_of_date": fund_perf_date,
+                    "metrics": metrics,
+                }
+
     return json.dumps({
         "success": True,
         "bot_id": bot_id,
@@ -1543,6 +2052,19 @@ async def portfolio_get_my_performance(
         "daily_series": daily_series,
         "daily_series_truncated": len(snaps) > len(daily_series),
         "daily_series_total": len(snaps),
+        # 区间业绩（fund_bot_performance + fund_nav_performance）；区间口径全部不年化。
+        # account.metrics             → 整个账户的 5 个 period 指标
+        # account.holdings_performance → 当前 active 持仓的每只基金各 5 个 period 指标
+        # 日期对齐 as_of_perf_date；个别基金当日没 perf 时 perf_as_of_date 会回退到最近一日，
+        # 不会越过 as_of_date 偷看未来。
+        "interval_metrics": {
+            "as_of_perf_date": perf_anchor_date,
+            "rf_annual_pct": _BOT_PERF_RF_ANNUAL_PCT,
+            "rf_daily_pct": _r(_BOT_PERF_RF_DAILY_PCT, 6),
+            "trading_days_per_year": _BOT_PERF_TRADING_DAYS_PER_YEAR,
+            "metrics": interval_metrics,
+            "holdings_performance": holdings_performance,
+        },
     }, ensure_ascii=False)
 
 
@@ -1595,9 +2117,11 @@ async def portfolio_init_my_account(
       bot_id           账户标识
       initial_capital  起始资金（必须 > 0）
       force            False（默认）：bot_id 已有账户则拒绝；
-                       True：清空该 bot 在 fund_bot_*  全部业务表（accounts /
-                             holdings / orders / actions / reviews / daily_snapshots /
-                             position_snapshots），再重建一个全新账户。适合回测重跑场景。
+                       True：仅清空该 bot 在**当前 run_id**下的业务表行（holdings /
+                             orders / actions / reviews / daily_snapshots /
+                             position_snapshots），并 INSERT OR REPLACE 重置 accounts。
+                             其它 run_id 的历史数据**保留不动**——之前 bot 跑过的
+                             run 在 dashboard 上仍可回看。
 
     返回 JSON：
       success / bot_id / initial_capital / cash / cash_in_transit / cleaned (force=True 时各表删行计数)
@@ -1628,15 +2152,32 @@ async def portfolio_init_my_account(
             }, ensure_ascii=False)
 
         if existing and force:
-            # 顺序：先删依赖侧，后删主表（虽然没设外键，但语义清晰）
+            # 历史 run 的数据要保留（用户可在 dashboard 里按 run_id 回看），
+            # 只清当前 run_id 下的本 bot 行。fund_bot_orders 有 order_run_id /
+            # settle_run_id 两列，都按本 run 命中删（avoid 误伤其它 run 的订单）。
             for tbl in ("fund_bot_position_snapshots", "fund_bot_daily_snapshots",
-                        "fund_bot_actions", "fund_bot_orders", "fund_bot_holdings",
-                        "fund_bot_reviews", "fund_bot_accounts"):
-                cur = conn.execute(f"DELETE FROM {tbl} WHERE bot_id=?", (bot_id,))
+                        "fund_bot_actions", "fund_bot_holdings", "fund_bot_reviews"):
+                cur = conn.execute(
+                    f"DELETE FROM {tbl} WHERE bot_id=? AND run_id=?",
+                    (bot_id, run_id),
+                )
                 cleaned[tbl] = cur.rowcount
+            cur = conn.execute(
+                "DELETE FROM fund_bot_orders WHERE bot_id=? AND "
+                "(order_run_id=? OR settle_run_id=?)",
+                (bot_id, run_id, run_id),
+            )
+            cleaned["fund_bot_orders"] = cur.rowcount
+            # accounts 表 PRIMARY KEY 是 bot_id（不是 (bot_id, run_id)），所以一个 bot
+            # 只能有一行。下面的 INSERT OR REPLACE 会把这一行刷成本 run 的初始状态。
+            # 这意味着旧 run 在结束后 accounts 行被本 run 覆盖，dashboard 查老 run 的
+            # accounts 拿不到数据——但其它 run 的 daily_snapshots / positions / actions
+            # 都还在，足够回看。要彻底分 run 留 accounts 历史，得给该表加 (bot_id, run_id)
+            # 复合主键，是个更大的 schema 变更，留待后续。
 
         conn.execute(
-            "INSERT INTO fund_bot_accounts (bot_id, initial_capital, cash, cash_in_transit, run_id) "
+            "INSERT OR REPLACE INTO fund_bot_accounts "
+            "(bot_id, initial_capital, cash, cash_in_transit, run_id) "
             "VALUES (?, ?, ?, 0, ?)",
             (bot_id, float(initial_capital), float(initial_capital), run_id)
         )
@@ -1659,6 +2200,7 @@ async def portfolio_get_my_trades(
     as_of_date: str,
     limit: int = 100,
     fund_code: str = "",
+    run_id: str = "",
 ) -> str:
     """Bot 查看自己的历史操作记录（下单/成交流水），**严格只看 order_date < as_of_date** 的订单。
 
@@ -1667,6 +2209,7 @@ async def portfolio_get_my_trades(
       as_of_date    截止日（YYYY-MM-DD），可见订单 = order_date < as_of_date
       limit         返回最近 N 单（默认 100；传 0 = 全量）
       fund_code     可选，只看某只基金的单
+      run_id        非空 → 只看 order_run_id 或 settle_run_id 等于本 run 的订单；空 = 跨 run 全量
 
     返回：
       orders        list（按 order_date desc, order_id desc）每单含：
@@ -1694,6 +2237,9 @@ async def portfolio_get_my_trades(
                "FROM fund_bot_orders "
                "WHERE bot_id=? AND order_date < ?")
         args: list = [bot_id, as_of_date]
+        if run_id:
+            sql += " AND (order_run_id=? OR settle_run_id=?)"
+            args.extend([run_id, run_id])
         if fund_code:
             sql += " AND fund_code=?"
             args.append(fund_code)
@@ -1878,6 +2424,10 @@ async def confirm_fund_orders(bot_id: str, confirmations_json: str, run_id: str 
                     "WHERE order_id = ?",
                     (today, confirm_nav, confirmed_shares, fee, run_id, oid)
                 )
+                # action / holdings 归属 placer 的 run（order_run_id），不是 settle 的 run。
+                # 跨 run 时若用 settle run，placer 那侧 replay 看不到这笔现金流（漏扣），
+                # settle 那侧 replay 又会重复扣（双重扣 → 负 cash + weight > 1）。
+                holding_run_id = order["order_run_id"] or run_id
                 conn.execute(
                     "INSERT INTO fund_bot_actions "
                     "(review_id, bot_id, fund_code, action_type, nav_used, amount, shares, fee, reason, action_date, run_id) "
@@ -1885,29 +2435,32 @@ async def confirm_fund_orders(bot_id: str, confirmations_json: str, run_id: str 
                     (
                         order["review_id"], bot_id, order["fund_code"], _r(confirm_nav, 6),
                         _r(order_amount), _r(confirmed_shares, 6), _r(fee),
-                        f"人工确认收口:{order['action_reason'] or 'buy'}", today, run_id,
+                        f"人工确认收口:{order['action_reason'] or 'buy'}", today, holding_run_id,
                     )
                 )
 
+                # 按 holding_run_id 找本 run 自己的 active holding；上游的旧 run 残留行不可加进来——
+                # 否则会出现"本 run shares = 旧 run shares + 本 run confirmed_shares"的污染累加。
                 holding = conn.execute(
-                    "SELECT * FROM fund_bot_holdings WHERE bot_id = ? AND fund_code = ? AND status = 'active'",
-                    (bot_id, order["fund_code"])
+                    "SELECT * FROM fund_bot_holdings WHERE bot_id = ? AND fund_code = ? AND run_id = ? AND status = 'active'",
+                    (bot_id, order["fund_code"], holding_run_id)
                 ).fetchone()
 
                 if holding:
                     new_shares = (holding["shares"] or 0) + confirmed_shares
                     new_invested = (holding["amount_invested"] or 0) + order_amount
                     new_mv = new_shares * confirm_nav
+                    # 不 SET run_id（保留 holding 原本的 run_id）
                     conn.execute(
                         "UPDATE fund_bot_holdings SET shares = ?, amount_invested = ?, "
                         "latest_nav = ?, market_value = ?, "
                         "unrealized_pnl = ?, unrealized_pnl_pct = ?, "
-                        "high_nav = MAX(COALESCE(high_nav, 0), ?), run_id = ? "
+                        "high_nav = MAX(COALESCE(high_nav, 0), ?) "
                         "WHERE holding_id = ?",
                         (new_shares, new_invested, confirm_nav, new_mv,
                          new_mv - new_invested,
                          (new_mv - new_invested) / new_invested * 100 if new_invested else 0,
-                         confirm_nav, run_id, holding["holding_id"])
+                         confirm_nav, holding["holding_id"])
                     )
                 else:
                     conn.execute(
@@ -1920,7 +2473,7 @@ async def confirm_fund_orders(bot_id: str, confirmations_json: str, run_id: str 
                         (bot_id, order["fund_code"], order["fund_name"],
                          today, confirm_nav, confirm_nav,
                          confirmed_shares, order_amount, order_amount,
-                         confirm_nav, order["action_reason"] or "", run_id)
+                         confirm_nav, order["action_reason"] or "", holding_run_id)
                     )
 
                 cash -= order_amount
@@ -1929,9 +2482,10 @@ async def confirm_fund_orders(bot_id: str, confirmations_json: str, run_id: str 
 
             elif order["order_type"] == "sell":
                 sell_shares = float(order["order_amount"] or 0.0)
+                # 同 BUY：本 run 的卖单只能扣本 run 自己的 active holding。
                 holding = conn.execute(
-                    "SELECT * FROM fund_bot_holdings WHERE bot_id = ? AND fund_code = ? AND status = 'active'",
-                    (bot_id, order["fund_code"])
+                    "SELECT * FROM fund_bot_holdings WHERE bot_id = ? AND fund_code = ? AND run_id = ? AND status = 'active'",
+                    (bot_id, order["fund_code"], run_id)
                 ).fetchone()
                 holding_days = _calc_holding_days(holding["entry_date"] or today, today) if holding else 0
                 if fee is None:
@@ -1989,7 +2543,7 @@ async def confirm_fund_orders(bot_id: str, confirmations_json: str, run_id: str 
             "UPDATE fund_bot_accounts SET cash = ?, run_id = ?, updated_at = datetime('now') WHERE bot_id = ?",
             (cash, run_id, bot_id)
         )
-        repaired = _replay_and_repair_fund_holdings(conn, bot_id, today)
+        repaired = _replay_and_repair_fund_holdings(conn, bot_id, today, run_id=run_id)
 
     return json.dumps({
         "success": True, "bot_id": bot_id,
@@ -2064,6 +2618,7 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
             return json.dumps({"success": False, "message": f"bot {bot_id} 无账户"}, ensure_ascii=False)
         cash = float(account["cash"] or 0.0)
         cash_in_transit = float(account["cash_in_transit"] or 0.0)
+        cash_receivable = float(account["cash_receivable"] or 0.0)
 
         pending = conn.execute(
             "SELECT * FROM fund_bot_orders WHERE bot_id=? AND status='pending' ORDER BY order_date, order_id",
@@ -2087,9 +2642,13 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
             if o["review_id"]:
                 prow = conn.execute("SELECT paradigm FROM fund_bot_reviews WHERE review_id=?", (o["review_id"],)).fetchone()
                 paradigm = (prow["paradigm"] if prow else None) or None
+            # 跨 run 归属：order 在 placer 的 run 下扣的 cash 与 inserted pending 单，
+            # action / holdings 都必须落在 order_run_id 上；否则 settle_run_id 自己的 replay 会把
+            # 这笔现金流第二次扣到 settle 的 run 里（双重扣减 → 负 cash + weight > 1）。
+            holding_run_id = o["order_run_id"] or run_id
             holding = conn.execute(
-                "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND status='active'",
-                (bot_id, fc)
+                "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND run_id=? AND status='active'",
+                (bot_id, fc, holding_run_id)
             ).fetchone()
 
             if o["order_type"] == "buy":
@@ -2101,16 +2660,20 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                     new_shares = float(holding["shares"] or 0.0) + add_shares
                     new_cost = float(holding["amount_invested"] or 0.0) + order_amount
                     new_mv = new_shares * nav
+                    # 不 SET run_id —— 行应保留 holding_run_id；SELECT 已按 holding_run_id 过滤。
                     conn.execute(
                         "UPDATE fund_bot_holdings SET shares=?, amount_invested=?, latest_nav=?, "
                         "market_value=?, unrealized_pnl=?, unrealized_pnl_pct=?, "
-                        "high_nav=MAX(COALESCE(high_nav,0),?), run_id=? WHERE holding_id=?",
+                        "high_nav=MAX(COALESCE(high_nav,0),?) WHERE holding_id=?",
                         (_r(new_shares, 6), _r(new_cost), _r(nav, 6), _r(new_mv),
                          _r(new_mv - new_cost), _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
-                         _r(nav, 6), run_id, holding["holding_id"])
+                         _r(nav, 6), holding["holding_id"])
                     )
                 else:
                     new_mv = add_shares * nav
+                    # holding INSERT 用 holding_run_id（= order.order_run_id），不能用 settle run_id；
+                    # 否则 settle 一个旧 run 的 pending order 会在 settle run 下新建一个 holding，
+                    # 实际上现金流出发生在 order_run_id 那个 run。
                     conn.execute(
                         "INSERT INTO fund_bot_holdings "
                         "(bot_id, fund_code, fund_name, share_class, asset_class, role, "
@@ -2121,19 +2684,20 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                         (bot_id, fc, o["fund_name"] or "", order_date, nav, nav,
                          _r(add_shares, 6), _r(order_amount), _r(new_mv),
                          _r(new_mv - order_amount), _r((new_mv - order_amount) / order_amount * 100 if order_amount else 0, 4),
-                         _r(nav, 6), o["action_reason"] or "", run_id)
+                         _r(nav, 6), o["action_reason"] or "", holding_run_id)
                     )
                 # 释放 pending 时冻结的 cash_in_transit；不动 cash（cash 在下单时已扣）
                 cash_in_transit -= order_amount
                 # action_date 必须是 order_date（T 日），让 _replay 用 reference_nav 那天的 NAV 重算份额；
                 # 否则 _replay 会用 as_of_date(T+1) 的 NAV 重算，与下单时锁的 ref_nav 不一致，导致 snapshot mv 错乱。
+                # action.run_id = holding_run_id (= order.order_run_id)，保证 placer 的 run 自己能在 replay 里看到这笔现金流。
                 conn.execute(
                     "INSERT INTO fund_bot_actions "
                     "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
                     "nav_used, amount, shares, fee, reason, action_date, paradigm, run_id) "
                     "VALUES (?, ?, ?, 'ADD', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (o["review_id"], bot_id, fc, _r(nav, 6), _r(order_amount), _r(add_shares, 6),
-                     _r(fee), f"T+1 settle 申购 (T 日 nav={nav:.4f} 申购费 {pf_rate*100:.2f}%)", order_date, paradigm, run_id)
+                     _r(fee), f"T+1 settle 申购 (T 日 nav={nav:.4f} 申购费 {pf_rate*100:.2f}%)", order_date, paradigm, holding_run_id)
                 )
                 conn.execute(
                     "UPDATE fund_bot_orders SET status='confirmed', confirm_date=?, confirm_nav=?, "
@@ -2144,17 +2708,37 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                                 "shares_added": _r(add_shares, 4), "fee": _r(fee), "nav": _r(nav, 6)})
 
             elif o["order_type"] == "sell":
+                # 新机制：T 日下单时 confirmed_amount 就已锁定 → settle 只做 cash_receivable→cash 转账，
+                # 不再动 holdings / actions（T 日已动过）。
+                # 老机制（存量订单）：confirmed_amount IS NULL → 老路径扣 shares + 加 cash + 释放冻结。
+                if o["confirmed_amount"] is not None:
+                    proceeds = float(o["confirmed_amount"] or 0.0)
+                    sell_shares = float(o["confirmed_shares"] or 0.0)
+                    fee = float(o["fee"] or 0.0)
+                    cash += proceeds
+                    cash_receivable = max(0.0, cash_receivable - proceeds)
+                    conn.execute(
+                        "UPDATE fund_bot_orders SET status='confirmed', confirm_date=?, confirm_nav=?, "
+                        "settle_run_id=? WHERE order_id=?",
+                        (as_of_date, _r(nav, 6), run_id, oid)
+                    )
+                    settled.append({"order_id": oid, "fund_code": fc, "type": "sell",
+                                    "shares_sold": _r(sell_shares, 4),
+                                    "proceeds": _r(proceeds), "fee": _r(fee), "nav": _r(nav, 6),
+                                    "settled_via": "cash_receivable->cash"})
+                    continue
+
+                # ↓↓↓ 老机制兼容路径（confirmed_amount IS NULL）：扣 shares + 加 cash + 释放冻结
                 if not holding:
-                    skipped.append({"order_id": oid, "reason": "无持仓可卖"})
+                    skipped.append({"order_id": oid, "reason": "无持仓可卖 (legacy)"})
                     continue
                 cur_shares = float(holding["shares"] or 0.0)
                 cur_pending = float(holding["pending_sell_shares"] or 0.0)
                 want = float(o["order_amount"] or 0.0)
                 sell_shares = min(want, cur_shares)
                 if sell_shares <= 1e-6:
-                    skipped.append({"order_id": oid, "reason": "卖出份额为 0"})
+                    skipped.append({"order_id": oid, "reason": "卖出份额为 0 (legacy)"})
                     continue
-                # 赎回费按"申请日（order_date）"的持有自然日数算，跟真实公募规则一致。
                 holding_days = _calc_holding_days(holding["entry_date"] or order_date, order_date)
                 rf_rate = _redeem_fee_rate(redeem_tiers, holding_days)
                 gross = sell_shares * nav
@@ -2180,14 +2764,13 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                          _r(new_mv - new_cost), _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
                          run_id, holding["holding_id"])
                     )
-                # 同 buy：action_date 必须是 order_date，让 _replay 用 ref_nav 那天 NAV 重算份额一致。
                 conn.execute(
                     "INSERT INTO fund_bot_actions "
                     "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
                     "nav_used, amount, shares, fee, reason, action_date, paradigm, run_id) "
                     "VALUES (?, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (o["review_id"], bot_id, fc, _r(nav, 6), _r(gross), _r(sell_shares, 6),
-                     _r(fee), f"T+1 settle 赎回 (T 日 nav={nav:.4f} 申请日持有 {holding_days}天 赎回费 {rf_rate*100:.2f}%)", order_date, paradigm, run_id)
+                     _r(fee), f"legacy settle 赎回 (T 日 nav={nav:.4f} 申请日持有 {holding_days}天 赎回费 {rf_rate*100:.2f}%)", order_date, paradigm, run_id)
                 )
                 conn.execute(
                     "UPDATE fund_bot_orders SET status='confirmed', confirm_date=?, confirm_nav=?, "
@@ -2196,17 +2779,20 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 )
                 settled.append({"order_id": oid, "fund_code": fc, "type": "sell",
                                 "shares_sold": _r(sell_shares, 4), "gross": _r(gross),
-                                "proceeds": _r(gross - fee), "fee": _r(fee), "nav": _r(nav, 6)})
+                                "proceeds": _r(gross - fee), "fee": _r(fee), "nav": _r(nav, 6),
+                                "settled_via": "legacy"})
 
         conn.execute(
-            "UPDATE fund_bot_accounts SET cash=?, cash_in_transit=?, run_id=?, updated_at=datetime('now') WHERE bot_id=?",
-            (_r(cash), _r(max(0.0, cash_in_transit)), run_id, bot_id)
+            "UPDATE fund_bot_accounts SET cash=?, cash_in_transit=?, cash_receivable=?, "
+            "run_id=?, updated_at=datetime('now') WHERE bot_id=?",
+            (_r(cash), _r(max(0.0, cash_in_transit)), _r(max(0.0, cash_receivable)), run_id, bot_id)
         )
 
     return json.dumps({
         "success": True, "bot_id": bot_id, "as_of_date": as_of_date,
         "settled": settled, "skipped": skipped,
         "cash_after": _r(cash), "cash_in_transit_after": _r(max(0.0, cash_in_transit)),
+        "cash_receivable_after": _r(max(0.0, cash_receivable)),
     }, ensure_ascii=False)
 
 
@@ -2877,7 +3463,7 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
     if not account:
         return {"success": False, "message": f"bot {bot_id} 无账户"}
     initial_capital = float(account["initial_capital"] or 0.0)
-    state = _replay_fund_account_state(conn, bot_id, trade_date)
+    state = _replay_fund_account_state(conn, bot_id, trade_date, run_id=run_id)
     cash = float(state["cash"] or 0.0)
     positions = state["positions"]
 
@@ -2954,28 +3540,48 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
             "shares": shares, "nav": nav, "market_value": mv, "daily_pnl": daily_pnl,
             "cumulative_return_pct": unrealized_pnl_pct, "holding_days": holding_days,
         })
-        active_row = conn.execute(
-            "SELECT holding_id FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND status='active' ORDER BY holding_id DESC LIMIT 1",
-            (bot_id, fc),
-        ).fetchone()
+        # 找本 run 自己的 active 行；不能跨 run 选别 run 的行——
+        # 否则会把其它 run 的 holding 行的 run_id 给改了，导致多 run 撞车（多行同 run_id 同 fund）。
+        if run_id:
+            active_row = conn.execute(
+                "SELECT holding_id FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND run_id=? AND status='active' "
+                "ORDER BY holding_id DESC LIMIT 1",
+                (bot_id, fc, run_id),
+            ).fetchone()
+        else:
+            active_row = conn.execute(
+                "SELECT holding_id FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND status='active' "
+                "ORDER BY holding_id DESC LIMIT 1",
+                (bot_id, fc),
+            ).fetchone()
         if active_row:
+            # 不再 SET run_id——行的 run_id 必须保留为它原本属于的 run；caller 的 run_id 已经匹配过滤过。
             conn.execute(
                 "UPDATE fund_bot_holdings SET latest_nav=?, market_value=?, unrealized_pnl=?, "
-                "unrealized_pnl_pct=?, holding_days=?, high_nav=?, run_id=COALESCE(NULLIF(?, ''), run_id) "
+                "unrealized_pnl_pct=?, holding_days=?, high_nav=? "
                 "WHERE holding_id=?",
                 (_r(nav, 6), _r(mv), _r(unrealized_pnl), _r(unrealized_pnl_pct, 4),
-                 holding_days, _r(high_nav, 6), run_id, active_row["holding_id"])
+                 holding_days, _r(high_nav, 6), active_row["holding_id"])
             )
 
     total_value = cash + invested_value
     net_value = total_value / initial_capital if initial_capital else 1.0
     for ps in position_snapshots:
         ps["weight"] = _r(ps["market_value"] / total_value if total_value else 0, 6)
-        conn.execute(
-            "UPDATE fund_bot_holdings SET actual_weight=?, run_id=COALESCE(NULLIF(?, ''), run_id) "
-            "WHERE bot_id=? AND fund_code=? AND status='active'",
-            (ps["weight"], run_id, bot_id, ps["fund_code"])
-        )
+        # 只更新本 run 的 holding 行；旧实现没 run_id 过滤会把其它 run 的 holding.run_id 给覆盖，
+        # 导致多 run 在同 (bot, fund) 上的 active 行都被打成本 run 的 run_id（多行重叠 bug）。
+        if run_id:
+            conn.execute(
+                "UPDATE fund_bot_holdings SET actual_weight=? "
+                "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='active'",
+                (ps["weight"], bot_id, ps["fund_code"], run_id)
+            )
+        else:
+            conn.execute(
+                "UPDATE fund_bot_holdings SET actual_weight=? "
+                "WHERE bot_id=? AND fund_code=? AND status='active'",
+                (ps["weight"], bot_id, ps["fund_code"])
+            )
 
     daily_return_pct = (total_value - prev_total) / prev_total * 100 if prev_total else 0.0
     cumulative_return_pct = (total_value - initial_capital) / initial_capital * 100 if initial_capital else 0.0
@@ -2999,13 +3605,18 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
                        for ps in position_snapshots]
 
     # PK 含 run_id：同 (bot,trade_date,run_id) 重复调用 → REPLACE；不同 run_id → 共存。
+    # cash_receivable 直接取自 account（replay-cash 已通过 REDUCE action 隐含包含 receivable，
+    # 此列为单独留痕，便于审计在途赎回款）。
+    receivable_now = float(account["cash_receivable"] or 0.0)
     conn.execute(
         "INSERT OR REPLACE INTO fund_bot_daily_snapshots "
-        "(bot_id, trade_date, run_id, initial_capital, cash, invested_value, total_value, "
+        "(bot_id, trade_date, run_id, initial_capital, cash, cash_receivable, "
+        "invested_value, total_value, "
         "net_value, daily_return_pct, cumulative_return_pct, max_drawdown_pct, "
         "equity_weight, bond_weight, gold_weight, cash_weight, holdings_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (bot_id, trade_date, run_id or "", _r(initial_capital), _r(cash), _r(invested_value),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (bot_id, trade_date, run_id or "", _r(initial_capital), _r(cash), _r(receivable_now),
+         _r(invested_value),
          _r(total_value), _r(net_value, 6), _r(daily_return_pct, 4),
          _r(cumulative_return_pct, 4), _r(max_drawdown_pct, 4),
          _r(eq_w, 6), _r(bd_w, 6), _r(gd_w, 6), _r(ch_w, 6),
@@ -3021,6 +3632,11 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
              _r(ps["shares"], 6), _r(ps["nav"], 6), _r(ps["market_value"]),
              ps["weight"], _r(ps["daily_pnl"]), _r(ps["cumulative_return_pct"], 4), ps["holding_days"])
         )
+
+    # 区间业绩表（5 个 period 的 return/MDD/vol/sharpe/calmar，区间口径不年化）
+    # 必须在 fund_bot_daily_snapshots 写入今日行之后调用——_compute_bot_performance 依赖那一行。
+    _compute_bot_performance(conn, bot_id, trade_date, run_id=run_id)
+
     return {
         "success": True, "bot_id": bot_id, "trade_date": trade_date,
         "total_value": _r(total_value), "net_value": _r(net_value, 6),
@@ -3356,13 +3972,21 @@ async def upsert_fund_fees(fees_json: str) -> str:
 
 @writer_tool
 async def upsert_fund_nav(navs_json: str) -> str:
-    """批量更新基金净值。navs_json: [{"fund_code":"008528","nav_date":"2026-04-23","nav":2.55,"acc_nav":2.55,"daily_return_pct":0.5}]"""
+    """批量更新基金净值。navs_json: [{"fund_code":"008528","nav_date":"2026-04-23","nav":2.55,"acc_nav":2.55,"daily_return_pct":0.5}]
+
+    写完 fund_nav 后**自动级联刷新 fund_nav_performance**：对本批次出现的每个
+    (fund_code, MAX(nav_date)) 组合调一次 _compute_fund_nav_performance。
+    意味着 daily-refresh 每天灌 NAV 之后，区间业绩表（1m/3m/6m/1y/since_inception）
+    会随之刷新——区间口径不年化，rf=1.8%/252（与 fund_bot_performance 同口径）。
+    """
     try:
         navs = json.loads(navs_json)
     except json.JSONDecodeError:
         return json.dumps({"success": False, "message": "navs_json 格式错误"}, ensure_ascii=False)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 收集每只基金本批次最新的 nav_date，作为 perf 刷新锚点。
+    latest_date_by_fund: dict[str, str] = {}
     with get_conn() as conn:
         for n in navs:
             conn.execute(
@@ -3372,6 +3996,16 @@ async def upsert_fund_nav(navs_json: str) -> str:
                 (n["fund_code"], n["nav_date"], n.get("nav"), n.get("acc_nav"),
                  n.get("daily_return_pct"), now)
             )
+            fc = n["fund_code"]
+            nd = n["nav_date"]
+            if fc not in latest_date_by_fund or nd > latest_date_by_fund[fc]:
+                latest_date_by_fund[fc] = nd
+
+        # 级联刷新区间业绩。批次内一只基金只算它最新的那天一行；
+        # 多天回填时只会在最新日落一份 perf 行，避免回填全量重算。
+        # （如果调用方想要按日逐行刷，应该自己单天单天调 upsert。）
+        for fc, nd in latest_date_by_fund.items():
+            _compute_fund_nav_performance(conn, fc, nd)
 
     return json.dumps({"success": True, "upserted": len(navs)}, ensure_ascii=False)
 
