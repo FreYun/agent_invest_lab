@@ -9,6 +9,8 @@ Usage:
   python cli_tools.py settle_pending_orders --bot-id bot1 --as-of-date 2024-03-15
   python cli_tools.py close_my_day          --bot-id bot1 --trade-date 2024-03-14
   python cli_tools.py get_buyable_funds                # 列出 lab 里 fund_nav 覆盖到的全部可交易代码
+  python cli_tools.py get_my_history        --bot-id bot1 [--limit 30] [--fund-code 510300]
+  python cli_tools.py get_my_performance    --bot-id bot1 --as-of-date 2024-03-15 [--daily-series-limit 120]
 
 Stdout is the raw JSON the underlying tool returns (so callers can parse it).
 Exit code is 0 on tool invocation success (regardless of the returned
@@ -28,8 +30,20 @@ from server import (  # noqa: E402
     portfolio_init_my_account,
     portfolio_close_my_day,
     portfolio_get_buyable_funds,
+    portfolio_get_my_history,
+    portfolio_get_my_performance,
     settle_pending_fund_orders,
 )
+from db import init_db  # noqa: E402
+
+# CLI path doesn't invoke server.main(), so the CREATE TABLE IF NOT EXISTS
+# bootstrap in db.init_db() never runs through MCP — any table added to
+# SCHEMA_SQL after fund.db was first created silently doesn't exist when
+# CLI tools run (e.g. fund_bot_performance, which portfolio_close_my_day
+# and portfolio_get_my_performance query → both error out with "no such
+# table"). Force init_db() at module load so schema is current whichever
+# command we dispatch.
+init_db()
 
 
 async def _amain() -> str:
@@ -66,6 +80,19 @@ async def _amain() -> str:
     # 可买基金清单（系统侧 day-1 自动调一次播报给 bot；bot 也能自己再调）
     sub.add_parser("get_buyable_funds")
 
+    # World daily-prompt 注入用：读账户/持仓/订单快照 + 历史业绩，避免 bot 每天
+    # 都自己调 portfolio_get_my_history / portfolio_get_my_performance。底层调
+    # server.py 的同名 @mcp.tool 实现，输出格式一致。
+    p_hist = sub.add_parser("get_my_history")
+    p_hist.add_argument("--bot-id", required=True)
+    p_hist.add_argument("--limit", type=int, default=30)
+    p_hist.add_argument("--fund-code", default="")
+
+    p_perf = sub.add_parser("get_my_performance")
+    p_perf.add_argument("--bot-id", required=True)
+    p_perf.add_argument("--as-of-date", required=True)
+    p_perf.add_argument("--daily-series-limit", type=int, default=120)
+
     args = parser.parse_args()
     if args.cmd == "init_fund_account":
         return await portfolio_init_my_account(
@@ -80,6 +107,10 @@ async def _amain() -> str:
         return await portfolio_close_my_day(args.bot_id, args.trade_date, args.run_id)
     if args.cmd == "get_buyable_funds":
         return await portfolio_get_buyable_funds()
+    if args.cmd == "get_my_history":
+        return await portfolio_get_my_history(args.bot_id, args.limit, args.fund_code)
+    if args.cmd == "get_my_performance":
+        return await portfolio_get_my_performance(args.bot_id, args.as_of_date, args.daily_series_limit)
     raise SystemExit(f"unknown cmd {args.cmd!r}")
 
 
