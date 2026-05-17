@@ -184,3 +184,24 @@ def test_get_my_performance_filters_by_run_id(reload_server, tmp_db):
     # holdings_performance 只看到 runA 的 510300，不含 runB 的 008528
     hp = data["interval_metrics"]["holdings_performance"]
     assert set(hp.keys()) == {"510300"}, f"runA 的 hp keys 应只有 510300, 实际: {list(hp.keys())}"
+
+
+# === Strict layer: portfolio_get_my_trades ===
+
+def test_get_my_trades_empty_run_id_returns_error(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_trades("botX", "2026-01-11"))
+    data = json.loads(payload)
+    assert data["success"] is False
+    assert "run_id 缺失" in data["message"]
+
+
+def test_get_my_trades_filters_by_run_id(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_trades("botX", "2026-01-11", run_id="runB"))
+    data = json.loads(payload)
+    assert data["success"], data
+    codes = [o["fund_code"] for o in data["orders"]]
+    assert codes == ["008528"], f"runB 应只看到 008528 订单, 实际: {codes}"
