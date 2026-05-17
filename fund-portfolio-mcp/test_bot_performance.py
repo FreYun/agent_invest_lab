@@ -304,7 +304,7 @@ def test_portfolio_get_my_performance_includes_interval_metrics(reload_server, t
         _seed_daily_snapshots(conn, "botH", [1.0, 1.01, 1.02, 1.015, 1.025])
         s._compute_bot_performance(conn, "botH", "2024-01-06", run_id="test-run")
     # 查 perf：as_of_date 必须 > 最新 perf trade_date
-    payload = asyncio.run(s.portfolio_get_my_performance("botH", "2024-01-07"))
+    payload = asyncio.run(s.portfolio_get_my_performance("botH", "2024-01-07", run_id="test-run"))
     obj = json.loads(payload)
     assert obj["success"] is True
     assert "interval_metrics" in obj
@@ -363,7 +363,7 @@ def test_portfolio_get_my_performance_holdings_performance(reload_server, tmp_db
         # 灌账户 NAV + 触发 bot perf
         _seed_daily_snapshots(conn, "botJ", [1.0, 1.005, 1.01, 1.008, 1.015])
         s._compute_bot_performance(conn, "botJ", "2024-01-06", run_id="test-run")
-    payload = asyncio.run(s.portfolio_get_my_performance("botJ", "2024-01-07"))
+    payload = asyncio.run(s.portfolio_get_my_performance("botJ", "2024-01-07", run_id="test-run"))
     obj = json.loads(payload)
     im = obj["interval_metrics"]
     assert "holdings_performance" in im
@@ -397,7 +397,7 @@ def test_portfolio_get_my_performance_holdings_performance_empty_when_no_holding
         conn.commit()
         _seed_daily_snapshots(conn, "botK", [1.0, 1.01])
         s._compute_bot_performance(conn, "botK", "2024-01-03", run_id="test-run")
-    payload = asyncio.run(s.portfolio_get_my_performance("botK", "2024-01-04"))
+    payload = asyncio.run(s.portfolio_get_my_performance("botK", "2024-01-04", run_id="test-run"))
     obj = json.loads(payload)
     # 没持仓 → holdings_performance 是空 dict（不是缺失）
     assert obj["interval_metrics"]["holdings_performance"] == {}
@@ -433,7 +433,7 @@ def test_portfolio_get_my_performance_holdings_perf_date_fallback(reload_server,
         # 账户快照走到 2024-01-06（基金 perf 滞后 2 天）
         _seed_daily_snapshots(conn, "botL", [1.0, 1.005, 1.01, 1.008, 1.015])
         s._compute_bot_performance(conn, "botL", "2024-01-06", run_id="test-run")
-    payload = asyncio.run(s.portfolio_get_my_performance("botL", "2024-01-07"))
+    payload = asyncio.run(s.portfolio_get_my_performance("botL", "2024-01-07", run_id="test-run"))
     obj = json.loads(payload)
     im = obj["interval_metrics"]
     assert im["as_of_perf_date"] == "2024-01-06"
@@ -455,7 +455,7 @@ def test_portfolio_get_my_performance_no_future_leak(reload_server, tmp_db):
         _seed_daily_snapshots(conn, "botI", [1.0, 1.01], start_date="2024-01-02")
         s._compute_bot_performance(conn, "botI", "2024-01-03", run_id="test-run")
     # 故意把 as_of_date 设到 perf trade_date 之前
-    payload = asyncio.run(s.portfolio_get_my_performance("botI", "2024-01-03"))
+    payload = asyncio.run(s.portfolio_get_my_performance("botI", "2024-01-03", run_id="test-run"))
     obj = json.loads(payload)
     # 没 daily snapshot < as_of_date 的情况下 summary=None；
     # 但只要至少有一行 snap < as_of_date 时进入主路径，会带 interval_metrics

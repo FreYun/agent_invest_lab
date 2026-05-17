@@ -141,3 +141,46 @@ def test_get_my_history_filters_by_run_id(reload_server, tmp_db):
     assert codes == ["510300"], f"runA 应只看到 510300, 实际: {codes}"
     orders_codes = [o["fund_code"] for o in data["orders"]]
     assert orders_codes == ["510300"], f"runA 应只看到 510300 订单, 实际: {orders_codes}"
+
+
+# === Strict layer: portfolio_get_my_performance ===
+
+def _seed_perf_rows(db_path: str, bot_id: str = "botX"):
+    """除 _seed_two_runs 之外再补 fund_bot_performance 两行（runA / runB），
+    用来测 holdings_performance / interval_metrics 的 run_id 过滤。"""
+    conn = sqlite3.connect(db_path)
+    for run in ("runA", "runB"):
+        conn.execute(
+            "INSERT INTO fund_bot_performance "
+            "(bot_id, trade_date, run_id, period, return_pct, max_drawdown_pct, "
+            " volatility_pct, sharpe_ratio, calmar_ratio, data_points, window_target_days, fallback) "
+            "VALUES (?, '2026-01-09', ?, 'since_inception', 5.0, -1.0, 0.5, 1.0, 5.0, 5, NULL, 0)",
+            (bot_id, run),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_get_my_performance_empty_run_id_returns_error(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    _seed_perf_rows(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_performance("botX", "2026-01-11"))
+    data = json.loads(payload)
+    assert data["success"] is False, data
+    assert "run_id 缺失" in data["message"]
+
+
+def test_get_my_performance_filters_by_run_id(reload_server, tmp_db):
+    _seed_two_runs(tmp_db)
+    _seed_perf_rows(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_performance("botX", "2026-01-11", run_id="runA"))
+    data = json.loads(payload)
+    assert data["success"], data
+    # daily_series 只有 runA 那一行
+    assert len(data["daily_series"]) == 1, data["daily_series"]
+    assert data["daily_series"][0]["total_value"] == 1_050_000.0
+    # holdings_performance 只看到 runA 的 510300，不含 runB 的 008528
+    hp = data["interval_metrics"]["holdings_performance"]
+    assert set(hp.keys()) == {"510300"}, f"runA 的 hp keys 应只有 510300, 实际: {list(hp.keys())}"
