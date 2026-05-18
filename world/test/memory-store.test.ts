@@ -62,6 +62,38 @@ test('new MemoryStore loads existing file', () => {
   cleanup()
 })
 
+test('search excludes records starting with # MY_STRATEGY (server-side strategy filter)', () => {
+  // 策略文档每天都会被 world 注入到 prompt（strategyBlock），让它再进 mem0_search 命中
+  // 就成了无意义的"自己引用自己"，把真正昨天的判断挤出 hit list。在 store 层直接过滤掉。
+  const { file, cleanup } = tmpStore()
+  const s = new MemoryStore(file)
+  // bot7：一份策略（含半导体关键词）+ 一条昨天的实际判断（半导体相关）
+  s.add({ text: '# MY_STRATEGY\n核心信念：看好半导体复苏，重仓封测设备', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-15' })
+  s.add({ text: '今天买入半导体ETF 30%仓位，理由：库存见底信号已现', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-16' })
+
+  // 搜 "半导体" 应只命中实际判断，不命中策略副本
+  const hits = s.search('半导体', { agent_id: 'bot7', limit: 5 })
+  assert.equal(hits.length, 1)
+  assert.match(hits[0].memory, /今天买入半导体/)
+  assert.ok(!hits[0].memory.startsWith('# MY_STRATEGY'))
+
+  // findLatestByPrefix 不受影响：策略抽取链路仍能拿到策略
+  const strat = s.findLatestByPrefix('bot7', '# MY_STRATEGY')
+  assert.ok(strat)
+  assert.match(strat!.text, /核心信念/)
+  cleanup()
+})
+
+test('search filter is startsWith, not contains: notes mentioning the prefix mid-text are kept', () => {
+  const { file, cleanup } = tmpStore()
+  const s = new MemoryStore(file)
+  s.add({ text: '复盘：参考 # MY_STRATEGY 里写的止盈线，今天该减仓', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-16' })
+  const hits = s.search('复盘 止盈', { agent_id: 'bot7', limit: 5 })
+  assert.equal(hits.length, 1)
+  assert.match(hits[0].memory, /复盘/)
+  cleanup()
+})
+
 test('findLatestByPrefix returns the latest matching record for an agent; null when nothing matches', () => {
   const { file, cleanup } = tmpStore()
   const s = new MemoryStore(file)

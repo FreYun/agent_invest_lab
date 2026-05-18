@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { tokenize } from './tokenize.ts'
+import { STRATEGY_MEM0_PREFIX } from '../message.ts'
 
 export interface MemoryRecord {
   id: string
@@ -87,6 +88,9 @@ export class MemoryStore {
     const scored: SearchHit[] = []
     for (const rec of this.records) {
       if (opts.agent_id !== undefined && rec.agent_id !== opts.agent_id) continue
+      // 策略文档每天被 world 直接注回 prompt（strategyBlock），不该再出现在 mem0_search
+      // 的 hit list 里——否则把真正"昨天的实际判断"挤出 limit。前缀同 message.ts 的契约。
+      if (rec.text.startsWith(STRATEGY_MEM0_PREFIX)) continue
       const counts = tokenCounts(rec.text)
       let score = 0
       for (const tok of qSet) score += counts.get(tok) ?? 0
