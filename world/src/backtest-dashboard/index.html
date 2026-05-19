@@ -573,7 +573,7 @@ function renderMetricsPanel(bot){
 }
 function renderActions(bot){
   if (!bot.actions.length) return '<div class="empty">没有买卖动作</div>'
-  return `<table class="table"><thead><tr><th>日期</th><th>基金</th><th>动作</th><th class="num">金额</th><th class="num">份额</th><th class="num">参考净值</th><th style="width:24px"></th></tr></thead><tbody>${bot.actions.map(a => {
+  return `<table class="table"><thead><tr><th>日期</th><th>基金</th><th>动作</th><th class="num">金额</th><th class="num">份额</th><th class="num">参考净值</th><th class="num">该基金仓位变化</th><th class="num">调仓后该基金仓位</th><th style="width:24px"></th></tr></thead><tbody>${bot.actions.map(a => {
     const sideLabel = a.side === 'buy' ? '买入' : a.side === 'sell' ? '卖出' : '观察'
     const aid = a.action_id
     const key = `${bot.botId}|${aid}`
@@ -588,7 +588,11 @@ function renderActions(bot){
     const reasonHtml = reasonBlocks.length
       ? reasonBlocks.join('')
       : `<div class="reason-body reason-empty">（这条动作没有附带任何 reason）</div>`
-    return `<tr class="action-row${expanded ? ' expanded' : ''}" data-action-id="${esc(aid)}"><td>${esc(a.action_date)}</td><td>${esc(a.fund_name)}<div style="color:var(--dim);font-size:11px">${esc(a.fund_code)}</div></td><td><span class="row-badge ${a.side}">${esc(sideLabel)}</span></td><td class="num">¥${fmtMoney(a.amount || 0)}</td><td class="num">${fmtMoney(a.shares || 0)}</td><td class="num">${fmtNav(a.nav_used)}</td><td class="num"><span class="action-chevron">▸</span></td></tr><tr class="reason-row" data-action-id="${esc(aid)}"${expanded ? '' : ' hidden'}><td colspan="7">${reasonHtml}</td></tr>`
+    const deltaPct = (a.weight_delta || 0) * 100
+    const afterPct = (a.weight_after || 0) * 100
+    const deltaCls = a.weight_delta > 0 ? 'gain' : a.weight_delta < 0 ? 'loss' : ''
+    const deltaSign = a.weight_delta >= 0 ? '+' : ''
+    return `<tr class="action-row${expanded ? ' expanded' : ''}" data-action-id="${esc(aid)}"><td>${esc(a.action_date)}</td><td>${esc(a.fund_name)}<div style="color:var(--dim);font-size:11px">${esc(a.fund_code)}</div></td><td><span class="row-badge ${a.side}">${esc(sideLabel)}</span></td><td class="num">¥${fmtMoney(a.amount || 0)}</td><td class="num">${fmtMoney(a.shares || 0)}</td><td class="num">${fmtNav(a.nav_used)}</td><td class="num"><span class="${deltaCls}">${deltaSign}${deltaPct.toFixed(1)}%</span></td><td class="num">${afterPct.toFixed(1)}%</td><td class="num"><span class="action-chevron">▸</span></td></tr><tr class="reason-row" data-action-id="${esc(aid)}"${expanded ? '' : ' hidden'}><td colspan="9">${reasonHtml}</td></tr>`
   }).join('')}</tbody></table>`
 }
 function renderDetail(bot){
