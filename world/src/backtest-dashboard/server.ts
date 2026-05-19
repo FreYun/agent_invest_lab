@@ -4,10 +4,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { universeContaminationFile } from '../paths.ts'
 
 const execFileAsync = promisify(execFile)
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_DB = join(HERE, '../../../data/fund.db')
+// 默认 worldRoot = <repo>/world/runtime；和 paths.ts 里其它 per-run helper 的约定一致。
+// 仅用来定位每 run 的 universe-contamination.json marker 文件，不影响 DB 查询。
+const DEFAULT_WORLD_ROOT = join(HERE, '../../runtime')
 const DEFAULT_HTML = join(HERE, 'index.html')
 
 interface DailyRow {
@@ -137,6 +141,10 @@ interface BotDataset {
 interface BotRunRef {
   runId: string
   latestDate: string
+  /** 受可买池污染过的历史 run（scripts/detect-universe-contamination.py 写的 marker 存在）。
+   *  仅是元数据提示，bot 数据本身没有被改动——这个 run 期间 bot 看到的可买池可能是别人 run
+   *  的池子，所以做过非预期的下单。 */
+  contaminated?: boolean
 }
 
 interface Dataset {
@@ -242,7 +250,7 @@ async function listAllBotIds(dbPath: string): Promise<string[]> {
   return rows.map(r => r.bot_id)
 }
 
-async function listRunsForBot(dbPath: string, botId: string): Promise<BotRunRef[]> {
+async function listRunsForBot(dbPath: string, worldRoot: string, botId: string): Promise<BotRunRef[]> {
   const b = quoteSql(botId)
   const rows = await queryRows<{ run_id: string; latest_date: string | null }>(dbPath, `
     WITH per_bot AS (
@@ -262,7 +270,11 @@ async function listRunsForBot(dbPath: string, botId: string): Promise<BotRunRef[
     GROUP BY run_id
     ORDER BY run_id DESC
   `)
-  return rows.map(r => ({ runId: r.run_id, latestDate: r.latest_date ?? '' }))
+  return rows.map(r => {
+    const ref: BotRunRef = { runId: r.run_id, latestDate: r.latest_date ?? '' }
+    if (existsSync(universeContaminationFile(worldRoot, r.run_id))) ref.contaminated = true
+    return ref
+  })
 }
 
 async function loadBotForRun(dbPath: string, botId: string, runId: string, availableRuns: BotRunRef[]): Promise<BotDataset | null> {
@@ -384,11 +396,11 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
   }
 }
 
-async function loadDataset(dbPath: string): Promise<Dataset> {
+async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> {
   const botIds = await listAllBotIds(dbPath)
   const bots: BotDataset[] = []
   for (const botId of botIds) {
-    const runs = await listRunsForBot(dbPath, botId)
+    const runs = await listRunsForBot(dbPath, worldRoot, botId)
     if (!runs.length) continue
     const bot = await loadBotForRun(dbPath, botId, runs[0].runId, runs)
     if (bot) bots.push(bot)
@@ -421,21 +433,23 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html)
 }
 
-function parseArgs(argv: string[]): { host: string; port: number; dbPath: string } {
+function parseArgs(argv: string[]): { host: string; port: number; dbPath: string; worldRoot: string } {
   let host = '0.0.0.0'
   let port = 48080
   let dbPath = DEFAULT_DB
+  let worldRoot = DEFAULT_WORLD_ROOT
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--host' && argv[i + 1]) host = argv[++i]
     else if (arg === '--port' && argv[i + 1]) port = Number(argv[++i])
     else if (arg === '--db' && argv[i + 1]) dbPath = argv[++i]
+    else if (arg === '--world-root' && argv[i + 1]) worldRoot = resolve(argv[++i])
   }
-  return { host, port, dbPath }
+  return { host, port, dbPath, worldRoot }
 }
 
 async function main(argv = process.argv.slice(2)): Promise<number> {
-  const { host, port, dbPath } = parseArgs(argv)
+  const { host, port, dbPath, worldRoot } = parseArgs(argv)
   if (!existsSync(dbPath)) {
     process.stderr.write(`fund db not found: ${dbPath}
 `)
@@ -454,14 +468,14 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/data') {
-        sendJson(res, 200, await loadDataset(dbPath))
+        sendJson(res, 200, await loadDataset(dbPath, worldRoot))
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/bot') {
         const botId = url.searchParams.get('bot_id') ?? ''
         const runId = url.searchParams.get('run_id') ?? ''
         if (!botId || !runId) { sendJson(res, 400, { error: 'bot_id and run_id required' }); return }
-        const runs = await listRunsForBot(dbPath, botId)
+        const runs = await listRunsForBot(dbPath, worldRoot, botId)
         if (!runs.some(r => r.runId === runId)) { sendJson(res, 404, { error: 'bot or run not found' }); return }
         const bot = await loadBotForRun(dbPath, botId, runId, runs)
         if (!bot) { sendJson(res, 404, { error: 'no data for bot/run' }); return }
