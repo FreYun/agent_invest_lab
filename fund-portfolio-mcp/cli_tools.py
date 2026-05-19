@@ -77,8 +77,11 @@ async def _amain() -> str:
     p_close.add_argument("--trade-date", required=True)
     p_close.add_argument("--run-id", required=True)
 
-    # 可买基金清单（系统侧 day-1 自动调一次播报给 bot；bot 也能自己再调）
-    sub.add_parser("get_buyable_funds")
+    # 可买基金清单（系统侧 day-1 自动调一次播报给 bot；bot 也能自己再调）。
+    # --run-id 可选：传则按 per-run 白名单收窄（curated=True），不传则返全集（lab ad-hoc 用）。
+    p_buy = sub.add_parser("get_buyable_funds")
+    p_buy.add_argument("--run-id", default="",
+                       help="本轮 run id。传则按 per-run 白名单收窄；不传返全集。")
 
     # World daily-prompt 注入用：读账户/持仓/订单快照 + 历史业绩，避免 bot 每天
     # 都自己调 portfolio_get_my_history / portfolio_get_my_performance。底层调
@@ -110,7 +113,7 @@ async def _amain() -> str:
     if args.cmd == "close_my_day":
         return await portfolio_close_my_day(args.bot_id, args.trade_date, args.run_id)
     if args.cmd == "get_buyable_funds":
-        return await portfolio_get_buyable_funds()
+        return await portfolio_get_buyable_funds(args.run_id)
     if args.cmd == "get_my_history":
         return await portfolio_get_my_history(args.bot_id, args.limit, args.fund_code, args.run_id)
     if args.cmd == "get_my_performance":
