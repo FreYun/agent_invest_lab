@@ -37,3 +37,15 @@ export const strategyFile = (w: string, runId: string, bot: string) => join(stra
 export const strategyRevisionsFile = (w: string, runId: string, bot: string) => join(strategiesDir(w, runId), `${bot}.revisions.jsonl`)
 // strategy-server 进程信息 runtime 描述符（dashboard 可读）。
 export const strategyServerRuntimeFile = (w: string, runId: string) => join(runDir(w, runId), 'strategy-server.json')
+
+// Per-run 可买基金白名单文件。注意这是 GLOBAL data 路径（不在 runDir 下）——fund-portfolio-mcp
+// 服务通过 FUND_BUYABLE_CODES_DIR env 直接读这个目录，不需要也不应该知道 world/runtime/runs
+// 的内部结构。worldRoot = <repo>/world/runtime → '..','..','data','buyable' 落到 <repo>/data/buyable。
+// 该路径必须和 lab-fund-{bot-only,readonly}.service 的 FUND_BUYABLE_CODES_DIR 保持一致（手工 sync）。
+//
+// 早期是单一全局文件 lab-fund-buyable.json，两 run 并发会互相覆盖（bot11 半导体被 bot16 黄金污染）。
+// 现按 run_id 物理隔离，每 run 一个文件。
+export const buyableCodesDir = (w: string) => join(w, '..', '..', 'data', 'buyable')
+export const buyableCodesFile = (w: string, runId: string) => join(buyableCodesDir(w), `${runId}.json`)
+// 历史受污染 run 的标记文件（scripts/detect-universe-contamination.py 写入；dashboard 贴标读取）。
+export const universeContaminationFile = (w: string, runId: string) => join(runDir(w, runId), 'universe-contamination.json')

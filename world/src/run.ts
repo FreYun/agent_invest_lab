@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { WorldConfig } from './config.ts'
 import { loadCalendar, computeTradingDates } from './calendar.ts'
 import { mapWithConcurrency } from './concurrency.ts'
@@ -29,7 +29,12 @@ export interface RunWorldOptions {
 // (openclaw/src/sessions/session-key-utils.ts)。不带这个前缀，pi runner 内部 plugin tool
 // context (mem0_search 等) 会 fallback 到 resolveDefaultAgentId(cfg)，把所有 bot 都当成
 // 默认 agent (eg mag1)，导致 MEMORY.md / workspace 全部落到 mag1 那条线。
-const SESSION_KEY = (runId: string, botId: string): string => `agent:${botId}:trading-${runId}`
+//
+// 含 date 后缀：每个世界日是独立 chat session（history:[] 也保证 history 不串），但
+// loop server 这边的 sessionKey→UUID 映射也按日切分，sessions.jsonl 不再是 326 天连成
+// 一个超大文件、dashboard 也能按日查阅。run.ts:chatOneBot 调用这个函数时传当天 date。
+const SESSION_KEY = (runId: string, botId: string, date: string): string =>
+  `agent:${botId}:trading-${runId}-${date}`
 const JOURNAL_REL = 'memory/trading/journal.md'
 
 /** 选 openclaw.json 源路径。当前两种 loop 都用同一个 credentials 文件。 */
@@ -82,6 +87,13 @@ export function botServerArgv(config: WorldConfig, botId: string, workspace: str
     // (avoids depending on the spawn cwd having tsx in node_modules).
     const tsxLoader = join(config.openclawRoot, 'node_modules/tsx/dist/loader.mjs')
     return [process.execPath, '--import', `file://${tsxLoader}`, config.piServerEntry, '--bot-id', botId, '--workspace', workspace, '--openclaw-json', loopConfigPath]
+  }
+  // research-loop 分支：当 researchLoopRustBin 配置时走 rust binary；否则 fallback 到
+  // ts/server.ts。两端 JSON-RPC 协议同集（ping / chat / shutdown），BotServer 无感。
+  // 切到 rust 主要为了让 ChatEvent::Error 不再被 ts server 静默吃掉——rs server.rs 把
+  // chat_error 透出到 RPC 返回值，run.ts 据此把当天标 'error' 而不是 'ok'。
+  if (config.researchLoopRustBin) {
+    return [config.researchLoopRustBin, 'server', '--bot-id', botId, '--workspace', workspace, '--config', loopConfigPath]
   }
   const serverEntry = join(config.researchLoop, 'server.ts')
   return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', loopConfigPath]
@@ -371,12 +383,13 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // 系统侧 init：每个 bot 调一次 init_fund_account。bot 在 BOT_ONLY 端口看不到这个 tool，
   // 只能由 world 帮它建账户。默认 capital 100 万、全现金、reset=true（world replay 起点干净）。
   if (config.fundMcpCli) {
-    // Per-run 可买基金白名单：写到 fund-portfolio-mcp 进程能读到的固定路径。
-    // 路径必须跟 lab-fund-bot-only.service / lab-fund-readonly.service 的
-    // FUND_BUYABLE_CODES_FILE env 一致（手工 sync；改一处记得改另一处）。
+    // Per-run 可买基金白名单：写 <buyableCodesDir>/<runId>.json。fund-portfolio-mcp 服务通过
+    // FUND_BUYABLE_CODES_DIR env 读这个目录，按调用方传入的 run_id 选文件。
+    // 路径相对关系由 paths.ts 单点维护，必须和 lab-fund-{bot-only,readonly}.service 的
+    // FUND_BUYABLE_CODES_DIR env 保持一致。
     if (config.buyableFundCodes) {
       try {
-        writeFileSync(BUYABLE_CODES_FILE, JSON.stringify({ fund_codes: config.buyableFundCodes }) + '\n')
+        writeBuyableCodesFile(worldRoot, runId, config.buyableFundCodes)
         log(worldRoot, runId, `fund buyable codes pinned (${config.buyableFundCodes.length}): ${config.buyableFundCodes.slice(0, 8).join(',')}${config.buyableFundCodes.length > 8 ? ',…' : ''}`)
       } catch (err) {
         log(worldRoot, runId, `fund buyable codes write FAILED: ${err instanceof Error ? err.message : String(err)}`)
@@ -399,9 +412,16 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   return { tradingDates, memory, simworldProxy, fundPortfolioProxy, strategyServer, bots, currentDateRef, memoryStore: store, restartBot }
 }
 
-// 必须跟 lab-fund-bot-only.service / lab-fund-readonly.service 的 FUND_BUYABLE_CODES_FILE
-// 完全一致——server.py 在 BOT_ONLY 模式下从这里读 curated 列表。
-const BUYABLE_CODES_FILE = '/home/rooot/agent_invest_lab/data/lab-fund-buyable.json'
+/** 写当前 run 的可买基金白名单文件。落点 = paths.buyableCodesFile(worldRoot, runId)；
+ *  fund-portfolio-mcp 通过 FUND_BUYABLE_CODES_DIR 读同一目录。
+ *  抽出来 named export 是为了 concurrent-runs.test.ts 能直接测"两 run 各自写、互不覆盖"，
+ *  不用跑整个 setup()。返回写入的绝对路径，便于调用方 log 或测试 assert。 */
+export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: string[]): string {
+  const p = P.buyableCodesFile(worldRoot, runId)
+  mkdirSync(dirname(p), { recursive: true })
+  writeFileSync(p, JSON.stringify({ fund_codes: codes }) + '\n')
+  return p
+}
 
 interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string }
 
@@ -461,8 +481,17 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
   writeStatus('running')
   log(worldRoot, runId, `bot ${b.botId}: chat request sent for ${date} (timeout=${Math.floor(perBotTimeoutMs / 1000)}s)`)
   try {
-    const r = await b.server.chat({ message, session_key: SESSION_KEY(runId, b.botId), history: [] }, { timeoutMs: perBotTimeoutMs })
+    const r = await b.server.chat({ message, session_key: SESSION_KEY(runId, b.botId, date), history: [] }, { timeoutMs: perBotTimeoutMs })
     writeFileSync(P.replyFile(worldRoot, runId, date, b.botId), JSON.stringify(r, null, 2) + '\n')
+    // r.chat_error 由 rs server.rs 在 chat.send() 因 chat_llm 超时 / LLM 错误 mid-flow
+    // 终止时填写。chat 本身 graceful return（带 lastReply），不带这字段就没法区分"正常
+    // 完成"还是"被静默截断"。有则当天记 'error'，避免下一天还踩同一个 60s 坑。
+    if (r.chat_error) {
+      const s: DayBotStatus = { bot: b.botId, status: 'error', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, error: `chat_error: ${r.chat_error}` }
+      writeStatus(s.status, { iterations: s.iterations, usage: s.usage, error: s.error, finishedAt: new Date().toISOString() })
+      log(worldRoot, runId, `bot ${b.botId}: chat ended with chat_error (${r.chat_error})`)
+      return s
+    }
     const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt }
     writeStatus(s.status, { iterations: s.iterations, usage: s.usage, finishedAt: new Date().toISOString() })
     return s
