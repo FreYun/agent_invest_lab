@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { universeContaminationFile } from '../paths.ts'
+import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
 
 const execFileAsync = promisify(execFile)
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -36,6 +37,7 @@ interface AccountRow {
 }
 
 interface HoldingRow {
+  trade_date: string
   fund_code: string
   fund_name: string
   theme: string
@@ -92,6 +94,9 @@ interface BotSeriesPoint {
 
 interface BotAction extends ActionRow {
   side: 'buy' | 'sell' | 'hold'
+  weight_before: number
+  weight_after: number
+  weight_delta: number
 }
 
 interface BenchmarkPoint {
@@ -132,6 +137,7 @@ interface BotDataset {
   series: BotSeriesPoint[]
   actions: BotAction[]
   holdings: HoldingRow[]
+  holdingsByDate: Record<string, Omit<HoldingRow, 'trade_date'>[]>
   reviews: ReviewRow[]
   benchmark: BotBenchmark | null
   runId: string
@@ -298,8 +304,9 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
   const latest = daily[daily.length - 1] ?? null
   const first = daily[0] ?? null
   const latestDate = latest?.trade_date ?? ''
-  const holdings = latestDate ? await queryRows<HoldingRow>(dbPath, `
-    SELECT p.fund_code,
+  const allHoldings = await queryRows<HoldingRow>(dbPath, `
+    SELECT p.trade_date,
+           p.fund_code,
            COALESCE(i.fund_name, p.fund_code) AS fund_name,
            COALESCE(i.theme, '') AS theme,
            p.asset_class, p.role, p.shares, p.nav, p.market_value, p.weight,
@@ -307,9 +314,12 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
     FROM fund_bot_position_snapshots p
     LEFT JOIN fund_info i ON i.fund_code = p.fund_code
     WHERE p.bot_id = ${botIdSql} AND p.run_id = ${runIdSql}
-      AND p.trade_date = ${quoteSql(latestDate)}
-    ORDER BY p.market_value DESC, p.fund_code ASC
-  `) : []
+    ORDER BY p.trade_date ASC, p.market_value DESC, p.fund_code ASC
+  `)
+  // Legacy `holdings` = latestDate snapshot (consumed by existing front-end code).
+  const holdings = allHoldings.filter(h => h.trade_date === latestDate)
+  // New: per-day index — drop trade_date from row body since it becomes the index key.
+  const holdingsByDate = buildHoldingsByDate(allHoldings)
   // LEFT JOIN fund_bot_orders to surface the bot's actual decision rationale
   // (orders.action_reason — written by the bot at place_buy/sell time). The
   // actions.reason column is just an auto-generated settle bookkeeping string.
@@ -345,6 +355,7 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
   const actions: BotAction[] = actionsRaw.map(action => ({
     ...action,
     side: classifyAction(action.action_type, action.final_decision),
+    ...computeActionWeights(holdingsByDate, action.action_date, action.fund_code),
   }))
   const firstDateForBench = first?.trade_date || actions.find(a => a.side === 'buy')?.action_date || ''
   const lastDateForBench = latest?.trade_date || actions[actions.length - 1]?.action_date || ''
@@ -389,6 +400,7 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
     })),
     actions,
     holdings,
+    holdingsByDate,
     reviews,
     benchmark,
     runId,

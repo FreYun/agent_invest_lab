@@ -83,6 +83,35 @@ test('backtest dashboard serves data', async () => {
     const one = await oneRes.json() as Bot
     assert.equal(one.botId, target.botId)
     assert.equal(one.runId, target.runId)
+
+    type HoldingByDateRow = { fund_code: string; fund_name: string; weight: number; market_value: number }
+    type BotWithExt = Bot & {
+      holdingsByDate: Record<string, HoldingByDateRow[]>
+      holdings: HoldingByDateRow[]
+      actions: Array<{
+        action_id: number
+        action_date: string
+        fund_code: string
+        weight_before: number
+        weight_after: number
+        weight_delta: number
+      }>
+      series: Array<{ trade_date: string }>
+    }
+    const oneExt = one as BotWithExt
+    assert.ok(oneExt.holdingsByDate && typeof oneExt.holdingsByDate === 'object', 'response has holdingsByDate')
+    for (const s of oneExt.series.slice(-3)) {
+      const day = oneExt.holdingsByDate[s.trade_date]
+      assert.ok(day === undefined || Array.isArray(day), `holdingsByDate['${s.trade_date}'] is array or absent`)
+    }
+    assert.ok(Array.isArray(oneExt.holdings), 'legacy holdings array preserved')
+    for (const a of oneExt.actions) {
+      assert.ok(typeof a.weight_before === 'number', `action ${a.action_id} has weight_before`)
+      assert.ok(typeof a.weight_after === 'number', `action ${a.action_id} has weight_after`)
+      assert.ok(typeof a.weight_delta === 'number', `action ${a.action_id} has weight_delta`)
+      assert.ok(Math.abs((a.weight_after - a.weight_before) - a.weight_delta) < 1e-9, 'weight_delta = after - before')
+    }
+
     // bad bot_id / run_id combo → 404
     const badRes = await fetch(`${base}/api/backtest/bot?bot_id=does-not-exist&run_id=nope`)
     assert.equal(badRes.status, 404)
