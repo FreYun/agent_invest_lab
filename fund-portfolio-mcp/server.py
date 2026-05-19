@@ -115,17 +115,27 @@ def _require_run_id(run_id: str) -> str | None:
     return None
 
 
-# Per-run 可买基金白名单：world 每轮 replay 在 setup 时写一份 JSON 到 FUND_BUYABLE_CODES_FILE
-# 指向的路径，本进程在每次相关 tool call 时按需读取（不缓存——文件随 world 切换 run 而变）。
-# 文件不存在 / 解析失败 / 列表为空 → 返回 None，调用方按"不限制"处理（lab 没启用 world 时的安全回落）。
-_BUYABLE_CODES_FILE = os.getenv("FUND_BUYABLE_CODES_FILE", "")
+# Per-run 可买基金白名单：world 每轮 replay 在 setup 时写一份 JSON 到
+# <FUND_BUYABLE_CODES_DIR>/<run_id>.json，本进程每次相关 tool call 时按 run_id 读对应文件
+# （不缓存——文件随 world 切换 run 而变；现在按 run 物理隔离，并发不再互相覆盖）。
+# 目录未设 / run_id 为空 / 文件不存在 / 解析失败 / 列表为空 → 返回 None，调用方按"不限制"
+# 处理（lab 没启用 world 时的安全回落）。
+#
+# 历史 single-file 设计（FUND_BUYABLE_CODES_FILE → 一个全局文件）已废弃——两 run 并发会
+# 互相覆盖，曾经把 bot11 的半导体池污染成 bot16 的黄金池。
+_BUYABLE_CODES_DIR = os.getenv("FUND_BUYABLE_CODES_DIR", "")
 
 
-def _load_curated_buyable_codes() -> list[str] | None:
-    if not _BUYABLE_CODES_FILE:
+def _load_curated_buyable_codes(run_id: str) -> list[str] | None:
+    if not _BUYABLE_CODES_DIR or not run_id:
         return None
+    # 防 path-traversal：run_id 只能当单段 basename 用。world 现有命名是 dash-<ts>，本来
+    # 就没含 '/' 或 '..'；这是 defense-in-depth。
+    if "/" in run_id or "\\" in run_id or ".." in run_id or "\x00" in run_id:
+        return None
+    path = os.path.join(_BUYABLE_CODES_DIR, f"{run_id}.json")
     try:
-        with open(_BUYABLE_CODES_FILE) as f:
+        with open(path) as f:
             payload = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
@@ -267,17 +277,15 @@ def _compute_bot_performance(conn, bot_id: str, trade_date: str, run_id: str = "
     不满窗口（如建仓 10 天 < 21 天 1m）→ 兜底使用 since_inception 全量序列，fallback=1 标识。
 
     必须在 fund_bot_daily_snapshots 写入今日快照之后调用——本函数依赖那一行做计算输入。
-    同日多 run 时按 MAX(run_id) 取每日一条历史样本（与 _compute_fund_snapshot 的 hist_navs 同口径）。
+    历史样本严格按当前 run_id 过滤——不同 run 的历史完全隔离，避免跨 run NAV 污染区间业绩。
     """
-    # 加载历史（含今日；今日快照已经写入）；同日多 run 取 MAX(run_id) 一条。
+    # 加载本 run 的历史（含今日；今日快照已经写入）。
     rows = conn.execute(
         "SELECT trade_date, net_value, daily_return_pct "
-        "FROM fund_bot_daily_snapshots AS s "
-        "WHERE bot_id = ? AND trade_date <= ? AND run_id = ("
-        "  SELECT MAX(run_id) FROM fund_bot_daily_snapshots "
-        "  WHERE bot_id = s.bot_id AND trade_date = s.trade_date) "
+        "FROM fund_bot_daily_snapshots "
+        "WHERE bot_id = ? AND trade_date <= ? AND run_id = ? "
         "ORDER BY trade_date",
-        (bot_id, trade_date)
+        (bot_id, trade_date, run_id or "")
     ).fetchall()
     if not rows:
         return
@@ -1355,10 +1363,10 @@ async def portfolio_place_buy_order(
         return err
     if amount <= 0:
         return json.dumps({"success": False, "message": f"amount 必须 > 0，传入 {amount}"}, ensure_ascii=False)
-    # Per-run curated 池：FUND_BUYABLE_CODES_FILE 设了且包含合法 fund_codes 列表时，
+    # Per-run curated 池：<FUND_BUYABLE_CODES_DIR>/<run_id>.json 存在且包含合法 fund_codes 时，
     # bot 必须从这份白名单里选——拒绝任何不在 curated 中的 fund_code。
     # 文件不存在 → curated=None → 不限制（lab 没启用 world replay 的安全回落）。
-    curated = _load_curated_buyable_codes()
+    curated = _load_curated_buyable_codes(run_id)
     if curated is not None and fund_code not in curated:
         return json.dumps({
             "success": False,
@@ -2051,26 +2059,29 @@ async def portfolio_get_my_performance(
 
 
 @mcp.tool()
-async def portfolio_get_buyable_funds() -> str:
+async def portfolio_get_buyable_funds(run_id: str = "") -> str:
     """Bot 查看当前 lab 里可下单的基金代码列表。
 
     默认数据源：fund_nav（基金净值底表）的 fund_code 去重升序。
-    如果 FUND_BUYABLE_CODES_FILE 指向的文件存在并解出 curated 列表（world replay 每轮
-    在 setup 时写入），结果会**收窄成 curated ∩ fund_nav**——这就是 user 本轮回测显式
-    选定的可买池，bot 拿这个传给 portfolio_place_buy_order。
+    如果 <FUND_BUYABLE_CODES_DIR>/<run_id>.json 存在并解出 curated 列表（world replay 每轮
+    在 setup 时按 run_id 写入），结果会**收窄成 curated ∩ fund_nav**——这就是 user 本轮回测
+    显式选定的可买池，bot 拿这个传给 portfolio_place_buy_order。
+
+    run_id 由 fund-portfolio-proxy 注入（bot 看不见、改不了）；空 run_id（CLI 直接调或
+    lab 没启用 world replay）→ curated=False，返回全部 fund_nav 代码。
 
     返回：
       success    True
       count      可买基金数
       fund_codes [str, ...]  纯代码列表，按字典序升序
-      curated    bool        当前是否在 curated 模式（被 FUND_BUYABLE_CODES_FILE 收窄）
+      curated    bool        当前是否在 curated 模式（被 per-run 白名单收窄）
     """
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT DISTINCT fund_code FROM fund_nav ORDER BY fund_code"
         ).fetchall()
         all_codes = {r["fund_code"] for r in rows}
-    curated = _load_curated_buyable_codes()
+    curated = _load_curated_buyable_codes(run_id)
     if curated is not None:
         codes = sorted(c for c in curated if c in all_codes)
         is_curated = True
@@ -3442,9 +3453,10 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
 
     市值口径：默认 shares × 当日 fund_nav；当天没有真实调仓且份额未变、且 fund_nav 有日收益率时，
     用「上一日持仓快照市值 × (1+日收益率)」递推，避免 fund_nav 在累计/单位净值口径间切换造成跳变。
-    历史快照查询取每日「最新 run_id」那条作为 prev 基准（用 created_at 兜底）。
+    历史快照查询严格按当前 run_id 过滤——不跨 run 取 prev_total / prev_positions / hist_navs，
+    避免别 run 的 NAV 灌进本 run 的 daily_return / max_drawdown。
     收益率：daily_return = total/prev_total - 1；cumulative = total/initial - 1；
-    max_drawdown：扫整条 net_value 序列（起点 1.0）找最大 peak-to-trough。
+    max_drawdown：扫本 run 整条 net_value 序列（起点 1.0）找最大 peak-to-trough。
     管理费/托管费/销售服务费已内含在公布净值里，不二次计提。
     """
     account = _get_account(conn, bot_id)
@@ -3455,31 +3467,28 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
     cash = float(state["cash"] or 0.0)
     positions = state["positions"]
 
-    # 取「上一交易日」最近一份 daily 快照——同日多 run 用 run_id 字典序最后一条作为最终态。
+    # 取「上一交易日」本 run 自己的 daily 快照——不跨 run，避免拿别 run 末日的 total_value
+    # 当 prev_total（会让本 run Day 1 的 daily_return_pct 跳成跨 run 的差异）。
     prev_snapshot = conn.execute(
-        "SELECT total_value FROM fund_bot_daily_snapshots WHERE bot_id = ? AND trade_date < ? "
-        "ORDER BY trade_date DESC, run_id DESC LIMIT 1",
-        (bot_id, trade_date)
+        "SELECT total_value FROM fund_bot_daily_snapshots "
+        "WHERE bot_id = ? AND trade_date < ? AND run_id = ? "
+        "ORDER BY trade_date DESC LIMIT 1",
+        (bot_id, trade_date, run_id or "")
     ).fetchone()
     prev_total = float(prev_snapshot["total_value"]) if prev_snapshot and prev_snapshot["total_value"] else initial_capital
 
-    # 上一日的持仓级快照（用于日收益率递推 + 产品 daily_pnl）
-    # 同日多 run 取 MAX(run_id) 的那一份作为"昨天收盘态"。
+    # 上一日的持仓级快照（用于日收益率递推 + 产品 daily_pnl）——同样只看本 run。
     prev_positions: dict[str, dict] = {}
     prev_date_row = conn.execute(
-        "SELECT MAX(trade_date) as d FROM fund_bot_position_snapshots WHERE bot_id = ? AND trade_date < ?",
-        (bot_id, trade_date)
+        "SELECT MAX(trade_date) as d FROM fund_bot_position_snapshots "
+        "WHERE bot_id = ? AND trade_date < ? AND run_id = ?",
+        (bot_id, trade_date, run_id or "")
     ).fetchone()
     if prev_date_row and prev_date_row["d"]:
-        prev_run_row = conn.execute(
-            "SELECT MAX(run_id) as r FROM fund_bot_position_snapshots WHERE bot_id=? AND trade_date=?",
-            (bot_id, prev_date_row["d"])
-        ).fetchone()
-        prev_run = prev_run_row["r"] if prev_run_row and prev_run_row["r"] is not None else ""
         for p in conn.execute(
             "SELECT fund_code, market_value, shares FROM fund_bot_position_snapshots "
             "WHERE bot_id=? AND trade_date=? AND run_id=?",
-            (bot_id, prev_date_row["d"], prev_run)
+            (bot_id, prev_date_row["d"], run_id or "")
         ).fetchall():
             prev_positions[p["fund_code"]] = {"mv": p["market_value"], "shares": p["shares"]}
 
@@ -3573,14 +3582,15 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
 
     daily_return_pct = (total_value - prev_total) / prev_total * 100 if prev_total else 0.0
     cumulative_return_pct = (total_value - initial_capital) / initial_capital * 100 if initial_capital else 0.0
-    # 历史 net_value 序列：同日多 run 时按 MAX(run_id) 取每日一条，避免同日重复采样污染 drawdown。
+    # 历史 net_value 序列：严格按当前 run_id 过滤。早期实现按 MAX(run_id) 跨 run 取数，
+    # 会把别 run 的 NAV（甚至年代不同的回测）灌进 _calc_max_drawdown 的 peak，导致
+    # 当前 run 的 MDD 被虚高（典型现象：另一个 run net_value 见过 1.18，本 run 的所有
+    # 后续日 MDD 都按 1.18 算 peak-to-trough）。
     hist_navs = [r[0] for r in conn.execute(
-        "SELECT net_value FROM fund_bot_daily_snapshots AS s "
-        "WHERE bot_id=? AND trade_date < ? AND run_id = ("
-        "  SELECT MAX(run_id) FROM fund_bot_daily_snapshots "
-        "  WHERE bot_id=s.bot_id AND trade_date=s.trade_date"
-        ") ORDER BY trade_date",
-        (bot_id, trade_date)
+        "SELECT net_value FROM fund_bot_daily_snapshots "
+        "WHERE bot_id=? AND trade_date < ? AND run_id=? "
+        "ORDER BY trade_date",
+        (bot_id, trade_date, run_id or "")
     ).fetchall() if r[0] is not None]
     max_drawdown_pct = _calc_max_drawdown([1.0] + hist_navs + [net_value])
 
