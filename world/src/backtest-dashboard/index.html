@@ -206,7 +206,7 @@ function renderBotList(data){
     const selected = bot.botId === state.selected ? ' active' : ''
     return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
   }).join('')
-  root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => selectBot(el.dataset.bot)))
+  root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => { void selectBot(el.dataset.bot) }))
 }
 const STACK_PALETTE = [
   '#6cd0ea', '#c084fc', '#f59e0b', '#22c55e',
@@ -611,10 +611,27 @@ function renderDetail(bot){
   byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
   if (typeof chartData !== 'string') attachCursor(byId('detailRoot'), bot, chartData)
 }
-function selectBot(botId){
+async function hydrateBotByIndex(idx){
+  if (idx < 0 || !state.data?.bots[idx]) return null
+  const b = state.data.bots[idx]
+  if (b.holdingsByDate) return b
+  // The polled /api/backtest/data summary strips holdingsByDate for bandwidth; pull the
+  // full per-bot payload before rendering so position sub-chart, cursor tooltip and
+  // holdings panel date-swap have data to work with.
+  try {
+    const r = await fetch(`/api/backtest/bot?bot_id=${encodeURIComponent(b.botId)}&run_id=${encodeURIComponent(b.runId)}`, { cache: 'no-store' })
+    if (r.ok) {
+      state.data.bots[idx] = await r.json()
+      return state.data.bots[idx]
+    }
+  } catch { /* fall back to summary */ }
+  return b
+}
+async function selectBot(botId){
   state.selected = botId || state.selected || (state.data?.bots[0]?.botId ?? null)
   renderBotList(state.data)
-  const bot = state.data.bots.find(b => b.botId === state.selected) || state.data.bots[0]
+  const idx = state.data.bots.findIndex(b => b.botId === state.selected)
+  const bot = await hydrateBotByIndex(idx) || state.data.bots[0]
   if (bot) renderDetail(bot)
 }
 function formatRunLabel(run){
@@ -705,7 +722,8 @@ async function refreshData({ initial = false } = {}){
     state.selected = state.data.summary.bestBotId || state.data.bots[0].botId
   }
   renderBotList(state.data)
-  const bot = state.data.bots.find(b => b.botId === state.selected) || state.data.bots[0]
+  const idx = state.data.bots.findIndex(b => b.botId === state.selected)
+  const bot = await hydrateBotByIndex(idx) || state.data.bots[0]
   if (bot) renderDetail(bot)
   updateRefreshBadge()
 }
