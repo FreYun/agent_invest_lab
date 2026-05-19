@@ -153,6 +153,10 @@ interface BotRunRef {
   contaminated?: boolean
 }
 
+/** Summary variant used in /api/backtest/data (polled every 10 s).
+ *  holdingsByDate is stripped — it is only needed on the per-bot detail view. */
+type BotDatasetSummary = Omit<BotDataset, 'holdingsByDate'>
+
 interface Dataset {
   generatedAt: string
   dbPath: string
@@ -166,7 +170,7 @@ interface Dataset {
     worstBotId: string
     worstReturnPct: number
   }
-  bots: BotDataset[]
+  bots: BotDatasetSummary[]
 }
 
 function quoteSql(s: string): string {
@@ -410,12 +414,18 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
 
 async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> {
   const botIds = await listAllBotIds(dbPath)
-  const bots: BotDataset[] = []
+  const bots: BotDatasetSummary[] = []
   for (const botId of botIds) {
     const runs = await listRunsForBot(dbPath, worldRoot, botId)
     if (!runs.length) continue
     const bot = await loadBotForRun(dbPath, botId, runs[0].runId, runs)
-    if (bot) bots.push(bot)
+    if (bot) {
+      // /api/backtest/data is polled every 10s by the frontend, which reads
+      // holdingsByDate only on the per-bot detail view (/api/backtest/bot).
+      // Strip the per-day history here to keep poll payload small.
+      const { holdingsByDate: _drop, ...summary } = bot
+      bots.push(summary)
+    }
   }
   bots.sort((a, b) => b.cumulativeReturnPct - a.cumulativeReturnPct || b.totalValue - a.totalValue || a.botId.localeCompare(b.botId))
   return {
