@@ -64,3 +64,10 @@ test('computeActionWeights: unknown fund → all zeros', () => {
   assert.equal(w.weight_after, 0)
   assert.equal(w.weight_delta, 0)
 })
+
+test('computeActionWeights: action before any snapshot → all zeros', () => {
+  const w = computeActionWeights(hbd, '2025-12-31', '020251')
+  assert.equal(w.weight_before, 0)
+  assert.equal(w.weight_after, 0)
+  assert.equal(w.weight_delta, 0)
+})
