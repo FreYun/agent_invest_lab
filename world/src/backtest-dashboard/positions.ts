@@ -64,3 +64,53 @@ export function computeActionWeights(
     weight_delta: w_after - w_before,
   }
 }
+
+export interface StackBand {
+  fund_code: string
+  fund_name: string
+  lower: number[]   // per-date cumulative weight at band bottom
+  upper: number[]   // per-date cumulative weight at band top
+}
+
+/**
+ * For a stacked-area chart: produce one band per fund across the date range.
+ * Funds are ordered by their max weight (desc) within the range, so the heaviest
+ * fund sits at the bottom of the stack and the visual order is stable for the
+ * given range. Funds missing from a given date contribute a zero-width segment
+ * that day (lower == upper).
+ */
+export function buildStackBands(
+  holdingsByDate: Record<string, { fund_code: string; fund_name: string; weight: number | null }[]>,
+  dates: string[],
+): StackBand[] {
+  // Collect funds present anywhere in `dates`, tracking max weight + display name
+  const meta = new Map<string, { fund_name: string; maxWeight: number }>()
+  for (const d of dates) {
+    for (const h of holdingsByDate[d] ?? []) {
+      const cur = meta.get(h.fund_code)
+      const w = Number(h.weight ?? 0)
+      if (!cur) meta.set(h.fund_code, { fund_name: h.fund_name, maxWeight: w })
+      else if (w > cur.maxWeight) cur.maxWeight = w
+    }
+  }
+  const ordered = [...meta.entries()].sort((a, b) => b[1].maxWeight - a[1].maxWeight || a[0].localeCompare(b[0]))
+  // Build per-date cumulative stack
+  const bands: StackBand[] = ordered.map(([fund_code, m]) => ({
+    fund_code,
+    fund_name: m.fund_name,
+    lower: new Array(dates.length).fill(0),
+    upper: new Array(dates.length).fill(0),
+  }))
+  for (let i = 0; i < dates.length; i++) {
+    const day = holdingsByDate[dates[i]] ?? []
+    const byCode = new Map<string, number>()
+    for (const h of day) byCode.set(h.fund_code, Number(h.weight ?? 0))
+    let cum = 0
+    for (const band of bands) {
+      band.lower[i] = Math.round(cum * 1e9) / 1e9
+      cum += byCode.get(band.fund_code) ?? 0
+      band.upper[i] = Math.round(cum * 1e9) / 1e9
+    }
+  }
+  return bands
+}
