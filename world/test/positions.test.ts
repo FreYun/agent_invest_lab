@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildHoldingsByDate } from '../src/backtest-dashboard/positions.ts'
-import { computeActionWeights } from '../src/backtest-dashboard/positions.ts'
+import { buildHoldingsByDate, computeActionWeights, buildStackBands } from '../src/backtest-dashboard/positions.ts'
 
 test('buildHoldingsByDate groups rows by trade_date', () => {
   const rows = [
@@ -70,4 +69,56 @@ test('computeActionWeights: action before any snapshot → all zeros', () => {
   assert.equal(w.weight_before, 0)
   assert.equal(w.weight_after, 0)
   assert.equal(w.weight_delta, 0)
+})
+
+test('buildStackBands: single-fund → one band, lower=0, upper=weight', () => {
+  const hbd = {
+    '2026-01-05': [{ fund_code: '020251', fund_name: 'A', weight: 0.6 } as any],
+    '2026-01-06': [{ fund_code: '020251', fund_name: 'A', weight: 0.7 } as any],
+  }
+  const bands = buildStackBands(hbd, ['2026-01-05', '2026-01-06'])
+  assert.equal(bands.length, 1)
+  assert.equal(bands[0].fund_code, '020251')
+  assert.deepEqual(bands[0].lower, [0, 0])
+  assert.deepEqual(bands[0].upper, [0.6, 0.7])
+})
+
+test('buildStackBands: multi-fund sorted by max weight desc', () => {
+  const hbd = {
+    '2026-01-05': [
+      { fund_code: 'B', fund_name: 'B', weight: 0.2 } as any,
+      { fund_code: 'A', fund_name: 'A', weight: 0.5 } as any,
+    ],
+    '2026-01-06': [
+      { fund_code: 'A', fund_name: 'A', weight: 0.55 } as any,
+      { fund_code: 'B', fund_name: 'B', weight: 0.15 } as any,
+    ],
+  }
+  const bands = buildStackBands(hbd, ['2026-01-05', '2026-01-06'])
+  assert.equal(bands.length, 2)
+  // A has max weight 0.55, B has max 0.2 → A first (bottom)
+  assert.equal(bands[0].fund_code, 'A')
+  assert.equal(bands[1].fund_code, 'B')
+  assert.deepEqual(bands[0].lower, [0, 0])
+  assert.deepEqual(bands[0].upper, [0.5, 0.55])
+  assert.deepEqual(bands[1].lower, [0.5, 0.55])
+  assert.deepEqual(bands[1].upper, [0.7, 0.7])  // 0.5+0.2, 0.55+0.15
+})
+
+test('buildStackBands: missing fund on a date → 0 width band on that date', () => {
+  const hbd = {
+    '2026-01-05': [{ fund_code: 'A', fund_name: 'A', weight: 0.5 } as any],
+    '2026-01-06': [
+      { fund_code: 'A', fund_name: 'A', weight: 0.4 } as any,
+      { fund_code: 'B', fund_name: 'B', weight: 0.3 } as any,
+    ],
+  }
+  const bands = buildStackBands(hbd, ['2026-01-05', '2026-01-06'])
+  assert.equal(bands.length, 2)
+  const a = bands.find(b => b.fund_code === 'A')!
+  const b = bands.find(b => b.fund_code === 'B')!
+  assert.deepEqual(a.upper, [0.5, 0.4])
+  // On 2026-01-05, B is absent → lower=upper=A's upper (zero-width band)
+  assert.deepEqual(b.lower, [0.5, 0.4])
+  assert.deepEqual(b.upper, [0.5, 0.7])
 })
