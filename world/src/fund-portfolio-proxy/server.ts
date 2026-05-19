@@ -102,6 +102,55 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
   const needInjection = new Set<string>()
   let schemaSeen = false
 
+  // Session-id ownership: decouple bot's view from upstream's. Bot sees botFacingSessionId
+  // for the lifetime of the run; upstreamSessionId is what we put on the wire to upstream and
+  // can rotate when upstream restarts. Why we own this layer instead of pass-through: the
+  // research-loop MCP client caches the session-id from the first initialize and never
+  // reconnects. When systemctl restart lab-fund-* lands mid-run (real incident 2026-05-19
+  // for bots 3/11/16), FastMCP forgets all sessions, every subsequent tool call returns
+  // HTTP 404 + "Session not found", and the bot is stuck for the rest of the run. This proxy
+  // catches the 404, replays the bot's initialize against upstream to get a fresh sid, and
+  // retries the original request transparently — bot never sees the rotation.
+  let botFacingSessionId: string | undefined
+  let upstreamSessionId: string | undefined
+  let cachedInitBody: string | undefined
+  // Single-flight reinit guard: when several in-flight requests all see 404 after a restart,
+  // only one of them runs initialize and the rest await its result.
+  let reinitInFlight: Promise<void> | null = null
+
+  function looksLikeSessionNotFound(status: number, body: string): boolean {
+    if (status !== 404) return false
+    // FastMCP exact: {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Session not found"}}
+    // Be liberal in matching — any 404 mentioning "Session not found" should trigger reinit.
+    return body.includes('Session not found')
+  }
+
+  async function reinitUpstream(): Promise<void> {
+    if (reinitInFlight) { await reinitInFlight; return }
+    if (!cachedInitBody) {
+      // No initialize ever observed — we can't replay one without knowing the bot's
+      // desired protocolVersion / clientInfo. Bail; bot will get the 404.
+      return
+    }
+    reinitInFlight = (async () => {
+      try {
+        const r = await fetch(opts.upstreamUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+          body: cachedInitBody,
+        })
+        if (!r.ok) return  // give up; next attempt will retry
+        const newSid = r.headers.get('mcp-session-id')
+        // Drain body so the connection can be reused; we don't need to parse it.
+        await r.text()
+        if (newSid && newSid.length > 0) upstreamSessionId = newSid
+      } finally {
+        reinitInFlight = null
+      }
+    })()
+    await reinitInFlight
+  }
+
   const server = createServer((req, res) => {
     void handle(req, res).catch(err => {
       const msg = err instanceof Error ? err.message : String(err)
@@ -117,7 +166,7 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
       return
     }
     if (req.method !== 'POST') {
-      return forward(req, res, null)
+      return forward(req, res, null, null)
     }
 
     const raw = await readBody(req)
@@ -138,10 +187,14 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
     }
 
     const outBody = parsed === null ? raw : JSON.stringify(parsed)
-    await forward(req, res, outBody)
+    const method = parsed?.method
+    if (method === 'initialize') cachedInitBody = outBody
+    await forward(req, res, outBody, method ?? null)
   }
 
-  async function forward(req: IncomingMessage, res: ServerResponse, body: string | null): Promise<void> {
+  /** One upstream POST + response read. No retry, no body rewriting — just the raw send.
+   *  Pulled out so the 404-Session-not-found path can retry without re-walking handle(). */
+  async function sendUpstream(req: IncomingMessage, body: string | null, methodHint: string | null): Promise<{ status: number; headers: Headers; text: string }> {
     const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) {
       if (v === undefined) continue
@@ -151,11 +204,30 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
     }
     if (!headers['accept']) headers['accept'] = 'application/json, text/event-stream'
     if (body !== null && !headers['content-type']) headers['content-type'] = 'application/json'
-
+    // Substitute bot-facing sid with our tracked upstream sid. initialize must NOT carry
+    // an old sid — FastMCP would reuse the dead session otherwise (and refuse to mint a new one).
+    if (methodHint === 'initialize') {
+      delete headers['mcp-session-id']
+    } else if (upstreamSessionId) {
+      headers['mcp-session-id'] = upstreamSessionId
+    }
     const init: RequestInit = { method: req.method ?? 'GET', headers }
     if (body !== null) init.body = body
-
     const upstream = await fetch(opts.upstreamUrl, init)
+    const text = await upstream.text()
+    return { status: upstream.status, headers: upstream.headers, text }
+  }
+
+  async function forward(req: IncomingMessage, res: ServerResponse, body: string | null, methodHint: string | null): Promise<void> {
+    let upstream = await sendUpstream(req, body, methodHint)
+
+    // Transparent reconnect: upstream restart kills sid → 404 + "Session not found".
+    // Reinit and retry exactly once. If retry also fails, surface the latest response.
+    if (looksLikeSessionNotFound(upstream.status, upstream.text) && methodHint !== 'initialize' && cachedInitBody) {
+      await reinitUpstream()
+      if (upstreamSessionId) upstream = await sendUpstream(req, body, methodHint)
+    }
+
     const respHeaders: Record<string, string> = {}
     upstream.headers.forEach((v, k) => {
       const lk = k.toLowerCase()
@@ -163,9 +235,23 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
       respHeaders[lk] = v
     })
 
+    // initialize response: capture upstream sid (rotates on reconnect) and pin botFacingSessionId
+    // on the FIRST initialize so the bot's MCP client never sees its sid change. For
+    // subsequent initialize calls (e.g. re-init triggered by us, though those go through the
+    // separate reinitUpstream path), we still don't expose the new sid to the bot.
+    const upstreamSidHeader = upstream.headers.get('mcp-session-id')
+    if (methodHint === 'initialize' && upstreamSidHeader) {
+      upstreamSessionId = upstreamSidHeader
+      if (!botFacingSessionId) botFacingSessionId = upstreamSidHeader
+    }
+    // Always rewrite the response's mcp-session-id back to botFacingSessionId so the bot's
+    // stored sid stays valid for its full session.
+    if (botFacingSessionId && respHeaders['mcp-session-id']) {
+      respHeaders['mcp-session-id'] = botFacingSessionId
+    }
+
     const ct = upstream.headers.get('content-type') ?? ''
-    const text = await upstream.text()
-    let outText = text
+    let outText = upstream.text
 
     if (ct.includes('text/event-stream') || ct.includes('application/json')) {
       const rewrite = (msg: JsonRpcMessage): void => {
@@ -185,10 +271,10 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
         if (sawSchema) schemaSeen = true
       }
       if (ct.includes('text/event-stream')) {
-        outText = rewriteSseBody(text, rewrite)
+        outText = rewriteSseBody(upstream.text, rewrite)
       } else {
         try {
-          const parsed = JSON.parse(text) as JsonRpcMessage
+          const parsed = JSON.parse(upstream.text) as JsonRpcMessage
           rewrite(parsed)
           outText = JSON.stringify(parsed)
         } catch { /* leave as-is */ }

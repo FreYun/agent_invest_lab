@@ -5,9 +5,19 @@ import type { AddressInfo } from 'node:net'
 import { createFundPortfolioProxy } from '../src/fund-portfolio-proxy/server.ts'
 
 // 镜像 simworld-proxy.test.ts 的 stub upstream，把注入键换成 run_id。
-async function startStubUpstream(): Promise<{ url: string; close: () => Promise<void>; calls: Array<{ name: string; arguments: Record<string, unknown> }> }> {
-  const calls: Array<{ name: string; arguments: Record<string, unknown> }> = []
+// 支持模拟"upstream 重启"：调用 stub.restart() 清空 activeSessionIds —— 之后任何带旧 sid
+// 的请求都返 HTTP 404 + {"error":{"message":"Session not found"}}（与真实 FastMCP 行为一致）。
+async function startStubUpstream(): Promise<{
+  url: string
+  close: () => Promise<void>
+  calls: Array<{ name: string; arguments: Record<string, unknown>; sid?: string }>
+  initializeCount: () => number
+  restart: () => void
+}> {
+  const calls: Array<{ name: string; arguments: Record<string, unknown>; sid?: string }> = []
   let sessionCounter = 0
+  let initCount = 0
+  const activeSessionIds = new Set<string>()
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const chunks: Buffer[] = []
@@ -15,16 +25,28 @@ async function startStubUpstream(): Promise<{ url: string; close: () => Promise<
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown> : {}
       const id = body.id as number | string | null | undefined
       const method = body.method as string | undefined
-      const sse = (payload: Record<string, unknown>): void => {
+      const inSidRaw = req.headers['mcp-session-id']
+      const inSid = typeof inSidRaw === 'string' ? inSidRaw : Array.isArray(inSidRaw) ? inSidRaw[0] : undefined
+      const sse = (payload: Record<string, unknown>, sidOverride?: string): void => {
         const headers: Record<string, string> = { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }
-        if (method === 'initialize') headers['mcp-session-id'] = `sess-${++sessionCounter}`
-        const inSid = req.headers['mcp-session-id']
-        if (typeof inSid === 'string') headers['mcp-session-id'] = inSid
+        if (sidOverride) headers['mcp-session-id'] = sidOverride
+        else if (inSid) headers['mcp-session-id'] = inSid
         res.writeHead(200, headers)
         res.end(`event: message\ndata: ${JSON.stringify(payload)}\n\n`)
       }
+      const reject404SessionNotFound = (): void => {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: 'server-error', error: { code: -32600, message: 'Session not found' } }))
+      }
+      // 非 initialize 请求带的 sid 必须仍在活跃集里——FastMCP 重启会清空。
+      if (method !== 'initialize' && inSid !== undefined && !activeSessionIds.has(inSid)) {
+        return reject404SessionNotFound()
+      }
       if (method === 'initialize') {
-        return sse({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'stub-fund', version: '0' } } })
+        initCount++
+        const newSid = `sess-${++sessionCounter}`
+        activeSessionIds.add(newSid)
+        return sse({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'stub-fund', version: '0' } } }, newSid)
       }
       if (method === 'tools/list') {
         return sse({
@@ -62,7 +84,9 @@ async function startStubUpstream(): Promise<{ url: string; close: () => Promise<
         const params = (body.params ?? {}) as Record<string, unknown>
         const name = typeof params.name === 'string' ? params.name : ''
         const args = (params.arguments ?? {}) as Record<string, unknown>
-        calls.push({ name, arguments: args })
+        const rec: { name: string; arguments: Record<string, unknown>; sid?: string } = { name, arguments: args }
+        if (inSid !== undefined) rec.sid = inSid
+        calls.push(rec)
         return sse({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(args) }] } })
       }
       return sse({ jsonrpc: '2.0', id, result: {} })
@@ -75,6 +99,8 @@ async function startStubUpstream(): Promise<{ url: string; close: () => Promise<
   return {
     url: `http://127.0.0.1:${port}/mcp`,
     calls,
+    initializeCount: () => initCount,
+    restart: () => activeSessionIds.clear(),
     close: () => new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve())),
   }
 }
@@ -199,4 +225,66 @@ test('createFundPortfolioProxy rejects empty runId', async () => {
     () => createFundPortfolioProxy({ upstreamUrl: 'http://x', runId: '' }),
     /runId is required/,
   )
+})
+
+test('upstream session expiry (HTTP 404 Session not found) triggers transparent re-init + retry', async () => {
+  // 真实场景：lab-fund-bot-only 在 run 中途被 systemctl restart,FastMCP 内存里旧 sid 全没了,
+  // bot 旧请求拿到 404 + "Session not found"。proxy 应该自动重新 initialize 一次新 session,
+  // 用新 sid 重试原请求,bot 完全感知不到。
+  const up = await startStubUpstream()
+  const proxy = await createFundPortfolioProxy({ upstreamUrl: up.url, runId: 'run-RR' })
+  try {
+    // 1) bot initialize → proxy 缓存 init 请求,upstream 发首个 session
+    const init = await postJson(proxy.url, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })
+    assert.equal(init.status, 200)
+    const botSid = init.headers.get('mcp-session-id')
+    assert.ok(botSid && botSid.length > 0, `bot sid: ${botSid}`)
+
+    // 2) 正常 tools/call 通,upstream 看到 1 次 initialize
+    const r1 = await postJson(proxy.url, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'portfolio_place_buy_order', arguments: { bot_id: 'b1', fund_code: 'F1' } } }, { 'mcp-session-id': botSid! })
+    assert.equal(r1.status, 200, `first call status (text=${r1.text.slice(0, 200)})`)
+    assert.equal(up.calls.length, 1)
+    assert.equal(up.initializeCount(), 1)
+
+    // 3) "upstream 重启"——清空 sid 表
+    up.restart()
+
+    // 4) bot 用同一个 sid 再发请求 → 应该看到成功（proxy 内部 reinit 完透明重试）
+    const r2 = await postJson(proxy.url, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'portfolio_place_buy_order', arguments: { bot_id: 'b1', fund_code: 'F2' } } }, { 'mcp-session-id': botSid! })
+    assert.equal(r2.status, 200, `after-restart call status, text=${r2.text.slice(0, 300)}`)
+    const msg = parseSseMessage(r2.text) as { result: { content: Array<{ text: string }> } }
+    const echoed = JSON.parse(msg.result.content[0].text) as Record<string, unknown>
+    assert.equal(echoed.fund_code, 'F2', `echo ${JSON.stringify(echoed)}`)
+    assert.equal(echoed.run_id, 'run-RR', 'run_id 注入仍要工作')
+
+    // 5) upstream 此时应该看到 2 次 initialize（首次 + 重启后 proxy 自动 reinit）
+    //    和 2 次成功的 tools/call（首次的 sess-1 + 重连后的 sess-2）
+    assert.equal(up.initializeCount(), 2, '应该自动 reinit 一次')
+    assert.equal(up.calls.length, 2, 'tools/call 都到 upstream')
+    assert.notEqual(up.calls[0].sid, up.calls[1].sid, '两次调用用了不同的 upstream sid')
+  } finally {
+    await proxy.close()
+    await up.close()
+  }
+})
+
+test('bot-facing mcp-session-id stays stable across upstream reconnect', async () => {
+  // bot 用 botSid 走完整生命周期 —— 即使 proxy 内部 rotate 了 upstream sid,bot 看到的 sid 不变。
+  const up = await startStubUpstream()
+  const proxy = await createFundPortfolioProxy({ upstreamUrl: up.url, runId: 'run-stable' })
+  try {
+    const init = await postJson(proxy.url, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+    const botSid = init.headers.get('mcp-session-id')
+    assert.ok(botSid)
+
+    up.restart()
+
+    const r = await postJson(proxy.url, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'portfolio_place_buy_order', arguments: { bot_id: 'b1', fund_code: 'F1' } } }, { 'mcp-session-id': botSid! })
+    // 响应回的 mcp-session-id（如果有）必须仍是 botSid,不能暴露内部新 sid
+    const respSid = r.headers.get('mcp-session-id')
+    if (respSid !== null) assert.equal(respSid, botSid, `bot 不能看见内部 sid rotate: ${respSid} vs ${botSid}`)
+  } finally {
+    await proxy.close()
+    await up.close()
+  }
 })
