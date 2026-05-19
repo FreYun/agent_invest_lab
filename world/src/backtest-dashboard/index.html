@@ -34,6 +34,11 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .action-row{cursor:pointer;transition:background .12s}.action-row:hover{background:rgba(255,255,255,.025)}.action-row.expanded{background:rgba(102,217,232,.04)}.action-chevron{display:inline-block;color:var(--dim);font-size:10px;transition:transform .15s ease}.action-row.expanded .action-chevron{transform:rotate(90deg);color:var(--accent)}.reason-row td{padding:0;border-bottom:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.22);border-left:3px solid var(--accent)}.reason-section{padding:10px 14px}.reason-section + .reason-section{border-top:1px solid rgba(255,255,255,.04)}.reason-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:4px;font-weight:600}.reason-body{font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap}.reason-body.reason-settle{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}.reason-body.reason-empty{padding:10px 14px;color:rgba(255,255,255,.25);font-style:italic;font-size:12px}
 .holding-weight{display:flex;align-items:baseline;gap:8px;margin-left:auto}.holding-weight-pct{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--accent);letter-spacing:.5px;line-height:1}.holding-weight-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.holding-weight-bar{margin-top:10px;height:6px;border-radius:999px;background:rgba(255,255,255,.05);overflow:hidden;position:relative}.holding-weight-bar-fill{height:100%;background:linear-gradient(90deg, var(--accent) 0%, rgba(102,217,232,.6) 100%);border-radius:inherit;transition:width .25s ease-out}
 @media (max-width:1100px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.layout,.grid-2{grid-template-columns:1fr}}@media (max-width:720px){.wrap{padding:14px}.hero{flex-direction:column;align-items:flex-start}.summary{grid-template-columns:1fr}.holdings{grid-template-columns:1fr}}
+.position-chart-title{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:8px 0 4px}
+.position-chart{height:auto}
+.pos-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10px;color:var(--dim);margin-top:6px}
+.pos-lg-item{display:inline-flex;align-items:center;gap:5px}
+.pos-lg-sw{display:inline-block;width:12px;height:8px;border-radius:2px}
 </style>
 </head>
 <body>
@@ -194,6 +199,42 @@ function renderBotList(data){
   }).join('')
   root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => selectBot(el.dataset.bot)))
 }
+const STACK_PALETTE = [
+  '#6cd0ea', '#c084fc', '#f59e0b', '#22c55e',
+  '#ef4444', '#fb923c', '#a78bfa', '#14b8a6',
+]
+function fundColor(fundCode){
+  let h = 0
+  for (let i = 0; i < fundCode.length; i++) h = (h * 31 + fundCode.charCodeAt(i)) >>> 0
+  return STACK_PALETTE[h % STACK_PALETTE.length]
+}
+// Stack bands for the position sub-chart. Mirrors buildStackBands in positions.ts;
+// kept client-side because dateRange (after range-filter) can change without re-fetching.
+function buildStackBandsClient(holdingsByDate, dates){
+  const meta = new Map()
+  for (const d of dates) {
+    for (const h of holdingsByDate[d] || []) {
+      const w = Number(h.weight || 0)
+      const cur = meta.get(h.fund_code)
+      if (!cur) meta.set(h.fund_code, { fund_name: h.fund_name, maxWeight: w })
+      else if (w > cur.maxWeight) cur.maxWeight = w
+    }
+  }
+  const ordered = [...meta.entries()].sort((a, b) => b[1].maxWeight - a[1].maxWeight || a[0].localeCompare(b[0]))
+  const bands = ordered.map(([fund_code, m]) => ({ fund_code, fund_name: m.fund_name, lower: new Array(dates.length).fill(0), upper: new Array(dates.length).fill(0) }))
+  for (let i = 0; i < dates.length; i++) {
+    const day = holdingsByDate[dates[i]] || []
+    const byCode = new Map()
+    for (const h of day) byCode.set(h.fund_code, Number(h.weight || 0))
+    let cum = 0
+    for (const band of bands) {
+      band.lower[i] = cum
+      cum += byCode.get(band.fund_code) || 0
+      band.upper[i] = cum
+    }
+  }
+  return bands
+}
 function renderChart(bot){
   const width = 980, height = 360, pad = { l: 56, r: 24, t: 18, b: 42 }
   const series = filterByRange(bot.series || [], state.rangeFrom, state.rangeTo)
@@ -244,28 +285,78 @@ function renderChart(bot){
     ? `<div class="chart-legend"><span class="lg-item"><span class="lg-swatch lg-bot"></span>${esc(bot.botId)} 净值</span><span class="lg-item"><span class="lg-swatch lg-bench"></span>基准 ${esc(benchmark.fundCode)} ${esc(benchmark.fundName)}</span></div>`
     : ''
 
-  return `${legend}<svg class="chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">`
-    + `<defs><linearGradient id="areaGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="rgba(102,217,232,0.28)"/><stop offset="100%" stop-color="rgba(102,217,232,0.02)"/></linearGradient></defs>`
-    + yTicks.map(v => {
-        const y = height - pad.b - (height - pad.t - pad.b) * ((v - yMin) / ySpan)
-        return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}" class="gridline"></line><text x="10" y="${y + 4}" class="axis">${fmtNav(v)}</text>`
-      }).join('')
-    + `<line x1="${pad.l}" y1="${height - pad.b}" x2="${width - pad.r}" y2="${height - pad.b}" class="gridline"></line>`
-    + (baselineNear ? `<line x1="${pad.l}" y1="${baselineY}" x2="${width - pad.r}" y2="${baselineY}" class="baseline"></line>` : '')
-    + `<path d="${botCoords.area}" class="area"></path>`
-    + `<path d="${botCoords.d}" class="line"></path>`
-    + (benchCoords ? `<path d="${benchCoords.d}" class="bench-line"></path>` : '')
-    + actionMarks.map((m, i) => {
-        const dx = m.x + (i % 3 - 1) * 6
-        return `<g><circle cx="${dx}" cy="${m.y}" r="5.5" class="${markerClass(m.action.side)}"></circle><text x="${dx}" y="${m.action.side === 'sell' ? m.y - 18 : m.y + 22}" text-anchor="middle" class="marker-text">${actionLabel(m.action)}</text><title>${esc(m.action.action_date)} ${esc(m.action.fund_code)} ${esc(m.action.fund_name)} ${esc(m.action.action_type)} ¥${fmtMoney(m.action.amount || 0)}</title></g>`
-      }).join('')
-    + xLabels.map(p => {
-        const idx = dateToIdx.get(p.trade_date)
-        if (idx == null) return ''
-        const x = pad.l + (xAxisDates.length <= 1 ? (width - pad.l - pad.r) / 2 : (width - pad.l - pad.r) * (idx / (xAxisDates.length - 1)))
-        return `<text x="${x}" y="${height - 12}" text-anchor="middle" class="axis">${esc(p.trade_date)}</text>`
-      }).join('')
-    + `</svg>`
+  return {
+    html: `${legend}<svg class="chart nav-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">`
+      + `<defs><linearGradient id="areaGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="rgba(102,217,232,0.28)"/><stop offset="100%" stop-color="rgba(102,217,232,0.02)"/></linearGradient></defs>`
+      + yTicks.map(v => {
+          const y = height - pad.b - (height - pad.t - pad.b) * ((v - yMin) / ySpan)
+          return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}" class="gridline"></line><text x="10" y="${y + 4}" class="axis">${fmtNav(v)}</text>`
+        }).join('')
+      + `<line x1="${pad.l}" y1="${height - pad.b}" x2="${width - pad.r}" y2="${height - pad.b}" class="gridline"></line>`
+      + (baselineNear ? `<line x1="${pad.l}" y1="${baselineY}" x2="${width - pad.r}" y2="${baselineY}" class="baseline"></line>` : '')
+      + `<path d="${botCoords.area}" class="area"></path>`
+      + `<path d="${botCoords.d}" class="line"></path>`
+      + (benchCoords ? `<path d="${benchCoords.d}" class="bench-line"></path>` : '')
+      + actionMarks.map((m, i) => {
+          const dx = m.x + (i % 3 - 1) * 6
+          return `<g><circle cx="${dx}" cy="${m.y}" r="5.5" class="${markerClass(m.action.side)}"></circle><text x="${dx}" y="${m.action.side === 'sell' ? m.y - 18 : m.y + 22}" text-anchor="middle" class="marker-text">${actionLabel(m.action)}</text><title>${esc(m.action.action_date)} ${esc(m.action.fund_code)} ${esc(m.action.fund_name)} ${esc(m.action.action_type)} ¥${fmtMoney(m.action.amount || 0)}</title></g>`
+        }).join('')
+      + xLabels.map(p => {
+          const idx = dateToIdx.get(p.trade_date)
+          if (idx == null) return ''
+          const x = pad.l + (xAxisDates.length <= 1 ? (width - pad.l - pad.r) / 2 : (width - pad.l - pad.r) * (idx / (xAxisDates.length - 1)))
+          return `<text x="${x}" y="${height - 12}" text-anchor="middle" class="axis">${esc(p.trade_date)}</text>`
+        }).join('')
+      + `</svg>`,
+    dateToIdx,
+    xAxisDates,
+    botCoords,
+    benchCoords,
+    series,
+    pad,
+    width,
+    height,
+  }
+}
+function renderPositionChart(bot, dateToIdx, xAxisDates){
+  const width = 980, height = 90, pad = { l: 56, r: 24, t: 8, b: 18 }
+  if (!xAxisDates.length) return '<div class="empty">无仓位数据</div>'
+  const innerW = width - pad.l - pad.r
+  const innerH = height - pad.t - pad.b
+  const xs = xAxisDates.map((_, i) => pad.l + (xAxisDates.length <= 1 ? innerW / 2 : innerW * (i / (xAxisDates.length - 1))))
+  const yFor = (w) => height - pad.b - innerH * Math.max(0, Math.min(1, w))
+
+  const bands = buildStackBandsClient(bot.holdingsByDate || {}, xAxisDates)
+  const totalUpper = bands.length ? bands[bands.length - 1].upper : new Array(xAxisDates.length).fill(0)
+  // Top-of-stack outline
+  const topPath = `M${xs[0]} ${yFor(totalUpper[0])} ` + xAxisDates.map((_, i) => `L${xs[i]} ${yFor(totalUpper[i])}`).join(' ')
+
+  // Single-fund: paint as one area for visual consistency with old design
+  let bandsSvg = ''
+  if (bands.length <= 1) {
+    const upper = bands.length ? bands[0].upper : new Array(xAxisDates.length).fill(0)
+    const pts = xAxisDates.map((_, i) => `${xs[i]} ${yFor(upper[i])}`).join(' L')
+    const areaPath = `M${xs[0]} ${yFor(0)} L${pts} L${xs[xAxisDates.length - 1]} ${yFor(0)} Z`
+    bandsSvg = `<path d="${areaPath}" fill="rgba(192,132,252,0.18)"></path><path d="${areaPath.replace(/ Z$/, '')}" fill="none" stroke="#c084fc" stroke-width="1.5"></path>`
+  } else {
+    bandsSvg = bands.map(band => {
+      const up = xAxisDates.map((_, i) => `${xs[i]} ${yFor(band.upper[i])}`).join(' L')
+      const lo = xAxisDates.map((_, i) => `${xs[xAxisDates.length - 1 - i]} ${yFor(band.lower[xAxisDates.length - 1 - i])}`).join(' L')
+      const d = `M${up} L${lo} Z`
+      return `<path d="${d}" fill="${fundColor(band.fund_code)}" fill-opacity="0.78" stroke="none"></path>`
+    }).join('')
+  }
+
+  const yTicks = [0, 0.5, 1].map(w => {
+    const y = yFor(w)
+    return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}" class="gridline"></line><text x="10" y="${y + 4}" class="axis">${(w * 100).toFixed(0)}%</text>`
+  }).join('')
+
+  const legend = bands.length > 1
+    ? `<div class="pos-legend">${bands.map(b => `<span class="pos-lg-item"><span class="pos-lg-sw" style="background:${fundColor(b.fund_code)}"></span>${esc(b.fund_code)} ${esc(b.fund_name)}</span>`).join('')}</div>`
+    : ''
+
+  return `<div class="position-chart-title">总仓位</div><svg class="chart position-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${yTicks}${bandsSvg}<path d="${topPath}" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1"></path></svg>${legend}`
 }
 function renderHoldings(bot, dateOverride){
   const list = dateOverride && bot.holdingsByDate && bot.holdingsByDate[dateOverride]
@@ -354,7 +445,11 @@ function renderDetail(bot){
     alphaPill = `<span class="pill">vs 基准 <strong style="color:${alpha >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(alpha)}</strong></span>`
   }
   const detailRunPicker = `<div class="detail-run-picker"><label>Run</label><select class="detail-run-select" data-bot="${esc(bot.botId)}">${runOptionsHtml(bot)}</select>${contaminationBadge(bot)}</div>`
-  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${renderChart(bot)}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
+  const chartData = renderChart(bot)
+  const chartHtml = typeof chartData === 'string'
+    ? chartData
+    : chartData.html + renderPositionChart(bot, chartData.dateToIdx, chartData.xAxisDates)
+  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
 }
 function selectBot(botId){
   state.selected = botId || state.selected || (state.data?.bots[0]?.botId ?? null)
