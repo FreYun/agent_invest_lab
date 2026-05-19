@@ -39,6 +39,15 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .pos-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10px;color:var(--dim);margin-top:6px}
 .pos-lg-item{display:inline-flex;align-items:center;gap:5px}
 .pos-lg-sw{display:inline-block;width:12px;height:8px;border-radius:2px}
+.chart-wrap{position:relative}
+.cursor-tip{position:absolute;pointer-events:none;background:rgba(15,15,25,.95);border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:8px 10px;font-size:10.5px;line-height:1.6;color:rgba(255,255,255,.85);min-width:140px;box-shadow:0 4px 14px rgba(0,0,0,.4);display:none;z-index:10}
+.cursor-tip-date{color:rgba(255,255,255,.55);font-size:10px;margin-bottom:4px}
+.cursor-tip-row{display:flex;align-items:center;gap:6px}
+.cursor-tip-row .ct-dot{display:inline-block;width:8px;height:8px;border-radius:2px}
+.cursor-tip-row .ct-label{flex:1;color:rgba(255,255,255,.6)}
+.cursor-tip-row .ct-val{font-variant-numeric:tabular-nums;font-weight:600}
+.cursor-tip-sub{padding-left:2px;font-size:10px}
+.cursor-tip-action{margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,.08);color:#ffd66c}
 </style>
 </head>
 <body>
@@ -358,6 +367,152 @@ function renderPositionChart(bot, dateToIdx, xAxisDates){
 
   return `<div class="position-chart-title">总仓位</div><svg class="chart position-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${yTicks}${bandsSvg}<path d="${topPath}" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1"></path></svg>${legend}`
 }
+function attachCursor(detailRoot, bot, chartCtx){
+  if (!chartCtx || typeof chartCtx !== 'object') return  // empty chart, nothing to bind
+  const { xAxisDates, dateToIdx, botCoords, benchCoords, pad, width, height } = chartCtx
+  const navSvg = detailRoot.querySelector('svg.nav-chart')
+  const posSvg = detailRoot.querySelector('svg.position-chart')
+  if (!navSvg) return
+  const chartWrap = navSvg.closest('.chart-wrap')
+  if (!chartWrap) return
+
+  // Tooltip bubble: append once
+  let tip = chartWrap.querySelector('.cursor-tip')
+  if (!tip) {
+    tip = document.createElement('div')
+    tip.className = 'cursor-tip'
+    chartWrap.style.position = 'relative'
+    chartWrap.appendChild(tip)
+  }
+
+  function clientToAxisIdx(svg, clientX){
+    const rect = svg.getBoundingClientRect()
+    const localX = (clientX - rect.left) * (width / rect.width)
+    const fracX = Math.max(0, Math.min(1, (localX - pad.l) / (width - pad.l - pad.r)))
+    return Math.round(fracX * (xAxisDates.length - 1))
+  }
+
+  function clearCursor(){
+    navSvg.querySelectorAll('.cursor-overlay').forEach(n => n.remove())
+    if (posSvg) posSvg.querySelectorAll('.cursor-overlay').forEach(n => n.remove())
+    tip.style.display = 'none'
+    // Restore holdings panel to latest
+    const title = byId('holdingsTitle')
+    const body = byId('holdingsBody')
+    if (title) title.textContent = '最新持仓'
+    if (body) body.innerHTML = renderHoldings(bot)
+  }
+
+  function drawCursor(axisIdx){
+    if (axisIdx < 0 || axisIdx >= xAxisDates.length) return
+    const x = pad.l + (xAxisDates.length <= 1 ? (width - pad.l - pad.r) / 2 : (width - pad.l - pad.r) * (axisIdx / (xAxisDates.length - 1)))
+    const date = xAxisDates[axisIdx]
+
+    // Clear and redraw
+    navSvg.querySelectorAll('.cursor-overlay').forEach(n => n.remove())
+    if (posSvg) posSvg.querySelectorAll('.cursor-overlay').forEach(n => n.remove())
+
+    const NS = 'http://www.w3.org/2000/svg'
+
+    function addVerticalLine(svg){
+      const line = document.createElementNS(NS, 'line')
+      line.setAttribute('class', 'cursor-overlay cursor-line')
+      line.setAttribute('x1', x)
+      line.setAttribute('x2', x)
+      line.setAttribute('y1', 0)
+      line.setAttribute('y2', height)
+      line.setAttribute('stroke', 'rgba(255,255,255,.45)')
+      line.setAttribute('stroke-width', '1')
+      line.setAttribute('stroke-dasharray', '3 3')
+      svg.appendChild(line)
+    }
+    addVerticalLine(navSvg)
+    if (posSvg) addVerticalLine(posSvg)
+
+    // Lookup bot/bench point for this axis index
+    const series = chartCtx.series
+    const botIdx = series.findIndex(p => p.trade_date === date)
+    if (botIdx >= 0) {
+      const dot = document.createElementNS(NS, 'circle')
+      dot.setAttribute('class', 'cursor-overlay')
+      dot.setAttribute('cx', botCoords.xs[botIdx])
+      dot.setAttribute('cy', botCoords.ys[botIdx])
+      dot.setAttribute('r', '4')
+      dot.setAttribute('fill', '#fff')
+      dot.setAttribute('stroke', 'var(--accent)')
+      dot.setAttribute('stroke-width', '2')
+      navSvg.appendChild(dot)
+    }
+    if (benchCoords) {
+      const benchSeries = bot.benchmark?.series ?? []
+      const bIdx = benchSeries.findIndex(p => p.trade_date === date)
+      if (bIdx >= 0) {
+        const dot = document.createElementNS(NS, 'circle')
+        dot.setAttribute('class', 'cursor-overlay')
+        dot.setAttribute('cx', benchCoords.xs[bIdx])
+        dot.setAttribute('cy', benchCoords.ys[bIdx])
+        dot.setAttribute('r', '3')
+        dot.setAttribute('fill', 'var(--accent2)')
+        navSvg.appendChild(dot)
+      }
+    }
+
+    // Tooltip content
+    const navPt = botIdx >= 0 ? series[botIdx] : null
+    const benchPt = bot.benchmark?.series?.find(p => p.trade_date === date)
+    const dayHoldings = (bot.holdingsByDate || {})[date] || []
+    const totalPos = dayHoldings.reduce((s, h) => s + (Number(h.weight) || 0), 0)
+    const actionsToday = (bot.actions || []).filter(a => a.action_date === date)
+
+    let tipHtml = `<div class="cursor-tip-date">${date}</div>`
+    if (navPt) tipHtml += `<div class="cursor-tip-row"><span class="ct-dot" style="background:var(--accent)"></span><span class="ct-label">净值</span><span class="ct-val">${fmtNav(navPt.net_value)}</span></div>`
+    if (benchPt) tipHtml += `<div class="cursor-tip-row"><span class="ct-dot" style="background:var(--accent2)"></span><span class="ct-label">基准</span><span class="ct-val">${fmtNav(benchPt.net_value)}</span></div>`
+    tipHtml += `<div class="cursor-tip-row"><span class="ct-dot" style="background:#c084fc"></span><span class="ct-label">总仓位</span><span class="ct-val">${(totalPos * 100).toFixed(1)}%</span></div>`
+    if (dayHoldings.length > 1) {
+      tipHtml += dayHoldings.slice(0, 5).map(h => `<div class="cursor-tip-row cursor-tip-sub"><span class="ct-dot" style="background:${fundColor(h.fund_code)}"></span><span class="ct-label">${esc(h.fund_code)}</span><span class="ct-val">${((Number(h.weight) || 0) * 100).toFixed(1)}%</span></div>`).join('')
+    }
+    for (const a of actionsToday) {
+      const label = a.side === 'buy' ? '当日买入' : a.side === 'sell' ? '当日卖出' : '当日观察'
+      tipHtml += `<div class="cursor-tip-row cursor-tip-action"><span class="ct-label">${label}</span><span class="ct-val">¥${fmtMoney(a.amount || 0)}</span></div>`
+    }
+    tip.innerHTML = tipHtml
+    tip.style.display = 'block'
+
+    // Position tooltip: prefer right of cursor, flip if would overflow
+    const wrapRect = chartWrap.getBoundingClientRect()
+    const svgRect = navSvg.getBoundingClientRect()
+    const cursorPxX = svgRect.left + (x / width) * svgRect.width - wrapRect.left
+    tip.style.top = '12px'
+    const tipW = tip.offsetWidth || 160
+    const wantLeft = cursorPxX + 12
+    tip.style.left = (wantLeft + tipW > wrapRect.width ? Math.max(8, cursorPxX - tipW - 12) : wantLeft) + 'px'
+
+    // Update holdings panel
+    const title = byId('holdingsTitle')
+    const body = byId('holdingsBody')
+    if (title) title.textContent = `持仓快照（${date}）`
+    if (body) body.innerHTML = renderHoldings(bot, date)
+  }
+
+  function onMove(e){
+    const svg = e.currentTarget
+    const idx = clientToAxisIdx(svg, e.clientX)
+    drawCursor(idx)
+  }
+  function onLeave(){
+    // small timeout so moving between the two SVGs doesn't blink
+    setTimeout(() => {
+      if (!navSvg.matches(':hover') && (!posSvg || !posSvg.matches(':hover'))) clearCursor()
+    }, 30)
+  }
+
+  navSvg.addEventListener('mousemove', onMove)
+  navSvg.addEventListener('mouseleave', onLeave)
+  if (posSvg) {
+    posSvg.addEventListener('mousemove', onMove)
+    posSvg.addEventListener('mouseleave', onLeave)
+  }
+}
 function renderHoldings(bot, dateOverride){
   const list = dateOverride && bot.holdingsByDate && bot.holdingsByDate[dateOverride]
     ? bot.holdingsByDate[dateOverride]
@@ -450,6 +605,7 @@ function renderDetail(bot){
     ? chartData
     : chartData.html + renderPositionChart(bot, chartData.dateToIdx, chartData.xAxisDates)
   byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
+  if (typeof chartData !== 'string') attachCursor(byId('detailRoot'), bot, chartData)
 }
 function selectBot(botId){
   state.selected = botId || state.selected || (state.data?.bots[0]?.botId ?? null)
