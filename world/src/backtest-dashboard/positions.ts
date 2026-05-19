@@ -107,9 +107,9 @@ export function buildStackBands(
     for (const h of day) byCode.set(h.fund_code, Number(h.weight ?? 0))
     let cum = 0
     for (const band of bands) {
-      band.lower[i] = Math.round(cum * 1e9) / 1e9
+      band.lower[i] = cum
       cum += byCode.get(band.fund_code) ?? 0
-      band.upper[i] = Math.round(cum * 1e9) / 1e9
+      band.upper[i] = cum
     }
   }
   return bands

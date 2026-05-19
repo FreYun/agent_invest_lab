@@ -102,7 +102,10 @@ test('buildStackBands: multi-fund sorted by max weight desc', () => {
   assert.deepEqual(bands[0].lower, [0, 0])
   assert.deepEqual(bands[0].upper, [0.5, 0.55])
   assert.deepEqual(bands[1].lower, [0.5, 0.55])
-  assert.deepEqual(bands[1].upper, [0.7, 0.7])  // 0.5+0.2, 0.55+0.15
+  // 0.5+0.2=0.7, 0.55+0.15=0.7000000000000001 in IEEE-754 → use tolerance
+  for (let i = 0; i < 2; i++) {
+    assert.ok(Math.abs(bands[1].upper[i] - 0.7) < 1e-9, `upper[${i}] ≈ 0.7`)
+  }
 })
 
 test('buildStackBands: missing fund on a date → 0 width band on that date', () => {
