@@ -465,3 +465,114 @@ def test_portfolio_get_my_performance_no_future_leak(reload_server, tmp_db):
         # perf 写在 2024-01-03 那行，as_of_date=2024-01-03 严格 < 过滤掉它
         assert im["metrics"] == {}, "perf at as_of_date 不应被泄漏"
         assert im["as_of_perf_date"] is None
+
+
+# ============================================================
+# 5. 跨 run 隔离回归（曾经的 daily prompt MDD=-17.75% bug）
+# ============================================================
+
+def _seed_two_runs_overlapping_snapshots(conn, bot_id: str):
+    """同 bot 两个 run 在**部分重叠**的日期段各落日快照——只重叠 bug 才会触发。
+
+    runA：2023-12-28 起 5 天，纯独占（runB 这几天没数据）；净值飙到 1.50。
+    runB：2024-01-02 起 5 天，在 1.05/0.95 之间小幅震荡。
+
+    修复前的 MAX(run_id) 子查询：
+      - 2023-12-28..2024-01-01 只有 runA 一份 → 被当成 runB 的历史灌进 hist_navs
+      - 2024-01-02..2024-01-06 两者皆有，MAX="runB" → 取 runB 自己
+    结果 hist_navs 混入 runA 的 1.50 高点 → MDD 跳到 -36% 量级。
+
+    修复后严格按 run_id 过滤，runA 的早期数据完全看不见。"""
+    from datetime import datetime, timedelta
+    nav_runA = [1.0, 1.2, 1.4, 1.5, 1.45]   # 2023-12-28..2024-01-01（独占）
+    nav_runB = [1.0, 1.05, 1.02, 0.95, 1.00]  # 2024-01-02..2024-01-06
+    for run_id, navs, start in (
+        ("runA", nav_runA, "2023-12-28"),
+        ("runB", nav_runB, "2024-01-02"),
+    ):
+        d0 = datetime.strptime(start, "%Y-%m-%d")
+        prev_nav: float | None = None
+        for i, nav in enumerate(navs):
+            date = (d0 + timedelta(days=i)).strftime("%Y-%m-%d")
+            daily_ret = ((nav - prev_nav) / prev_nav * 100) if prev_nav else 0.0
+            total_value = 1_000_000.0 * nav
+            conn.execute(
+                "INSERT INTO fund_bot_daily_snapshots "
+                "(bot_id, trade_date, run_id, initial_capital, cash, invested_value, total_value, "
+                " net_value, daily_return_pct, cumulative_return_pct, max_drawdown_pct, "
+                " equity_weight, bond_weight, gold_weight, cash_weight, holdings_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (bot_id, date, run_id, 1_000_000.0, 0.0, total_value, total_value,
+                 nav, daily_ret, (nav - 1.0) * 100, 0.0, 1.0, 0.0, 0.0, 0.0, "[]"),
+            )
+            prev_nav = nav
+    conn.commit()
+
+
+def test_compute_bot_performance_isolates_runs_in_history(reload_server, tmp_db):
+    """_compute_bot_performance 的 since_inception MDD 只能用本 run 的 NAV，
+    不能因为同日另一个 run 的更高峰值把 peak-to-trough 拉大。"""
+    s = reload_server
+    with s.get_conn() as conn:
+        _seed_two_runs_overlapping_snapshots(conn, "botX")
+        s._compute_bot_performance(conn, "botX", "2024-01-06", run_id="runB")
+    conn = sqlite3.connect(tmp_db)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT max_drawdown_pct, data_points FROM fund_bot_performance "
+        "WHERE bot_id='botX' AND run_id='runB' "
+        "  AND trade_date='2024-01-06' AND period='since_inception'"
+    ).fetchone()
+    assert row is not None
+    # 只取 runB 5 天数据点；如果跨 run 串味会包含 runA 的部分 → data_points > 5
+    assert row["data_points"] == 5
+    # runB peak 1.05 → trough 0.95，MDD = (0.95-1.05)/1.05 ≈ -9.52%
+    expected_mdd = (0.95 / 1.05 - 1) * 100
+    assert abs(row["max_drawdown_pct"] - expected_mdd) < 0.01, (
+        f"runB 的 MDD 应仅由本 run NAV 决定（{expected_mdd:.4f}%）；"
+        f"实际 {row['max_drawdown_pct']}% —— "
+        f"如果是 -36% 量级说明 runA peak 1.50 又串进来了。"
+    )
+    conn.close()
+
+
+def test_compute_fund_snapshot_hist_navs_isolated_per_run(reload_server, tmp_db):
+    """_compute_fund_snapshot 写当日 daily_snapshots 时算出来的 max_drawdown_pct，
+    必须只看本 run 的历史 NAV——不被另一个 run 的更高峰值污染。
+
+    这是 daily prompt 里 MDD=-17.75% bug 的回归测试：当时 bot2 有一个旧 run
+    在 2025 年跑出 net_value 1.18 / 1.33，被 hist_navs 的 MAX(run_id) 子查询
+    跨 run 灌进了当前 run 的 _calc_max_drawdown peak。"""
+    s = reload_server
+    with s.get_conn() as conn:
+        # 给 botY 建账户（cash-only，无持仓，简化 _compute_fund_snapshot 的路径）
+        conn.execute(
+            "INSERT INTO fund_bot_accounts (bot_id, initial_capital, cash, run_id) "
+            "VALUES (?, ?, ?, ?)",
+            ("botY", 1_000_000.0, 1_000_000.0, "runB"),
+        )
+        _seed_two_runs_overlapping_snapshots(conn, "botY")
+        # 给 runB 在 2024-01-07 跑一次 snapshot——此时 hist_navs 应只看 runB
+        # 之前 5 天 [1.0, 1.05, 1.02, 0.95, 1.00]，加上今天的 net_value=1.0（cash=initial）。
+        # 修复前会把 runA 的 1.5 峰值灌进 peak → MDD 跳到 ~-36%。
+        s._compute_fund_snapshot(conn, "botY", "2024-01-07", run_id="runB")
+
+    conn = sqlite3.connect(tmp_db)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT max_drawdown_pct, daily_return_pct, net_value FROM fund_bot_daily_snapshots "
+        "WHERE bot_id='botY' AND run_id='runB' AND trade_date='2024-01-07'"
+    ).fetchone()
+    assert row is not None, "runB 在 2024-01-07 应有一行新写入的快照"
+    # runB 历史 1.0→1.05→1.02→0.95→1.00 + 今日 1.0，peak 1.05、trough 0.95 → -9.52%
+    expected_mdd = (0.95 / 1.05 - 1) * 100
+    assert abs(row["max_drawdown_pct"] - expected_mdd) < 0.01, (
+        f"runB 当日 MDD 应仅由本 run NAV 计算（{expected_mdd:.4f}%）；"
+        f"实际 {row['max_drawdown_pct']}% —— 跨 run 串味回来了。"
+    )
+    # daily_return_pct 应基于 runB 自己昨天的 total_value=1_000_000，今天也 1_000_000 → 0%
+    # 修复前会拿到 runA 昨天的 total（1_450_000）当 prev_total → daily_return≈-31%
+    assert abs(row["daily_return_pct"]) < 0.01, (
+        f"runB 当日 daily_return 应是 0%（cash 没动），实际 {row['daily_return_pct']}%"
+    )
+    conn.close()

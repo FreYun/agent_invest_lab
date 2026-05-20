@@ -334,7 +334,11 @@ def test_settle_for_new_sell_does_not_double_extract_shares(reload_server):
 # =============================================================================
 
 def test_legacy_pending_sell_still_settles_via_old_path(reload_server):
-    """旧机制 pending SELL（confirmed_amount IS NULL、pending_sell_shares 冻结）在 settle 时仍走老路径。"""
+    """旧机制 pending SELL（confirmed_amount IS NULL、pending_sell_shares 冻结）在 settle 时仍走老路径。
+
+    NOTE: 现在 legacy 路径也走 FIFO lot 消耗——前提是 migration 已为持仓建好 lot 行。
+    本测试模拟"迁移完成后存留的老订单"的状态：seed holding + seed 对应 lot。
+    """
     bot_id, fund = "botL", "000001"
     import db as db_mod
     s = reload_server
@@ -345,13 +349,23 @@ def test_legacy_pending_sell_still_settles_via_old_path(reload_server):
         _seed_nav(conn, fund, "2026-05-11", 1.20)
         _seed_account(conn, bot_id, 0.0, initial=10_000.0)
         # 老机制持仓：pending_sell_shares 冻结
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO fund_bot_holdings "
             "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
             " shares, pending_sell_shares, amount_invested, market_value, status, run_id) "
             "VALUES (?, ?, '测试', '股票类', 'core', '2026-04-10', 1.00, 1.00, "
             " 10000, 3000, 10000, 10000, 'active', 'legacy')",
             (bot_id, fund),
+        )
+        holding_id = cur.lastrowid
+        # 模拟 migration 产物：单 lot 对应整个 holding（10000 份，成本 10000）
+        conn.execute(
+            "INSERT INTO fund_bot_holding_lots "
+            "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, "
+            " shares_initial, shares_remaining, cost_initial, cost_remaining, "
+            " source_order_id, status) "
+            "VALUES (?, ?, 'legacy', ?, '2026-04-10', 1.00, 10000, 10000, 10000, 10000, NULL, 'open')",
+            (bot_id, fund, holding_id),
         )
         # 老 pending 卖单：confirmed_amount IS NULL，order_amount 是申报份额
         conn.execute(

@@ -18,6 +18,7 @@ Exit code is 0 on tool invocation success (regardless of the returned
 """
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -33,8 +34,9 @@ from server import (  # noqa: E402
     portfolio_get_my_history,
     portfolio_get_my_performance,
     settle_pending_fund_orders,
+    _fund_fee_rates,
 )
-from db import init_db  # noqa: E402
+from db import get_conn, init_db  # noqa: E402
 
 # CLI path doesn't invoke server.main(), so the CREATE TABLE IF NOT EXISTS
 # bootstrap in db.init_db() never runs through MCP — any table added to
@@ -100,6 +102,13 @@ async def _amain() -> str:
     p_perf.add_argument("--as-of-date", required=True)
     p_perf.add_argument("--daily-series-limit", type=int, default=120)
 
+    # World daily-prompt 注入用：批量取 buyable 池的费率（申购费 / 赎回费阶梯 /
+    # 管理+托管年化）。世界端不再走 simworld fund_rate 一只一只调，直接读本地
+    # fund.db——费率属于静态/半静态字段，PIT 漂移可忽略。
+    p_fees = sub.add_parser("get_fund_fees")
+    p_fees.add_argument("--fund-codes", required=True,
+                        help="逗号分隔的 6 位基金代码，例如 '016729,510300'")
+
     args = parser.parse_args()
     if args.cmd == "init_fund_account":
         return await portfolio_init_my_account(
@@ -118,7 +127,44 @@ async def _amain() -> str:
         return await portfolio_get_my_history(args.bot_id, args.limit, args.fund_code, args.run_id)
     if args.cmd == "get_my_performance":
         return await portfolio_get_my_performance(args.bot_id, args.as_of_date, args.daily_series_limit, args.run_id)
+    if args.cmd == "get_fund_fees":
+        codes = [c.strip() for c in args.fund_codes.split(",") if c.strip()]
+        return _get_fund_fees(codes)
     raise SystemExit(f"unknown cmd {args.cmd!r}")
+
+
+def _get_fund_fees(fund_codes: list[str]) -> str:
+    """读 fund_info 的费率字段并按 _fund_fee_rates 的口径返回。
+    purchase_fee_pct / redeem_tiers 已转成 pct（小数 × 100），方便 prompt 直接渲染。
+    mgmt_fee + custody_fee 是 NAV 已扣除的年化管理/托管费率，给 bot 看费用结构。"""
+    out = []
+    with get_conn() as conn:
+        for code in fund_codes:
+            row = conn.execute(
+                "SELECT fund_name, mgmt_fee, custody_fee, sales_service_fee, purchase_status, redeem_status "
+                "FROM fund_info WHERE fund_code=?",
+                (code,),
+            ).fetchone()
+            if not row:
+                out.append({"fund_code": code, "fund_name": "", "found": False})
+                continue
+            pf_rate, redeem_tiers = _fund_fee_rates(conn, code)
+            out.append({
+                "fund_code": code,
+                "fund_name": row["fund_name"] or "",
+                "found": True,
+                "purchase_fee_pct": round(pf_rate * 100.0, 4),
+                "redeem_tiers": [
+                    {"max_days": t.get("max_days"), "rate_pct": round(float(t.get("rate") or 0.0) * 100.0, 4)}
+                    for t in redeem_tiers
+                ],
+                "mgmt_fee_pct_annual": float(row["mgmt_fee"] or 0.0),
+                "custody_fee_pct_annual": float(row["custody_fee"] or 0.0),
+                "sales_service_fee_pct_annual": float(row["sales_service_fee"] or 0.0),
+                "purchase_status": row["purchase_status"] or "",
+                "redeem_status": row["redeem_status"] or "",
+            })
+    return json.dumps({"success": True, "fees": out}, ensure_ascii=False)
 
 
 def main() -> None:

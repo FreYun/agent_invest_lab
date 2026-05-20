@@ -304,3 +304,97 @@ def test_get_my_performance_completed_positions_filtered_by_run_id(reload_server
     assert rt["total_invested"] == 1000.0, f"runA 投入应是 1000, 实际: {rt['total_invested']}"
     assert rt["total_proceeds"] == 1200.0, f"runA 回收应是 1200, 实际: {rt['total_proceeds']}"
     # 如果 buys/sells SELECT 没按 run_id 过滤，total_invested 会变成 3000 (1000+2000)
+
+
+# === Cross-run phantom-order leak ===
+# 真实场景：先前一次 backtest（runOld）跑崩留下一笔 pending sell，新 run（runNew）启动后
+# 的 settle 流程把它确认了，从而 order_run_id=runOld、settle_run_id=runNew 的"幽灵单"
+# 会出现在 fund_bot_orders 里。它的 cash 影响不该（也确实没有）落进 runNew 的资金视图，
+# 但下面三处用户面查询如果用 `OR settle_run_id=?` 就会把它误算进 runNew 的统计/订单列表。
+
+def _seed_phantom_order(db_path: str, bot_id: str = "botPhantom") -> None:
+    conn = sqlite3.connect(db_path)
+    # runNew 在用：账户 + 一笔正常买单（runNew 自己下、runNew 自己结算）
+    conn.execute(
+        "INSERT INTO fund_bot_accounts (bot_id, initial_capital, cash, cash_in_transit, run_id) "
+        "VALUES (?, 1_000_000.0, 600_000.0, 0, 'runNew')",
+        (bot_id,),
+    )
+    conn.execute(
+        "INSERT INTO fund_bot_holdings "
+        "(bot_id, fund_code, fund_name, share_class, asset_class, role, entry_date, "
+        " entry_nav, latest_nav, shares, amount_invested, market_value, status, run_id) "
+        "VALUES (?, '016729', 'TestFund', 'A', '股票类', '核心', '2026-01-05', "
+        " 1.0, 1.0, 400000, 400000, 400000, 'active', 'runNew')",
+        (bot_id,),
+    )
+    conn.execute(
+        "INSERT INTO fund_bot_orders "
+        "(bot_id, fund_code, fund_name, order_type, order_date, confirm_date, order_amount, "
+        " reference_nav, confirm_nav, confirmed_shares, confirmed_amount, fee, action_reason, "
+        " status, order_run_id, settle_run_id) "
+        "VALUES (?, '016729', 'TestFund', 'buy', '2026-01-05', '2026-01-06', "
+        " 400000, 1.0, 1.0, 400000, 400000, 480, '建仓', 'confirmed', 'runNew', 'runNew')",
+        (bot_id,),
+    )
+    # 幽灵卖单：runOld 下的、runNew settle 时收口的——非本 run 的决策，必须从 runNew 的
+    # 用户面查询里隔离掉。
+    conn.execute(
+        "INSERT INTO fund_bot_orders "
+        "(bot_id, fund_code, fund_name, order_type, order_date, confirm_date, order_amount, "
+        " reference_nav, confirm_nav, confirmed_shares, confirmed_amount, fee, action_reason, "
+        " status, order_run_id, settle_run_id) "
+        "VALUES (?, '510300', 'OtherFund', 'sell', '2026-01-04', '2026-01-05', "
+        " 500000, 2.0, 2.0, 500000, 999999, 4900, '幽灵', 'confirmed', 'runOld', 'runNew')",
+        (bot_id,),
+    )
+    # daily snapshot：让 portfolio_get_my_performance 走完整路径
+    conn.execute(
+        "INSERT INTO fund_bot_daily_snapshots "
+        "(bot_id, trade_date, run_id, initial_capital, cash, invested_value, total_value, "
+        " net_value, daily_return_pct, cumulative_return_pct, max_drawdown_pct, "
+        " equity_weight, bond_weight, gold_weight, cash_weight, holdings_json) "
+        "VALUES (?, '2026-01-06', 'runNew', 1000000, 600000, 400000, 1000000, 1.0, 0, 0, 0, "
+        " 0.4, 0, 0, 0.6, '[]')",
+        (bot_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_get_my_trades_excludes_phantom_settled_only_order(reload_server, tmp_db):
+    """runOld 下的、runNew settle 的 sell 单不能出现在 runNew 的 my_trades 输出。"""
+    _seed_phantom_order(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_trades("botPhantom", "2026-01-07", run_id="runNew"))
+    data = json.loads(payload)
+    assert data["success"], data
+    codes = [o["fund_code"] for o in data["orders"]]
+    assert "510300" not in codes, f"runNew 不应看到 runOld 下的幽灵 510300 单, 实际: {codes}"
+    summary = data["summary"]
+    assert summary["sell_count"] == 0, f"runNew 没下过 sell, 实际 sell_count={summary['sell_count']}"
+    assert summary["total_sell_proceeds"] == 0.0, summary
+
+
+def test_get_my_performance_excludes_phantom_in_trades_summary(reload_server, tmp_db):
+    """trades_summary 不能把 runOld 下、runNew settle 的 sell 单算进 runNew 的卖出统计。"""
+    _seed_phantom_order(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_performance("botPhantom", "2026-01-07", run_id="runNew"))
+    data = json.loads(payload)
+    assert data["success"], data
+    ts = data["trades_summary"]
+    assert ts is not None, "trades_summary 不应为 None"
+    assert ts["sell_count"] == 0, f"runNew 实际没 sell, 但 trades_summary.sell_count={ts['sell_count']}"
+    assert ts["total_sell_proceeds"] == 0.0, ts
+
+
+def test_get_my_history_excludes_phantom_settled_only_order(reload_server, tmp_db):
+    """get_my_history 的 orders 列表也按 order_run_id 过滤，不带 settle_run_id 漏入。"""
+    _seed_phantom_order(tmp_db)
+    s = reload_server
+    payload = asyncio.run(s.portfolio_get_my_history("botPhantom", run_id="runNew"))
+    data = json.loads(payload)
+    assert data["success"], data
+    codes = [o["fund_code"] for o in data["orders"]]
+    assert "510300" not in codes, f"runNew history 不应看到幽灵 510300 单, 实际: {codes}"
