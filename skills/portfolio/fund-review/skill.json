@@ -1,7 +1,0 @@
-{
-  "name": "fund-review",
-  "icon": "🔎",
-  "slot": "portfolio",
-  "subType": "fund",
-  "desc": "定期巡检 bot 的公募基金持仓，包含基金异常检测（经理变更/风格漂移/规模骤降），对比目标组合决定 KEEP/REBALANCE/SWITCH，先赎回后申购"
-}
