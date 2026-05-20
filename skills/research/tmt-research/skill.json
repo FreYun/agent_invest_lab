@@ -1,0 +1,7 @@
+{
+  "name": "TMT 行业研究",
+  "icon": "💡",
+  "slot": "research",
+  "subType": "industry",
+  "desc": "TMT（科技/媒体/电信）行业研究指南：细分赛道、周期位置、竞争格局、关键指标，供 bot 研究 TMT 基金/个股时作为思考框架"
+}
