@@ -92,10 +92,26 @@ export interface IndexQuote {
 }
 
 export interface BenchmarkSeries {
-  code: string                                    // e.g. '000300.SH'
-  name: string                                    // e.g. '沪深300'
+  code: string                                    // e.g. '000300.SH'，or 'buyable-pool' for multi-fund
+  name: string                                    // e.g. '沪深300'，or '买池 N 只等权 B&H' for multi-fund
   pointsByDate: Record<string, number>            // ISO date → cumulative % since runStartDate (run-start day = 0)
   latestCumulativePct: number | null              // convenience: cumulative pct at the last available trading date < asOfDate
+}
+
+// 单基金交易费率（每天都注入 daily prompt）。purchase_fee/redeem_tiers 来自 fund_info，
+// 经 fund-portfolio-mcp 的 _fund_fee_rates 标准化；mgmt+custody 是 NAV 已扣除的年化项，
+// 仅作信息项展示（bot 不需要"决策时再扣"）。
+export interface FundFee {
+  fund_code: string
+  fund_name: string
+  found: boolean
+  purchase_fee_pct?: number                       // BUY 时按金额收取，0.12 → 0.12%
+  redeem_tiers?: { max_days: number | null; rate_pct: number }[]  // 持有天数阶梯：例 [{<7d:1.5%},{<30d:0.5%},{≥30d:0%}]
+  mgmt_fee_pct_annual?: number                    // NAV 内
+  custody_fee_pct_annual?: number                 // NAV 内
+  sales_service_fee_pct_annual?: number           // NAV 内
+  purchase_status?: string                        // open / suspended / ...
+  redeem_status?: string
 }
 
 // Mirror of portfolio_get_my_performance's payload — surfaced wholesale so the
@@ -182,6 +198,7 @@ export interface DailyContextData {
   fundSeries?: FundSeries[]
   indices?: IndexQuote[]
   benchmark?: BenchmarkSeries
+  fundFees?: FundFee[]
 }
 
 // ============================================================================
@@ -573,20 +590,27 @@ function mean(xs: number[]): number {
 }
 
 // ============================================================================
-// Benchmark cumulative return — pulls the benchmark index over [runStartDate,
-// asOfDate-1] from simworld and computes each trading day's pct change vs the
-// run-start day's close. The PnL trend renderer joins on date so each row gets
-// "you vs benchmark since run start" — bot can immediately see whether it's
-// adding alpha or just riding beta.
+// Benchmark cumulative return — pulls the benchmark over [runStartDate,
+// asOfDate-1] and computes each trading day's pct change vs the run-start day's
+// price. The PnL trend renderer joins on date so each row gets "you vs benchmark
+// since run start" — bot can immediately see whether it's adding alpha or just
+// riding beta.
 //
-// Default benchmark is 沪深300 (000300.SH). The only buyable in current lab
-// runs is 510300 (沪深300 ETF), so 沪深300 index is a tight benchmark; if pool
-// expands later, caller can override via opts.benchmarkCode.
+// Two fetchers:
+//   - fetchIndexBenchmark: pulls an index series via market_index_quote
+//     (default 沪深300, useful when buyable pool is unspecified or covers
+//     broad-market ETFs).
+//   - fetchFundPoolBenchmark: pulls fund NAV via fund_nav for the buyable池
+//     codes, equal-weights them, and uses the composite as the benchmark.
+//     This is THE benchmark when the system is testing single-fund timing —
+//     bot's alpha = your timing vs naive B&H of the exact fund(s) it's allowed
+//     to trade. For bot7 (buyable池 = [016729]) this collapses to "you vs
+//     016729 NAV B&H" which is exactly the right reference.
 // ============================================================================
 
 const DEFAULT_BENCHMARK = { code: '000300.SH', name: '沪深300' }
 
-async function fetchBenchmark(opts: {
+async function fetchIndexBenchmark(opts: {
   simworldUrl: string
   code: string
   name: string
@@ -628,6 +652,83 @@ async function fetchBenchmark(opts: {
   }
 }
 
+// 用 buyable 池基金 NAV 等权合成基准。单只 → 退化为该基金 B&H；多只 → 各自从
+// runStartDate 锚定 = 1，每天取算术平均（缺值的基金当天跳过该基金，不在分母里
+// 灌零——保证 sparse 日期表现真实）。这是"如果你完全不择时就这么躺平"的最直接
+// 对比，bot 看 alpha 列就知道每天的择时是赚还是亏。
+async function fetchFundPoolBenchmark(opts: {
+  simworldUrl: string
+  fundCodes: string[]
+  runStartDate: string
+  asOfDate: string
+}): Promise<BenchmarkSeries | null> {
+  if (opts.fundCodes.length === 0) return null
+  const simDt = `${opts.asOfDate} 15:00:00`
+  const perFundNorm: Record<string, Record<string, number>> = {}
+  const perFundName: Record<string, string> = {}
+  const allDates = new Set<string>()
+  for (const code of opts.fundCodes) {
+    try {
+      const raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
+        fund_codes: [code],
+        simulated_datetime: simDt,
+        start_date: opts.runStartDate,
+        end_date: priorDay(opts.asOfDate),
+      }) as { items?: { 基金代码?: string; 基金名称?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number }[] }[] } | null
+      const item = raw?.items?.[0]
+      if (!item || !item['是否可用'] || !Array.isArray(item['净值记录'])) continue
+      const series = item['净值记录']
+        .map(r => ({ date: String(r['交易日期'] ?? '').slice(0, 10), nav: Number(r['复权单位净值'] ?? 0) }))
+        .filter(r => r.date && r.nav > 0)
+      if (series.length === 0) continue
+      const base = series[0].nav
+      const norm: Record<string, number> = {}
+      for (const r of series) {
+        norm[r.date] = r.nav / base
+        allDates.add(r.date)
+      }
+      perFundNorm[code] = norm
+      perFundName[code] = item['基金名称'] ?? code
+    } catch { /* skip fund on error */ }
+  }
+  const present = Object.keys(perFundNorm)
+  if (present.length === 0) return null
+  const sortedDates = Array.from(allDates).sort()
+  const pointsByDate: Record<string, number> = {}
+  for (const d of sortedDates) {
+    let sum = 0, n = 0
+    for (const code of present) {
+      const v = perFundNorm[code][d]
+      if (v !== undefined) { sum += v; n++ }
+    }
+    if (n === 0) continue
+    pointsByDate[d] = (sum / n - 1) * 100
+  }
+  const lastDate = sortedDates[sortedDates.length - 1]
+  const name = present.length === 1
+    ? `${perFundName[present[0]]} B&H`
+    : `买池 ${present.length} 只等权 B&H`
+  const code = present.length === 1 ? present[0] : 'buyable-pool'
+  return { code, name, pointsByDate, latestCumulativePct: pointsByDate[lastDate] ?? null }
+}
+
+// 调 fund-portfolio-mcp 的 get_fund_fees CLI 子命令读 fund_info 费率字段。fee
+// 表是静态/半静态——每天调一次很便宜，比 simworld fund_rate 一只一只 HTTP 来得快。
+async function fetchFundFees(opts: {
+  fundMcpCli: string
+  fundCodes: string[]
+}): Promise<FundFee[]> {
+  if (opts.fundCodes.length === 0) return []
+  try {
+    const r = await runFundCli(opts.fundMcpCli, 'get_fund_fees', ['--fund-codes', opts.fundCodes.join(',')], { timeoutMs: 15_000 })
+    if (r.code !== 0) return []
+    const parsed = JSON.parse(r.stdout) as { success?: boolean; fees?: FundFee[] }
+    return Array.isArray(parsed?.fees) ? parsed.fees : []
+  } catch {
+    return []
+  }
+}
+
 // ============================================================================
 // Public entry point.
 // ============================================================================
@@ -645,13 +746,18 @@ export interface FetchDailyContextOptions {
   runStartDate?: string
   pnlTrendDays?: number
   indices?: { code: string; name: string }[]
+  // Caller-pinned benchmark INDEX (legacy override). Ignored when
+  // buyableFundCodes is provided — in that case fundPoolBenchmark wins.
   benchmark?: { code: string; name: string }
+  // 当 buyable 池可见时，benchmark 改用池内基金 NAV 等权 B&H——单基金运行（如
+  // bot7 只交易 016729）下 bot 直接看到"你 vs 不择时躺平"的 alpha 列。
+  // 不传则回退到 INDEX benchmark（默认 沪深300）。
+  buyableFundCodes?: string[]
 }
 
 export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise<DailyContextData> {
   const pnlTrendDays = opts.pnlTrendDays ?? 10
   const indices = opts.indices ?? DEFAULT_INDEX_CODES
-  const benchmark = opts.benchmark ?? DEFAULT_BENCHMARK
   const out: DailyContextData = {}
 
   // Run portfolio (CLI) + simworld (HTTP) calls in parallel — they're independent.
@@ -671,12 +777,34 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
   const indexPromise: Promise<IndexQuote[]> = opts.simworldUrl
     ? fetchIndexSnapshots({ simworldUrl: opts.simworldUrl, asOfDate: opts.asOfDate, indices })
     : Promise.resolve([])
-  // Benchmark needs runStartDate to anchor cumulative; skip cleanly otherwise.
-  const benchmarkPromise: Promise<BenchmarkSeries | null> = (opts.simworldUrl && opts.runStartDate)
-    ? fetchBenchmark({ simworldUrl: opts.simworldUrl, code: benchmark.code, name: benchmark.name, runStartDate: opts.runStartDate, asOfDate: opts.asOfDate })
-    : Promise.resolve(null)
+  // Benchmark：buyable 池有则用池内 NAV 等权（"你 vs 不择时"，单基金运行下=该基金 B&H）；
+  // 否则回退到指数 benchmark（默认 沪深300）。两条路径都需要 runStartDate 锚定。
+  const benchmarkIndex = opts.benchmark ?? DEFAULT_BENCHMARK
+  const benchmarkPromise: Promise<BenchmarkSeries | null> = (() => {
+    if (!opts.simworldUrl || !opts.runStartDate) return Promise.resolve(null)
+    if (opts.buyableFundCodes && opts.buyableFundCodes.length > 0) {
+      return fetchFundPoolBenchmark({
+        simworldUrl: opts.simworldUrl,
+        fundCodes: opts.buyableFundCodes,
+        runStartDate: opts.runStartDate,
+        asOfDate: opts.asOfDate,
+      })
+    }
+    return fetchIndexBenchmark({
+      simworldUrl: opts.simworldUrl,
+      code: benchmarkIndex.code,
+      name: benchmarkIndex.name,
+      runStartDate: opts.runStartDate,
+      asOfDate: opts.asOfDate,
+    })
+  })()
+  // Fund fee schedule for the buyable pool — fees rarely change, but we re-fetch
+  // every day for PIT correctness and because cost is tiny (sqlite read via CLI).
+  const feesPromise: Promise<FundFee[]> = (opts.fundMcpCli && opts.buyableFundCodes && opts.buyableFundCodes.length > 0)
+    ? fetchFundFees({ fundMcpCli: opts.fundMcpCli, fundCodes: opts.buyableFundCodes })
+    : Promise.resolve([])
 
-  const [account, perf, pnlFromFiles, indexSnapshots, benchmarkSeries] = await Promise.all([accountPromise, perfPromise, pnlFilePromise, indexPromise, benchmarkPromise])
+  const [account, perf, pnlFromFiles, indexSnapshots, benchmarkSeries, fundFees] = await Promise.all([accountPromise, perfPromise, pnlFilePromise, indexPromise, benchmarkPromise, feesPromise])
   if (account) out.account = account
   if (perf) out.performance = perf
   // PnL trend: prefer perf.dailySeries (CLI, always fresh); fall back to
@@ -686,6 +814,7 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
   if (trend && trend.length) out.pnlTrend = trend
   if (indexSnapshots.length) out.indices = indexSnapshots
   if (benchmarkSeries) out.benchmark = benchmarkSeries
+  if (fundFees.length) out.fundFees = fundFees
 
   if (account && opts.simworldUrl) {
     const heldCodes = account.holdings.map(h => h.fund_code).filter(Boolean)

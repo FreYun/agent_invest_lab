@@ -2,7 +2,6 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { tokenize } from './tokenize.ts'
-import { STRATEGY_MEM0_PREFIX } from '../message.ts'
 
 export interface MemoryRecord {
   id: string
@@ -29,10 +28,34 @@ export interface SearchHit {
   id: string
 }
 
+export interface SearchOptions {
+  agent_id?: string
+  limit: number
+  // Inclusive YYYY-MM-DD bounds on created_at. Records lacking a parseable
+  // created_at are dropped when either bound is set.
+  start_date?: string
+  end_date?: string
+  // Reference "today" (YYYY-MM-DD) used to compute recency decay. Pass the
+  // simulated world date so retrieval is PIT-consistent.
+  now?: string
+  // Decay τ in days for score *= exp(-Δdays/τ). 0 disables decay; default 30
+  // gently favors recent records without erasing the long tail (e.g. 30-day
+  // record retains ~0.37 of its raw TF score).
+  recency_tau_days?: number
+}
+
+const DEFAULT_RECENCY_TAU_DAYS = 30
+
 function tokenCounts(text: string): Map<string, number> {
   const m = new Map<string, number>()
   for (const t of tokenize(text)) m.set(t, (m.get(t) ?? 0) + 1)
   return m
+}
+
+function parseDayMs(s: string | undefined | null): number | null {
+  if (!s) return null
+  const t = Date.parse(s + 'T00:00:00Z')
+  return Number.isFinite(t) ? t : null
 }
 
 export class MemoryStore {
@@ -66,35 +89,30 @@ export class MemoryStore {
     return rec
   }
 
-  /** 找 agent_id 下 text 以 prefix 开头的最新一条记录（按 created_at 降序，并列时取最后写入）。
-   *  用途：world 在 Day 1 结束后抽取 bot 写的策略文档（约定 prefix `# MY_STRATEGY`）。
-   *  未找到返回 null。 */
-  findLatestByPrefix(agent_id: string, prefix: string): MemoryRecord | null {
-    let best: MemoryRecord | null = null
-    for (const rec of this.records) {
-      if (rec.agent_id !== agent_id) continue
-      if (!rec.text.startsWith(prefix)) continue
-      if (!best || rec.created_at > best.created_at) best = rec
-      // created_at 相同时后写的覆盖前写的（自然遍历顺序），无需额外比较
-    }
-    return best
-  }
-
-  search(query: string, opts: { agent_id?: string; limit: number }): SearchHit[] {
+  search(query: string, opts: SearchOptions): SearchHit[] {
     const q = tokenize(query)
     if (q.length === 0) return []
     const qSet = new Set(q)
     const limit = Math.max(1, Math.min(opts.limit, 50))
+    const startMs = parseDayMs(opts.start_date)
+    const endMs = parseDayMs(opts.end_date)
+    const nowMs = parseDayMs(opts.now)
+    const tau = opts.recency_tau_days ?? DEFAULT_RECENCY_TAU_DAYS
+    const decayEnabled = tau > 0 && nowMs !== null
     const scored: SearchHit[] = []
     for (const rec of this.records) {
       if (opts.agent_id !== undefined && rec.agent_id !== opts.agent_id) continue
-      // 策略文档每天被 world 直接注回 prompt（strategyBlock），不该再出现在 mem0_search
-      // 的 hit list 里——否则把真正"昨天的实际判断"挤出 limit。前缀同 message.ts 的契约。
-      if (rec.text.startsWith(STRATEGY_MEM0_PREFIX)) continue
+      const createdMs = parseDayMs(rec.created_at)
+      if (startMs !== null && (createdMs === null || createdMs < startMs)) continue
+      if (endMs !== null && (createdMs === null || createdMs > endMs)) continue
       const counts = tokenCounts(rec.text)
       let score = 0
       for (const tok of qSet) score += counts.get(tok) ?? 0
       if (score <= 0) continue
+      if (decayEnabled && createdMs !== null) {
+        const dDays = Math.max(0, Math.round((nowMs! - createdMs) / 86_400_000))
+        score *= Math.exp(-dDays / tau)
+      }
       scored.push({ memory: rec.text, agent_id: rec.agent_id, score, created_at: rec.created_at, id: rec.id })
     }
     scored.sort((a, b) => b.score - a.score || (b.created_at < a.created_at ? -1 : b.created_at > a.created_at ? 1 : a.id < b.id ? -1 : 1))

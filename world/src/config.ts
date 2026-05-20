@@ -13,6 +13,13 @@ export const DEFAULT_SHADOW_INCLUDE = [
 
 export interface WorldConfig {
   researchLoop: string
+  // 可选。指向 research-loop 的 Rust binary（rust/target/release/research-loop-rust2）。
+  // 设了 → world 按 `<bin> server --bot-id ... --workspace ... --config ...` 起 server，
+  // 走 rust 实现；不设 → 沿用 researchLoop/ts/server.ts。两端 JSON-RPC 协议同集（ping / chat /
+  // shutdown），bot 那侧无感。RESEARCH_LOOP_RUST_BIN 环境变量也可覆写本字段（环境优先）。
+  // 切到 rust 主要为了让 chat error event 不再被 ts server.ts 静默吃掉（ts server.ts
+  // 的 for-await 没分支处理 `event.type === 'error'`，chat_llm 超时会伪装成 ok 返回）。
+  researchLoopRustBin?: string
   botsRoot: string
   openclawJson: string
   skillsRoot: string
@@ -85,6 +92,12 @@ export function loadWorldConfig(path: string): WorldConfig {
   const baseDir = dirname(resolve(path))
 
   const researchLoop = reqString(raw, 'research_loop')
+  // 优先级：env RESEARCH_LOOP_RUST_BIN > world.yaml research_loop_rust_bin > 未设（走 ts）。
+  // env 优先方便临时切换（`RESEARCH_LOOP_RUST_BIN=... world run --config ...`）而不动 yaml。
+  const researchLoopRustBin = (process.env.RESEARCH_LOOP_RUST_BIN && process.env.RESEARCH_LOOP_RUST_BIN.trim())
+    || (typeof raw.research_loop_rust_bin === 'string' && raw.research_loop_rust_bin.trim()
+      ? resolveMaybe(baseDir, raw.research_loop_rust_bin)
+      : undefined)
 
   // world.yaml lives at <world>/config/world.yaml. Defaults:
   //   bots_root      → ../../bots         (i.e. <repo>/bots/<botId>/, sibling of <world>)
@@ -187,5 +200,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     throw new Error('world config: "buyable_fund_codes" is required when "fund_mcp_cli" is set — list the fund codes bot can buy this run (e.g. [510300, 159915, 002611])')
   }
 
-  return { researchLoop, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, fundPortfolioUpstreamUrl }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, fundPortfolioUpstreamUrl }
 }

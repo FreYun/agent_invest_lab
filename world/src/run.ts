@@ -6,7 +6,7 @@ import { loadCalendar, computeTradingDates } from './calendar.ts'
 import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
 import { buildShadowWorkspace } from './shadowWorkspace.ts'
-import { renderDailyMessage, STRATEGY_MEM0_PREFIX } from './message.ts'
+import { renderDailyMessage } from './message.ts'
 import { fetchDailyContext } from './daily-context.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
@@ -174,8 +174,7 @@ interface SetupResult {
   strategyServer: StrategyServerHandle
   bots: { botId: string; server: BotServer }[]
   currentDateRef: { value: string }
-  // 进程内共享的 MemoryStore 实例；与 memory-server 是同一份。Day 1 结束后 extractStrategies 用它
-  // 反查 bot 写下的策略文档（text 以 STRATEGY_MEM0_PREFIX 起头），落盘到 runDir/strategies/<bot>.md。
+  // 进程内共享的 MemoryStore 实例；与 memory-server 是同一份。
   memoryStore: MemoryStore
   // Kill the named bot's server and spawn a fresh one in its slot. Used by runLoop
   // after a per-day chat timeout so the next day doesn't race with the still-in-flight
@@ -323,9 +322,9 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   }
 
   // strategy-server（始终启用，进程内）：bot 通过 update_my_strategy / get_my_strategy 工具
-  // 管理自己的 strategy 文档。写入 runDir/strategies/<bot>.md 与 revisions.jsonl；与 Day 1
-  // 由 extractStrategies 从 mem0 抽出来的初版完全共用同一份文件——后者只在 Day 1 收尾跑一次
-  // 作为冷启动，之后所有修订都走这个 MCP 工具。bot 的 mcporter.json 用 ${STRATEGY_SERVER_URL} 引用。
+  // 管理自己的 METHODOLOGY.md（shadow workspace 下；research-loop 每次 chat 都把它 splice 进
+  // system prompt 的 ## METHODOLOGY.md section）。修订审计落 runDir/strategies/<bot>.revisions.jsonl。
+  // bot 的 mcporter.json 用 ${STRATEGY_SERVER_URL} 引用。
   const strategyServer = await createStrategyServer({ worldRoot, runId, getCurrentDate })
   writeFileSync(P.strategyServerRuntimeFile(worldRoot, runId), JSON.stringify({ port: strategyServer.port, url: strategyServer.url }, null, 2) + '\n')
   log(worldRoot, runId, `strategy-server at ${strategyServer.url}`)
@@ -424,38 +423,6 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
 }
 
 interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string }
-
-/** Day 1 结束后调用一次。扫 in-process MemoryStore，按 STRATEGY_MEM0_PREFIX 反查每个 bot 写的策略
- *  文档，落盘到 runDir/strategies/<botId>.md。后续日（含 resume）从同一文件读回注入 Day N prompt。
- *  Idempotent：每次都覆盖写最新一条；bot 没写 / agent_id 对不上 / 文本没以前缀起头 → 跳过（Day N
- *  prompt 不带 strategyBlock，bot 退化到完全自由发挥）。 */
-function extractStrategies(worldRoot: string, runId: string, store: MemoryStore, bots: { botId: string }[]): void {
-  const dir = P.strategiesDir(worldRoot, runId)
-  mkdirSync(dir, { recursive: true })
-  for (const { botId } of bots) {
-    const rec = store.findLatestByPrefix(botId, STRATEGY_MEM0_PREFIX)
-    if (!rec) {
-      log(worldRoot, runId, `strategy extract ${botId}: NOT FOUND (bot Day 1 没写 "${STRATEGY_MEM0_PREFIX}" 起头的 mem0；Day N prompt 将不带策略块)`)
-      continue
-    }
-    try {
-      writeFileSync(P.strategyFile(worldRoot, runId, botId), rec.text + '\n')
-      const preview = rec.text.replace(/\s+/g, ' ').slice(0, 120)
-      log(worldRoot, runId, `strategy extract ${botId}: ok (${rec.text.length} chars; preview: ${preview}${rec.text.length > 120 ? '…' : ''})`)
-    } catch (err) {
-      log(worldRoot, runId, `strategy extract ${botId} FAILED: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-}
-
-/** Day N 渲染 prompt 前从落盘文件读 bot 的 Day 1 策略；文件缺失或读失败 → 返回 undefined，
- *  renderDailyMessage 自动跳过 strategyBlock。Resume 场景：Day 1 已完成时文件已存在，直接读到。 */
-function loadStrategy(worldRoot: string, runId: string, botId: string): string | undefined {
-  const f = P.strategyFile(worldRoot, runId, botId)
-  if (!existsSync(f)) return undefined
-  try { return readFileSync(f, 'utf8') }
-  catch { return undefined }
-}
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -658,16 +625,19 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           // benchmark fetcher can't decide "since when"; with it the bot sees
           // alpha-since-run-start in the PnL trend block.
           runStartDate: dates[0],
+          // 单标的择时基准：用本轮买池的 NAV B&H 当对照（单只 → 该基金 B&H；多只 → 等权篮子）。
+          // 也驱动 daily fee block——不传费率拉不到，bot 看不到申购/赎回阶梯。
+          buyableFundCodes: config.buyableFundCodes,
         })
-        // Day N (cursor > 0)：把 Day 1 落盘的策略读回来注入。Day 1 自身不带 strategyBlock——
-        // bot 还没写。loadStrategy 读不到文件就返回 undefined，renderDailyMessage 自动跳过该块。
-        const strategy = isFirstDay ? undefined : loadStrategy(worldRoot, runId, b.botId)
+        // Bot 的 methodology 由 research-loop 每次 chat splice 进 system prompt 的
+        // ## METHODOLOGY.md section，daily message 只附短提示（METHODOLOGY_DAY1_HINT /
+        // METHODOLOGY_DAYN_HINT），不重复注入正文。
         const message = renderDailyMessage({
           worldRoot, date, isFirstDay,
           quotesPath: quotesAbs, journalRelPath: JOURNAL_REL,
           buyableFundCodes: config.buyableFundCodes,
           simworldTools: setupRes.simworldProxy.tools,
-          dailyContext, strategy,
+          dailyContext,
           // 仅 Day 1 fullRules 用到——message.ts 自己门控；这里无脑传即可，Day N 会丢弃。
           tradingDaysTotal: setupRes.tradingDates.length,
         })
@@ -678,10 +648,6 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         if (s.status === 'dead') brokenBots.add(s.bot)
         else if (s.status === 'timeout') needsRestart.add(s.bot)
       }
-      // Day 1 收尾：从 in-process MemoryStore 抽出每个 bot 写的策略文档（# MY_STRATEGY 起头），
-      // 落盘到 runDir/strategies/<bot>.md。后续日的 chat 会从这里读回注入 prompt。idempotent，
-      // resume 时如果 cursor=0 重新跑 Day 1 会覆盖更新；cursor>0 resume 时文件早就在了，不调。
-      if (cursor === 0) extractStrategies(worldRoot, runId, setupRes.memoryStore, setupRes.bots)
       // 系统侧 close：每个 bot（不论 chat 状态如何）跑一次 close_my_day 落收盘快照。
       // bot 在 BOT_ONLY 端口看不到 close_my_day，只能 world 触发；这是"每天收盘核算"的硬契约。
       // snapshot 文本写到 <botDayDir>/close_my_day.json，方便后续审阅。
