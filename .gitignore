@@ -12,3 +12,12 @@ bots/*/memory/
 data/
 session/
 *.bak
+
+# git worktrees
+.claude/worktrees/
+
+# debug screenshots
+*.png
+
+# fund-portfolio runtime db
+fund-portfolio-mcp/fund.db
