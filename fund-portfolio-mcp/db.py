@@ -213,6 +213,27 @@ CREATE TABLE IF NOT EXISTS fund_bot_reviews (
     created_at              TEXT DEFAULT (datetime('now'))
 );
 
+-- 10b. 持仓批次表（同一只基金每次 BUY 一个 lot，SELL 时按 FIFO 消耗，赎回费按 lot 自有 holding_days 算）。
+--      run_id 跟 holdings 一样做隔离：跨 run 的份额互不影响。
+--      cost_initial = 当时 BUY 的 order_amount（含申购费），跟 holdings.amount_invested 同语义，保证
+--      不变式 SUM(open lot.cost_remaining) == holdings.amount_invested。
+CREATE TABLE IF NOT EXISTS fund_bot_holding_lots (
+    lot_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id              TEXT NOT NULL,
+    fund_code           TEXT NOT NULL,
+    run_id              TEXT NOT NULL,
+    holding_id          INTEGER,             -- 软外键：来源 holdings 行；可为 NULL（迁移时找不到对应 holding 不阻塞）
+    entry_date          TEXT NOT NULL,       -- BUY 的 order_date（T 日），算 holding_days 的基准
+    entry_nav           REAL NOT NULL,
+    shares_initial      REAL NOT NULL,       -- 原始份额，不变
+    shares_remaining    REAL NOT NULL,       -- 被赎回消耗后剩余，<= 1e-6 视作清零
+    cost_initial        REAL NOT NULL,       -- 含申购费的初始成本
+    cost_remaining      REAL NOT NULL,       -- 按消耗比例递减
+    source_order_id     INTEGER,             -- 来源 BUY 订单 id（FK 到 fund_bot_orders）
+    status              TEXT DEFAULT 'open', -- 'open' 仍有剩 / 'closed' 已全部消耗
+    created_at          TEXT DEFAULT (datetime('now'))
+);
+
 -- 11. Bot 调仓动作表
 CREATE TABLE IF NOT EXISTS fund_bot_actions (
     action_id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -412,6 +433,9 @@ CREATE INDEX IF NOT EXISTS idx_fund_industry_code_date ON fund_industry(fund_cod
 CREATE INDEX IF NOT EXISTS idx_fund_top_stocks_code_date ON fund_top_stocks(fund_code, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_fund_style_code_date ON fund_style(fund_code, as_of_date);
 CREATE INDEX IF NOT EXISTS idx_fund_holdings_bot_status ON fund_bot_holdings(bot_id, status);
+CREATE INDEX IF NOT EXISTS idx_fund_lots_fifo ON fund_bot_holding_lots(bot_id, fund_code, run_id, status, entry_date, lot_id);
+CREATE INDEX IF NOT EXISTS idx_fund_lots_holding ON fund_bot_holding_lots(holding_id);
+CREATE INDEX IF NOT EXISTS idx_fund_lots_source_order ON fund_bot_holding_lots(source_order_id);
 CREATE INDEX IF NOT EXISTS idx_fund_orders_bot_status ON fund_bot_orders(bot_id, status);
 CREATE INDEX IF NOT EXISTS idx_fund_orders_bot_date ON fund_bot_orders(bot_id, order_date);
 CREATE INDEX IF NOT EXISTS idx_fund_reviews_bot_date ON fund_bot_reviews(bot_id, review_date);

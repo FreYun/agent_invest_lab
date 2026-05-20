@@ -817,6 +817,116 @@ def _redeem_fee_rate(tiers: list[dict], holding_days: int) -> float:
 
 
 # ============================================================
+#  持仓批次（lot）：BUY 落账时插入一条；SELL 时按 FIFO（最老优先）消耗。
+#  赎回费按 lot 自有 holding_days 算，保证多次买入同基金后的费率正确。
+#  Spec: docs/superpowers/specs/2026-05-19-fund-holding-lots-design.md
+# ============================================================
+
+def _insert_lot(conn, *, bot_id, fund_code, run_id, holding_id,
+                entry_date, entry_nav, shares, cost, source_order_id):
+    """BUY 落账时调用，返回新 lot_id。
+
+    cost 用 BUY 当时的 order_amount（含申购费），跟 holdings.amount_invested
+    同语义；保证不变式 SUM(open lot.cost_remaining) == holdings.amount_invested。
+    """
+    cur = conn.execute(
+        "INSERT INTO fund_bot_holding_lots "
+        "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, "
+        " shares_initial, shares_remaining, cost_initial, cost_remaining, "
+        " source_order_id, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')",
+        (bot_id, fund_code, run_id, holding_id, entry_date, _r(entry_nav, 6),
+         _r(shares, 6), _r(shares, 6), _r(cost), _r(cost), source_order_id),
+    )
+    return cur.lastrowid
+
+
+def _consume_lots_fifo(conn, *, bot_id, fund_code, run_id, sell_shares,
+                       as_of_date, nav, redeem_tiers):
+    """SELL 时按 FIFO（entry_date ASC, lot_id ASC）消耗 open lots。
+
+    每个被触及的 lot：
+      take          = min(lot.shares_remaining, sell_shares_left)
+      holding_days  = (as_of_date - lot.entry_date) 自然日
+      rate          = _redeem_fee_rate(redeem_tiers, holding_days)
+      gross         = take * nav
+      fee           = gross * rate
+      cost_consumed = lot.cost_remaining * (take / lot.shares_remaining)
+      UPDATE lot SET shares_remaining-=take, cost_remaining-=cost_consumed,
+                     status='closed' if remaining <= 1e-6 else 'open'
+
+    返回 [{lot_id, entry_date, holding_days, rate, shares: take,
+           cost_consumed, gross, fee}, ...]
+
+    若 SUM(open lots shares) < sell_shares 抛 ValueError，且**不做任何 DB 写入**
+    （先 SELECT 总额校验再开始消耗）。
+    """
+    # 先校验余量：避免部分写入
+    cur = conn.execute(
+        "SELECT COALESCE(SUM(shares_remaining), 0) AS s "
+        "FROM fund_bot_holding_lots "
+        "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open'",
+        (bot_id, fund_code, run_id),
+    ).fetchone()
+    # cur is either a Row (server's get_conn) or a tuple (raw sqlite3.connect)
+    available = float(cur["s"] if hasattr(cur, "keys") else cur[0])
+    if available + 1e-6 < sell_shares:
+        raise ValueError(
+            f"insufficient open lots: want={sell_shares} have={available:.6f} "
+            f"(bot={bot_id} fund={fund_code} run={run_id})"
+        )
+
+    lots = conn.execute(
+        "SELECT lot_id, entry_date, shares_remaining, cost_remaining "
+        "FROM fund_bot_holding_lots "
+        "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open' "
+        "ORDER BY entry_date ASC, lot_id ASC",
+        (bot_id, fund_code, run_id),
+    ).fetchall()
+
+    consumptions = []
+    remaining = float(sell_shares)
+    for lot in lots:
+        if remaining <= 1e-9:
+            break
+        lot_id = lot["lot_id"] if hasattr(lot, "keys") else lot[0]
+        entry_date = lot["entry_date"] if hasattr(lot, "keys") else lot[1]
+        lot_shares = float(lot["shares_remaining"] if hasattr(lot, "keys") else lot[2])
+        lot_cost = float(lot["cost_remaining"] if hasattr(lot, "keys") else lot[3])
+
+        take = min(lot_shares, remaining)
+        holding_days = _calc_holding_days(entry_date, as_of_date)
+        rate = _redeem_fee_rate(redeem_tiers, holding_days)
+        gross = take * nav
+        fee = gross * rate
+        cost_consumed = lot_cost * (take / lot_shares) if lot_shares > 0 else 0.0
+
+        new_shares = lot_shares - take
+        new_cost = lot_cost - cost_consumed
+        new_status = "closed" if new_shares <= 1e-6 else "open"
+        conn.execute(
+            "UPDATE fund_bot_holding_lots "
+            "SET shares_remaining=?, cost_remaining=?, status=? "
+            "WHERE lot_id=?",
+            (_r(new_shares, 6), _r(new_cost), new_status, lot_id),
+        )
+
+        consumptions.append({
+            "lot_id": lot_id,
+            "entry_date": entry_date,
+            "holding_days": holding_days,
+            "rate": rate,
+            "shares": take,
+            "cost_consumed": cost_consumed,
+            "gross": gross,
+            "fee": fee,
+        })
+        remaining -= take
+
+    return consumptions
+
+
+# ============================================================
 # A. 基金数据查询（读 fund_info / fund_nav / fund_performance）
 # ============================================================
 
@@ -1478,15 +1588,27 @@ async def portfolio_place_sell_order(
         if shares > sellable + 1e-6:
             return json.dumps({"success": False, "message": f"可卖份额不足：want={shares} sellable={sellable:.4f} (total={total_shares:.4f}, pending_sell={already_pending:.4f})"}, ensure_ascii=False)
 
-        # 赎回费按 order_date 那天的真实持有天数算（T 日就锁死，不再到 settle 时重算）
+        # 赎回费按 lot 自有持有天数算：每个 lot 各自一档费率，T 日就锁死，settle 不重算。
+        # FIFO 消耗最老 lot 优先，等价于"优先赎回持有期更长的份额"。
         _, redeem_tiers = _fund_fee_rates(conn, fund_code)
-        holding_days = _calc_holding_days(holding["entry_date"] or trade_date, trade_date)
-        rf_rate = _redeem_fee_rate(redeem_tiers, holding_days)
-        gross = shares * nav
-        fee = gross * rf_rate
-        proceeds = gross - fee
+        try:
+            consumptions = _consume_lots_fifo(
+                conn, bot_id=bot_id, fund_code=fund_code, run_id=run_id,
+                sell_shares=shares, as_of_date=trade_date, nav=nav,
+                redeem_tiers=redeem_tiers,
+            )
+        except ValueError as e:
+            return json.dumps(
+                {"success": False, "message": f"lot 余量校验失败：{e}"},
+                ensure_ascii=False,
+            )
 
-        # T 日扣 holding.shares + amount_invested 按比例扣减
+        gross = sum(c["gross"] for c in consumptions)
+        fee = sum(c["fee"] for c in consumptions)
+        proceeds = gross - fee
+        cost_consumed = sum(c["cost_consumed"] for c in consumptions)
+
+        # T 日扣 holding.shares + amount_invested 按 lot 累计实际成本扣减
         new_shares = total_shares - shares
         if new_shares <= 1e-6:
             conn.execute(
@@ -1495,16 +1617,26 @@ async def portfolio_place_sell_order(
                 (trade_date, _r(nav, 6), run_id, holding["holding_id"])
             )
         else:
-            ratio_left = new_shares / total_shares
-            new_cost = float(holding["amount_invested"] or 0.0) * ratio_left
+            # 按 lot 实际消耗成本（不再用 ratio_left 近似）。同时把 entry_date 推到剩余最老 lot 的日期。
+            new_cost = float(holding["amount_invested"] or 0.0) - cost_consumed
+            if new_cost < 0:
+                new_cost = 0.0
             new_mv = new_shares * nav
+            new_entry_row = conn.execute(
+                "SELECT MIN(entry_date) AS d FROM fund_bot_holding_lots "
+                "WHERE holding_id=? AND status='open'",
+                (holding["holding_id"],),
+            ).fetchone()
+            new_entry_date = (new_entry_row["d"] if new_entry_row and new_entry_row["d"]
+                              else holding["entry_date"])
             conn.execute(
                 "UPDATE fund_bot_holdings SET shares=?, amount_invested=?, latest_nav=?, "
-                "market_value=?, unrealized_pnl=?, unrealized_pnl_pct=?, run_id=? WHERE holding_id=?",
+                "market_value=?, unrealized_pnl=?, unrealized_pnl_pct=?, entry_date=?, run_id=? "
+                "WHERE holding_id=?",
                 (_r(new_shares, 6), _r(new_cost), _r(nav, 6), _r(new_mv),
                  _r(new_mv - new_cost),
                  _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
-                 run_id, holding["holding_id"])
+                 new_entry_date, run_id, holding["holding_id"])
             )
 
         # account.cash_receivable += proceeds；cash 不动（T+1 settle 时再划转）
@@ -1515,16 +1647,22 @@ async def portfolio_place_sell_order(
             (_r(new_receivable), run_id, bot_id)
         )
 
-        # 插入 REDUCE action（action_date=trade_date）。amount 存 gross，与现行 replay 口径一致。
-        conn.execute(
-            "INSERT INTO fund_bot_actions "
-            "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
-            "nav_used, amount, shares, fee, reason, action_date, run_id) "
-            "VALUES (NULL, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
-            (bot_id, fund_code, _r(nav, 6), _r(gross), _r(shares, 6), _r(fee),
-             reason or f"T 日赎回 (nav={nav:.4f} 持有 {holding_days} 天 赎回费 {rf_rate*100:.2f}%)",
-             trade_date, run_id)
-        )
+        # 每个被消耗的 lot 写一条 REDUCE action：可追溯每批的费率/天数；orders.fee 是总和。
+        # 若 caller 传了 reason，第一条 action 用它；后续 lot 用机器生成的明细，避免覆盖业务原因。
+        for idx, c in enumerate(consumptions):
+            auto_reason = (
+                f"T 日赎回 lot#{c['lot_id']} (entry={c['entry_date']} "
+                f"持有 {c['holding_days']} 天 nav={nav:.4f} 赎回费 {c['rate']*100:.2f}%)"
+            )
+            row_reason = (reason + " | " + auto_reason) if (reason and idx == 0) else auto_reason
+            conn.execute(
+                "INSERT INTO fund_bot_actions "
+                "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
+                "nav_used, amount, shares, fee, reason, action_date, run_id) "
+                "VALUES (NULL, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                (bot_id, fund_code, _r(nav, 6), _r(c["gross"]), _r(c["shares"], 6),
+                 _r(c["fee"]), row_reason, trade_date, run_id)
+            )
 
         # 插入 order：confirmed_shares / confirmed_amount / fee 在 T 日就是最终值；settle 只补 confirm_date
         cur = conn.execute(
@@ -1550,11 +1688,15 @@ async def portfolio_place_sell_order(
         "gross": _r(gross),
         "fee": _r(fee),
         "proceeds": _r(proceeds),
-        "fee_rate_pct": round(rf_rate * 100, 4),
-        "holding_days_at_order": holding_days,
+        "lots_consumed": [
+            {"lot_id": c["lot_id"], "entry_date": c["entry_date"],
+             "holding_days": c["holding_days"], "rate_pct": round(c["rate"]*100, 4),
+             "shares": _r(c["shares"], 6), "fee": _r(c["fee"])}
+            for c in consumptions
+        ],
         "status": "pending",
         "cash_receivable_after": _r(new_receivable),
-        "note": "T 日已扣 shares；proceeds 已锁定 cash_receivable，T+1 settle 后转入 cash",
+        "note": "T 日已按 FIFO 消耗 lot；proceeds 已锁定 cash_receivable，T+1 settle 后转入 cash",
     }, ensure_ascii=False)
 
 
@@ -1590,9 +1732,12 @@ async def portfolio_get_my_history(
         h_sql += " ORDER BY status, fund_code"
         holdings = [dict(r) for r in conn.execute(h_sql, h_args).fetchall()]
 
-        o_args: list = [bot_id, run_id, run_id]
-        o_sql = ("SELECT * FROM fund_bot_orders WHERE bot_id=? "
-                 "AND (order_run_id=? OR settle_run_id=?)")
+        # 只看 order_run_id：bot 应只看到"本 run 自己下"的单。settle_run_id 是上一次 run
+        # 没结算干净留下的尾巴——把那种"幽灵单"一并算进来会污染统计/列表（实际见过
+        # bot7 在 2026-05-19 那次 run 的 trades_summary 多出一笔 ¥98w 卖单的事故）。
+        # 正常 backtest 一个 run 跑完整轮 → order_run_id == settle_run_id，无差别。
+        o_args: list = [bot_id, run_id]
+        o_sql = "SELECT * FROM fund_bot_orders WHERE bot_id=? AND order_run_id=?"
         if fund_code:
             o_sql += " AND fund_code=?"
             o_args.append(fund_code)
@@ -1851,13 +1996,16 @@ async def portfolio_get_my_performance(
         best = max(snaps, key=lambda s: float(s["daily_return_pct"] or -1e9))
         worst = min(snaps, key=lambda s: float(s["daily_return_pct"] or 1e9))
 
-        # 交易统计：只统计 confirmed 单 + order_date < as_of_date
+        # 交易统计：只统计本 run 自己下、已 confirmed、order_date < as_of_date 的单。
+        # 必须按 order_run_id 过滤（而不是 OR settle_run_id）——否则上一次 run 留下来的
+        # pending 单被这一次 run 的 settle 流程收口后，会以"幽灵单"形态混进本 run 的 buy/
+        # sell 计数与 total_buy_amount / total_sell_proceeds / total_fees。
         ord_sql = (
             "SELECT order_type, order_amount, confirmed_amount, confirmed_shares, fee, status, order_date "
             "FROM fund_bot_orders "
-            "WHERE bot_id=? AND order_date < ? AND status='confirmed' AND (order_run_id=? OR settle_run_id=?)"
+            "WHERE bot_id=? AND order_date < ? AND status='confirmed' AND order_run_id=?"
         )
-        orders = conn.execute(ord_sql, (bot_id, as_of_date, run_id, run_id)).fetchall()
+        orders = conn.execute(ord_sql, (bot_id, as_of_date, run_id)).fetchall()
         buy_count = sum(1 for o in orders if o["order_type"] == "buy")
         sell_count = sum(1 for o in orders if o["order_type"] == "sell")
         total_buy_amount = sum(float(o["order_amount"] or 0.0) for o in orders if o["order_type"] == "buy")
@@ -2227,13 +2375,14 @@ async def portfolio_get_my_trades(
         if not account:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无账户"}, ensure_ascii=False)
 
+        # 按 order_run_id 过滤——不带 settle_run_id 是为了拦住"上一次 run 留下的 pending
+        # 单被本 run settle 流程收口"产生的幽灵单（见 trades_summary 同名 fix 的注释）。
         sql = ("SELECT order_id, fund_code, fund_name, order_type, status, "
                " order_date, confirm_date, order_amount, reference_nav, "
                " confirm_nav, confirmed_shares, confirmed_amount, fee, action_reason "
                "FROM fund_bot_orders "
-               "WHERE bot_id=? AND order_date < ? "
-               "AND (order_run_id=? OR settle_run_id=?)")
-        args: list = [bot_id, as_of_date, run_id, run_id]
+               "WHERE bot_id=? AND order_date < ? AND order_run_id=?")
+        args: list = [bot_id, as_of_date, run_id]
         if fund_code:
             sql += " AND fund_code=?"
             args.append(fund_code)
@@ -2663,12 +2812,13 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                          _r(new_mv - new_cost), _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
                          _r(nav, 6), holding["holding_id"])
                     )
+                    new_holding_id = holding["holding_id"]
                 else:
                     new_mv = add_shares * nav
                     # holding INSERT 用 holding_run_id（= order.order_run_id），不能用 settle run_id；
                     # 否则 settle 一个旧 run 的 pending order 会在 settle run 下新建一个 holding，
                     # 实际上现金流出发生在 order_run_id 那个 run。
-                    conn.execute(
+                    cur = conn.execute(
                         "INSERT INTO fund_bot_holdings "
                         "(bot_id, fund_code, fund_name, share_class, asset_class, role, "
                         "entry_date, entry_nav, latest_nav, shares, pending_sell_shares, amount_invested, "
@@ -2680,6 +2830,15 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                          _r(new_mv - order_amount), _r((new_mv - order_amount) / order_amount * 100 if order_amount else 0, 4),
                          _r(nav, 6), o["action_reason"] or "", holding_run_id)
                     )
+                    new_holding_id = cur.lastrowid
+                # 插入 lot：每次 BUY 一条；SELL 按 FIFO 消耗、按 lot 自有持有天数算赎回费。
+                # cost 用含申购费的 order_amount，跟 holdings.amount_invested 同语义。
+                _insert_lot(
+                    conn, bot_id=bot_id, fund_code=fc, run_id=holding_run_id,
+                    holding_id=new_holding_id, entry_date=order_date,
+                    entry_nav=nav, shares=add_shares, cost=order_amount,
+                    source_order_id=oid,
+                )
                 # 释放 pending 时冻结的 cash_in_transit；不动 cash（cash 在下单时已扣）
                 cash_in_transit -= order_amount
                 # action_date 必须是 order_date（T 日），让 _replay 用 reference_nav 那天的 NAV 重算份额；
@@ -2691,7 +2850,7 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                     "nav_used, amount, shares, fee, reason, action_date, paradigm, run_id) "
                     "VALUES (?, ?, ?, 'ADD', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (o["review_id"], bot_id, fc, _r(nav, 6), _r(order_amount), _r(add_shares, 6),
-                     _r(fee), f"T+1 settle 申购 (T 日 nav={nav:.4f} 申购费 {pf_rate*100:.2f}%)", order_date, paradigm, holding_run_id)
+                     _r(fee), (o["action_reason"] or "").strip(), order_date, paradigm, holding_run_id)
                 )
                 conn.execute(
                     "UPDATE fund_bot_orders SET status='confirmed', confirm_date=?, confirm_nav=?, "
@@ -2722,7 +2881,8 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                                     "settled_via": "cash_receivable->cash"})
                     continue
 
-                # ↓↓↓ 老机制兼容路径（confirmed_amount IS NULL）：扣 shares + 加 cash + 释放冻结
+                # ↓↓↓ 老机制兼容路径（confirmed_amount IS NULL）：按 lot FIFO 扣 + 加 cash + 释放冻结。
+                # 跟 place_sell_order 同一份 lot 消耗逻辑；as_of_date 用 order_date 以保持"按申请日算"的语义。
                 if not holding:
                     skipped.append({"order_id": oid, "reason": "无持仓可卖 (legacy)"})
                     continue
@@ -2733,39 +2893,63 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 if sell_shares <= 1e-6:
                     skipped.append({"order_id": oid, "reason": "卖出份额为 0 (legacy)"})
                     continue
-                holding_days = _calc_holding_days(holding["entry_date"] or order_date, order_date)
-                rf_rate = _redeem_fee_rate(redeem_tiers, holding_days)
-                gross = sell_shares * nav
-                fee = gross * rf_rate
+                try:
+                    consumptions = _consume_lots_fifo(
+                        conn, bot_id=bot_id, fund_code=fc, run_id=holding_run_id,
+                        sell_shares=sell_shares, as_of_date=order_date, nav=nav,
+                        redeem_tiers=redeem_tiers,
+                    )
+                except ValueError as e:
+                    skipped.append({"order_id": oid, "reason": f"legacy lot 余量不足: {e}"})
+                    continue
+                gross = sum(c["gross"] for c in consumptions)
+                fee = sum(c["fee"] for c in consumptions)
+                cost_consumed = sum(c["cost_consumed"] for c in consumptions)
                 cash += gross - fee
                 new_pending = max(0.0, cur_pending - sell_shares)
-                ratio_left = (cur_shares - sell_shares) / cur_shares if cur_shares else 0.0
                 new_shares = cur_shares - sell_shares
                 if new_shares <= 1e-6:
                     conn.execute(
                         "UPDATE fund_bot_holdings SET status='closed', exit_date=?, shares=0, "
-                        "pending_sell_shares=0, market_value=0, run_id=? WHERE holding_id=?",
+                        "amount_invested=0, pending_sell_shares=0, market_value=0, run_id=? WHERE holding_id=?",
                         (as_of_date, run_id, holding["holding_id"])
                     )
                 else:
-                    new_cost = float(holding["amount_invested"] or 0.0) * ratio_left
+                    new_cost = float(holding["amount_invested"] or 0.0) - cost_consumed
+                    if new_cost < 0:
+                        new_cost = 0.0
                     new_mv = new_shares * nav
+                    new_entry_row = conn.execute(
+                        "SELECT MIN(entry_date) AS d FROM fund_bot_holding_lots "
+                        "WHERE holding_id=? AND status='open'",
+                        (holding["holding_id"],),
+                    ).fetchone()
+                    new_entry_date = (new_entry_row["d"] if new_entry_row and new_entry_row["d"]
+                                      else holding["entry_date"])
                     conn.execute(
                         "UPDATE fund_bot_holdings SET shares=?, pending_sell_shares=?, "
                         "amount_invested=?, latest_nav=?, market_value=?, "
-                        "unrealized_pnl=?, unrealized_pnl_pct=?, run_id=? WHERE holding_id=?",
+                        "unrealized_pnl=?, unrealized_pnl_pct=?, entry_date=?, run_id=? WHERE holding_id=?",
                         (_r(new_shares, 6), _r(new_pending, 6), _r(new_cost), _r(nav, 6), _r(new_mv),
                          _r(new_mv - new_cost), _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
-                         run_id, holding["holding_id"])
+                         new_entry_date, run_id, holding["holding_id"])
                     )
-                conn.execute(
-                    "INSERT INTO fund_bot_actions "
-                    "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
-                    "nav_used, amount, shares, fee, reason, action_date, paradigm, run_id) "
-                    "VALUES (?, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (o["review_id"], bot_id, fc, _r(nav, 6), _r(gross), _r(sell_shares, 6),
-                     _r(fee), f"legacy settle 赎回 (T 日 nav={nav:.4f} 申请日持有 {holding_days}天 赎回费 {rf_rate*100:.2f}%)", order_date, paradigm, run_id)
-                )
+                # 每 lot 一条 REDUCE action（与 place_sell_order 新路径口径一致）。
+                base_reason = (o["action_reason"] or "").strip()
+                for idx, c in enumerate(consumptions):
+                    auto_reason = (
+                        f"legacy settle 赎回 lot#{c['lot_id']} (entry={c['entry_date']} "
+                        f"申请日持有 {c['holding_days']} 天 nav={nav:.4f} 赎回费 {c['rate']*100:.2f}%)"
+                    )
+                    row_reason = (base_reason + " | " + auto_reason) if (base_reason and idx == 0) else auto_reason
+                    conn.execute(
+                        "INSERT INTO fund_bot_actions "
+                        "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
+                        "nav_used, amount, shares, fee, reason, action_date, paradigm, run_id) "
+                        "VALUES (?, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (o["review_id"], bot_id, fc, _r(nav, 6), _r(c["gross"]),
+                         _r(c["shares"], 6), _r(c["fee"]), row_reason, order_date, paradigm, run_id)
+                    )
                 conn.execute(
                     "UPDATE fund_bot_orders SET status='confirmed', confirm_date=?, confirm_nav=?, "
                     "confirmed_shares=?, confirmed_amount=?, fee=?, settle_run_id=? WHERE order_id=?",
