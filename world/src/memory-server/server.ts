@@ -55,7 +55,17 @@ export async function createMemoryServer(opts: CreateMemoryServerOpts): Promise<
           if (!query) return send(res, 400, { detail: 'query required' })
           const agent_id = typeof body.agent_id === 'string' ? body.agent_id : undefined
           const limit = typeof body.limit === 'number' ? body.limit : 5
-          const hits = opts.store.search(query, { agent_id, limit })
+          const start_date = typeof body.start_date === 'string' ? body.start_date : undefined
+          const end_date = typeof body.end_date === 'string' ? body.end_date : undefined
+          const recency_tau_days = typeof body.recency_tau_days === 'number' ? body.recency_tau_days : undefined
+          const hits = opts.store.search(query, {
+            agent_id,
+            limit,
+            start_date,
+            end_date,
+            now: opts.getCurrentDate(),
+            recency_tau_days,
+          })
           return send(res, 200, { results: hits })
         }
 

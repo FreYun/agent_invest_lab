@@ -1,4 +1,4 @@
-import type { DailyContextData, AccountSnapshot, PnlTrendPoint, FundSeries, IndexQuote, BenchmarkSeries, PerformanceData, IntervalMetricRow, CompletedPosition } from './daily-context.ts'
+import type { DailyContextData, AccountSnapshot, PnlTrendPoint, FundSeries, IndexQuote, BenchmarkSeries, PerformanceData, IntervalMetricRow, CompletedPosition, FundFee } from './daily-context.ts'
 
 export interface DailyMessageContext {
   worldRoot: string
@@ -16,23 +16,12 @@ export interface DailyMessageContext {
   // 走势、主要指数 MA。每天必看的几样直接灌进 prompt，bot 不必再调 tool 自查。
   // 任一字段缺失（fetcher 失败 / 无持仓 / day 1 没历史）就跳过对应渲染块。
   dailyContext?: DailyContextData
-  // Bot 在 Day 1 自己写下的投资策略（markdown 文本）。world 从 mem0 抽出后落盘为
-  // runDir/strategies/<botId>.md；Day N 渲染时由外层读出来塞进 ctx。空 / 未提供
-  // → 不注入 strategyBlock（说明 Day 1 没写 / 写歪了 / 抽取失败——bot 自由发挥）。
-  strategy?: string
   // 本次回测总交易日数。仅 Day 1 注入到 fullRules，让 bot 按这个时间窗口规划策略
   // （短线 / 波段 / 长持）。具体起止日期不暴露——只给"今天 + N 个交易日"——以减少
   // LLM 训练记忆按已知历史时间段反向决策的泄漏面。Day N 即便传了也不注入，避免给 bot
   // 一个"剩余天数"的 endgame 倒计时（会引发临近终点的窗口式抛售等非真实行为）。
   tradingDaysTotal?: number
 }
-
-// Day 1 bot 写策略时用的固定前缀。约定：bot 的 mem0_add 文本必须以这一行起头，
-// world 才能在 mem0 store 里反查出策略文档。前缀同时出现在两处：
-//   1) Day 1 prompt 中给 bot 的指令里
-//   2) run.ts 里 extractStrategies 的 store.findLatestByPrefix
-// 改这个常量两处自动同步——别在 run.ts 里另写字面量。
-export const STRATEGY_MEM0_PREFIX = '# MY_STRATEGY'
 
 export function weekdayOf(isoDate: string): string {
   return new Date(isoDate + 'T00:00:00Z').toLocaleString('en-US', { weekday: 'long', timeZone: 'UTC' })
@@ -50,28 +39,31 @@ function fullRules(date: string, weekday: string, tradingDaysTotal: number | und
 你是一个金融投资者，你非常需要在这个领域赢得成功，你赚到的钱将成为你存续下去的Token。
 在今天开始之前，你的基金账户已被初始化，你有 100 万初始现金，盈亏从 0 开始累计。${horizonBlock}
 
-【你的任务】根据今天的行情，按你自己的投资风格做出今天的交易决策并执行。
+【你的任务】根据今天的行情，参考你的soul和agent人设，按你自己的投资风格做出今天的交易决策并执行。
 
-【可用工具范围】本会话只开放：discover_tools / mem0_search / mem0_add，以及 mcporter 配置好的 mcp__* 工具。文件读写、web_fetch、bash、子代理、研究模式（start_research 等）全部禁用——调用会被直接拒。
+【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。
 
-【工具发现机制（必读）】mcp__* 工具默认是**隐藏池**：模型看不见它们，必须用 discover_tools(query=...) 按关键词把工具激活进可见列表才能调到。query 是文本匹配（工具名 / 描述 / 标签），单 query 只拿一个切片——只 query "市场 指数" 的话，fund_industry_exposure / fund_turnover_rate / fund_manager_profile / stock_alpha / fund_bonus 之类没有这几个关键词的工具会被直接过滤，你这辈子都见不到。**session 开头先一次性激活**，最省事的做法：
+【skill 体系】list_skills 看有哪些可加载的研究框架，load_skill <name> 把 skill 内容直接载入当前对话当思考脚手架。目前 workspace 里只有 tmt-research（TMT 行业研究指南）——研究科技/媒体/电信主题基金或个股时先 load 一下，按它的框架来思考再去查数据。
 
-discover_tools(query="fund stock bond macro commodity market index quote portfolio research news entity strategy")
+【数据预取】当日账户/持仓/累计绩效/区间业绩/已平仓 P&L/近 N 日 PnL 走势/持仓基金近 20 日 NAV/5 大指数 MA 已经在下方"【...】"块里全量灌好。**不要重复调用 portfolio_get_my_history / portfolio_get_my_performance / portfolio_get_my_trades** 查这些；也不要为持仓基金或这 5 大指数重复调 fund_nav / market_index_quote——直接读上下文。
 
-一发覆盖 simworld-data + fund-portfolio-mcp 的 40+ 个工具，再按需调用。
+【账户操作】下单走 portfolio_place_buy_order / portfolio_place_sell_order；可买基金白名单走 portfolio_get_buyable_funds（变化频率低，记下来就够）。
 
-【行情数据】今天的市场行情走 simworld-data MCP 实时查，按需取。本消息不再附静态概览。
-【账户数据】持仓、现金、待结订单、累计绩效都走 fund-portfolio-mcp 的 portfolio_get_my_history / portfolio_get_my_performance / portfolio_get_my_trades 自己查；下单用 portfolio_place_buy_order / portfolio_place_sell_order。`
+【研究 / 新基金 / 行业暴露 / 资金流 / 宏观 / 研报 / 商品 / 债券】这些没预取，按需直接调对应的 simworld-data 工具——它们都已在工具列表里。`
 }
 
 function briefRules(date: string, weekday: string): string {
   return `当前世界日期：${date}（${weekday}）。
-  规则同前（只能用 mcp__* / mem0_search / mem0_add / discover_tools，文件读写和 bash 都被禁；
-  行情走 simworld-data，账户走 fund-portfolio-mcp 的 portfolio_*；
-  决策前 mem0_search 拉历史判断、决策后 mem0_add 落记忆）。
-【工具激活提醒】mcp__* 工具池必须先用 discover_tools 激活才能调到，开头一发广 query 把 40+ 个工具一次性激活进可见列表：
-discover_tools(query="fund stock bond macro commodity market index quote portfolio research news entity strategy")
-单 query 只能拿到一个切片，别用窄词（"市场 指数" 这种）就开干，否则一大半工具压根看不见。`
+ 规则同前：可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活），文件读写和 bash 都被禁。
+
+今天的节奏（按顺序）：
+  ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
+  ② **调至少 1 个非 mem0 工具拉今日新数据**：你 methodology 五视角里今天还没覆盖的那个——估值 / 趋势 / 景气度 / 资金面 / 证伪——按需 research_search / fund_industry_exposure / macro_data / fund_invest_position / fund_performance / fund_nav（非持仓基金）任选。**这一步缺，整天等于没做。**
+  ③ mem0_search 拉过去 thesis / 决策，与今天的数据对比是 still valid 还是已破。**默认会按"最近优先"衰减打分（τ=30 天），近一周的记录天然浮在前面**；想只看最近几天就传 \`start_date=YYYY-MM-DD\`（比如今天往前 7 天），想关掉衰减拉全历史就传 \`recency_tau_days=0\`。
+  ④ 决策 + 下单（如有）。
+  ⑤ mem0_add 落库今天的判断 + 明天要带进来的事。
+
+【数据预取】当日账户/绩效/PnL/持仓 NAV/5 大指数 MA 已在下方块内全量灌好。不要重复调 portfolio_get_my_history / portfolio_get_my_performance / portfolio_get_my_trades，也不要为持仓基金或这 5 大指数重复调 fund_nav / market_index_quote。下单直接用 portfolio_place_buy_order / portfolio_place_sell_order。研究新基金 / 行业 / 资金面 / 宏观 / 研报这些没预取，按需调对应 simworld-data 工具。`
 }
 
 const FOOTER_FULL = `
@@ -82,42 +74,36 @@ const FOOTER_FULL = `
 
 【边界】这是一次交易回合，不是研究项目；下了单 + mem0_add 写完今天的判断，就可以结束。`
 
-// Day 1 唯一硬要求：写一份属于自己的策略并存到 mem0。world 在 Day 1 结束后从 store 抽出来落盘，
-// 后续日每天注入回 prompt。除"必须包含的四要素 + 必须以前缀起头"之外不规定结构/风格——bot 自由发挥。
-const STRATEGY_WRITING = `
+// Day N 收尾合约：解决"列 todo 当 reflection 写但不执行 + 写了'明天再减仓'但今天不动 +
+// 不 mem0_add 就 day-end + 纯 mem0 当一天做完"这几种早收。Day 1 已经在 FOOTER_FULL 里说过类似
+// 的话，但 Day N 之前没 footer——LLM 默认"没事做了就停"，不会被"持仓未平 / 待办未做 / 没写复盘 /
+// 没查新数据"这些条件拦住。这段补四条 termination contract：
+// (0) 今天必须至少调一个非 mem0 的研究/数据工具——不然 mem0_search → mem0_add 会变成 reward
+//     hack，bot 用过去的笔记复述出一篇看似 thoughtful 的 reply 就收工，而 dailyContext 里今天
+//     的新数据完全没被验证，thesis 永远不会失效（dash-2026-05-19T08-52-36 实测：bot7 从 Day 6
+//     起 9 iter → 3 iter，60% 仓位整月 HOLD，60 天没碰新数据）；
+// (1) 今天的决策必须今天执行——把减/加仓推到下一日 = 决策蒸发（下一日新会话不继承"明天计划"）；
+// (2) reply 里列出的"待办 / 要查的 / 要验证"必须执行掉，或显式放下并写明理由——不允许列了不做；
+// (3) 结束前必须 mem0_add，否则下一日的 bot 看不到今天的判断和待办。
+const FOOTER_BRIEF = `
 
-【今天的第一件事：写下属于你的投资策略】
-今天是 Day 1。接下来的所有交易日，你都将看到这份策略并按它决策。在做任何交易**之前**，先写下你的策略。
-
-▍ 怎么存
-用 mem0_add 保存。记忆文本**必须**以下面这一行作为第一行（world 靠这个前缀反查策略文档）：
-${STRATEGY_MEM0_PREFIX}
-
-▍ 必须包含的四要素（写法、顺序、详略全由你）
-1. 你的核心信念（你怎么看市场？你赚什么人的钱？评估组合的业绩的出发点（夏普/卡玛/绝对收益/相对收益/等等））
-2. 你的投资目标是什么？（你的目标收益率，能忍受的最大回撤）
-3. 仓位管理原则-什么情况买入/卖出（含止盈 / 止损 / 换仓 / 任意你认的买卖逻辑）
-4. 风险控制原则（如何控制最大回撤）
-
-剩余的字数、格式、修辞——风险偏好、再平衡频率、是否分散、是否择时、是否结合宏观——全由你定。哪派都行，但写下来就要为它负责。
-
-▍ 写完之后
-策略写完，再开始今天的交易。今天和后续每一天，都要按你自己写下的策略来。
-
-▍ 之后想改？
-跑了几天发现策略哪儿不对，可以随时调 \`update_my_strategy(bot_id, strategy, reason)\` 工具重写一份完整策略（不是 diff，是完整新版本，仍然以 \`${STRATEGY_MEM0_PREFIX}\` 起头）。reason 写清楚为什么改（会进审计日志）。下一交易日的 prompt 会注入新版本。
-这是你做了 update 才有的"自我修正能力"。不轻易改——但发现 thesis 失效或风控漏洞，该改就改。`
+【结束之前必做】
+- **纯 mem0_search + mem0_add 不算完成一天**。今天必须至少 1 次调用非 mem0 的研究/行情/数据工具（mcp__* 任一，除 portfolio_get_my_history / portfolio_get_my_performance / portfolio_get_my_trades 外，那几个 dailyContext 已经灌好了）——验证 dailyContext 里某个数据点、拉一个 methodology 里今天还没覆盖的维度、或检验 thesis 是否破。不查就 mem0 落库 = 自欺欺人，下一日你 mem0_search 拉到的全是空想，回测就这么烂下去。
+- **今天的决策今天就发生**：研究结论是减仓 → 调 portfolio_place_sell_order；加仓 → 调 portfolio_place_buy_order；保持 → 明确说"今日维持 X% 仓位，不动，理由是 ..."。把"明天减仓至 Y%"写进 mem0 ≠ 执行——下一日是新会话，看不到今日规划，等于决策从未发生。
+- 如果你在思考里列出了"待办 / 要查的 / 要验证"，要么在结束前调工具做掉，要么明确说"这条今天先放下，理由是 X，明天再做"。列了不做 = 没列——明天的你会以为今天已经查过了。
+- 结束前一次 mem0_add：今天的判断 + 做了什么 / 没做什么 + 明天要带着什么进来。没 mem0_add 就结束，下一日的你看不到今天，整天的研究就白做。`
 
 // simworld-data 全工具清单：每天注入，让 bot 知道"研究类工具"（research_search /
 // research_view / fund_industry_exposure / stock_alpha / macro_data ...）也都在
-// 工具池里，而不是只想到 market_index_quote / fund_nav。仍需 discover_tools 激活
-// 才能调到——mcporter 默认隐藏 mcp__* 工具池。
+// 工具列表里，而不是只想到 market_index_quote / fund_nav。loop server 已开启
+// chat_auto_activate_deferred → 所有 mcp__* 都直接挂进 chat 工具列表，bot 看到
+// 函数描述就能直接调，无需 discover_tools。
 function simworldToolsBlock(tools: { name: string; description: string }[]): string {
   if (!tools.length) return ''
   const lines = tools.map(t => `- ${t.name}${t.description ? ' — ' + t.description : ''}`).join('\n')
   return `
 
-【simworld-data 全部工具（${tools.length} 个）】决策不必都用，但要知道存在。除了行情之外，研究/估值/资金面/事件/宏观/基金底层暴露都在这里查；只有 discover_tools 激活进可见池后才能调用。
+【simworld-data 全部工具（${tools.length} 个，已全部直接可调用）】决策不必都用，但要知道存在。除了行情之外，研究/估值/资金面/事件/宏观/基金底层暴露都在这里查。
 ${lines}`
 }
 
@@ -126,7 +112,7 @@ ${lines}`
 function buyableFundsBlock(codes: string[]): string {
   return `
 
-【本轮可买基金（${codes.length} 只，user 在本次回测显式选定）】
+【本次指定投资标的（${codes.length} 只，具体如下）】
 ${codes.join(', ')}
 
 下单时 fund_code 必须从这份里选；不在这份里的 fund_code 会被 portfolio_place_buy_order 直接拒。后续日想确认这份还在不在，可以再调一次 portfolio_get_buyable_funds。`
@@ -153,12 +139,22 @@ function accountSnapshotBlock(snap: AccountSnapshot): string {
   const lines: string[] = [
     `初始本金 ¥${fmtNum(a.initial_capital, 0)} ｜ 可用现金 ¥${fmtNum(a.cash_available, 0)} ｜ 在途 ¥${fmtNum(a.cash_in_transit, 0)} ｜ 持仓市值 ¥${fmtNum(a.market_value, 0)} ｜ 总资产 ¥${fmtNum(a.total_value, 0)}`,
   ]
+  // 账户级累计盈亏 = 持仓浮盈（active 仓 mark-to-market）+ 已实现（含费用、已平仓口径）。
+  // 单基"浮盈"只反映单条 holding 当前未平仓部分；bot 之前会拿单基浮盈当成账户盈亏写进
+  // 日报里——这一行直接把账户口径打出来，单基行同时改名 "单基浮盈" 来消歧。
+  if (a.initial_capital > 0) {
+    const cumPnl = a.total_value - a.initial_capital
+    const cumPnlPct = cumPnl / a.initial_capital * 100
+    const unrealizedTotal = snap.holdings.reduce((s, h) => s + (h.market_value - h.amount_invested), 0)
+    const realizedTotal = cumPnl - unrealizedTotal
+    lines.push(`账户累计盈亏 ${fmtPct(cumPnlPct)}（¥${fmtNum(cumPnl, 0)}）= 持仓浮盈 ¥${fmtNum(unrealizedTotal, 0)} + 已实现盈亏 ¥${fmtNum(realizedTotal, 0)}`)
+  }
   if (snap.holdings.length === 0) {
     lines.push('当前持仓：（空）')
   } else {
     lines.push('当前持仓：')
     for (const h of snap.holdings) {
-      lines.push(`  - ${h.fund_code}${h.fund_name ? `（${h.fund_name}）` : ''}：份额 ${fmtNum(h.shares, 2)}，市值 ¥${fmtNum(h.market_value, 0)}，仓位 ${fmtNum(h.weight * 100, 2)}%，浮盈 ${fmtPct(h.unrealized_pnl_pct)}，持有 ${h.holding_days}d（${h.entry_date} 起）`)
+      lines.push(`  - ${h.fund_code}${h.fund_name ? `（${h.fund_name}）` : ''}：份额 ${fmtNum(h.shares, 2)}，市值 ¥${fmtNum(h.market_value, 0)}，仓位 ${fmtNum(h.weight * 100, 2)}%，单基浮盈 ${fmtPct(h.unrealized_pnl_pct)}，持有 ${h.holding_days}d（${h.entry_date} 起）`)
     }
   }
   if (snap.pendingOrders.length > 0) {
@@ -305,6 +301,45 @@ function indexBlock(indices: IndexQuote[]): string {
 ${rows.join('\n')}`
 }
 
+// 交易费率（每日注入）：申购 / 赎回阶梯 / 管理+托管+销服年化（NAV 已扣）。
+// 短线择时 round-trip = 申购费 + 早赎惩罚 + 双向 spread——这块缺位时 bot 倾向频繁交易，
+// 7 日内进出会被 1.5% 赎回费咬掉短线 alpha。把费率显式摆出来，让 bot 算清"是否值得换仓"。
+function tradingFeesBlock(fees: FundFee[]): string {
+  if (fees.length === 0) return ''
+  const lines: string[] = []
+  for (const f of fees) {
+    if (!f.found) { lines.push(`  - ${f.fund_code}：（未找到费率信息）`); continue }
+    const purchase = f.purchase_fee_pct === undefined ? 'n/a' : `${fmtNum(f.purchase_fee_pct, 4)}%`
+    // 赎回阶梯：[{max_days:7,rate_pct:1.5},{max_days:30,rate_pct:0.5},{max_days:null,rate_pct:0}]
+    //   → "<7d 1.5% / <30d 0.5% / ≥30d 0%"
+    const tiers = (f.redeem_tiers ?? [])
+    const tierStrs: string[] = []
+    for (let i = 0; i < tiers.length; i++) {
+      const t = tiers[i]
+      const rateStr = `${fmtNum(t.rate_pct, 4)}%`
+      if (t.max_days === null || t.max_days === undefined) {
+        const prev = i > 0 ? tiers[i - 1].max_days : null
+        tierStrs.push(prev === null || prev === undefined ? `全程 ${rateStr}` : `≥${prev}d ${rateStr}`)
+      } else {
+        tierStrs.push(`<${t.max_days}d ${rateStr}`)
+      }
+    }
+    const redeem = tierStrs.length === 0 ? 'n/a' : tierStrs.join(' / ')
+    const mgmt = f.mgmt_fee_pct_annual ?? 0
+    const custody = f.custody_fee_pct_annual ?? 0
+    const sales = f.sales_service_fee_pct_annual ?? 0
+    lines.push(`  - ${f.fund_code}${f.fund_name ? `（${f.fund_name}）` : ''}：申购 ${purchase} ｜ 赎回 ${redeem}`)
+    lines.push(`    年化（NAV 已扣）：管理 ${fmtNum(mgmt, 2)}% + 托管 ${fmtNum(custody, 2)}% + 销服 ${fmtNum(sales, 2)}%`)
+    if ((f.purchase_status && f.purchase_status !== 'open') || (f.redeem_status && f.redeem_status !== 'open')) {
+      lines.push(`    状态：申购 ${f.purchase_status || 'open'}，赎回 ${f.redeem_status || 'open'}`)
+    }
+  }
+  return `
+
+【交易费率（决策前算 round-trip cost：申购 + 早赎惩罚 + 时间成本）】
+${lines.join('\n')}`
+}
+
 function dailyContextBlocks(dc: DailyContextData | undefined): string {
   if (!dc) return ''
   const parts: string[] = []
@@ -316,29 +351,36 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
   if (dc.pnlTrend && dc.pnlTrend.length) parts.push(pnlTrendBlock(dc.pnlTrend, dc.benchmark))
   if (dc.fundSeries && dc.fundSeries.length) parts.push(fundSeriesBlock(dc.fundSeries))
   if (dc.indices && dc.indices.length) parts.push(indexBlock(dc.indices))
+  if (dc.fundFees && dc.fundFees.length) parts.push(tradingFeesBlock(dc.fundFees))
   return parts.join('')
 }
 
-// Day N 把 Day 1 写下的策略原文注回去。bot 没写 / world 没抽到 → ctx.strategy 为空，
-// 整块跳过；这种情况 bot 退化到完全自由发挥（没有自我约束的连续性）。
-function strategyBlock(strategy: string | undefined): string {
-  if (!strategy || !strategy.trim()) return ''
-  return `
+// Bot 的 methodology 已经在 system prompt 的 ## METHODOLOGY.md section 里（research-loop 每次
+// chat 都 splice），daily message 不重复注入正文，只附一段短提示告诉 bot：按 methodology 决策，
+// 发现失效用 update_my_strategy 重写。Day 1 / Day N 文案略有差别——Day 1 强调"直接按它交易"，
+// Day N 只一行 reminder。
+const METHODOLOGY_DAY1_HINT = `
 
-【你 Day 1 写下的策略】（每天注回，按此决策。和 Day 1 完全一致——你写下了什么就是什么）
-${strategy.trim()}`
-}
+【你的 methodology 已就位】你的 system prompt 里的 \`## METHODOLOGY.md\` section 就是你的投资框架——今天直接按它决策、下单。
+
+如果跑了一段时间发现 methodology 哪里失效 / 有漏洞，可以调 \`update_my_strategy(bot_id, strategy, reason)\` 工具完整重写 METHODOLOGY.md（不是 diff，是完整新版本）。reason 写清为什么改（会进审计日志）。修改下一交易日的 system prompt 生效。不轻易改——但发现 thesis 失效或风控漏洞，该改就改。`
+
+const METHODOLOGY_DAYN_HINT = `
+
+【你的 methodology】已在 system prompt 的 \`## METHODOLOGY.md\` section 里——按它决策。
+发现 thesis 失效 / 风控漏洞 → \`update_my_strategy(bot_id, strategy, reason)\` 完整重写（不是 diff，整篇新版本），reason 写清为什么改，下一日 system prompt 注入新版。不轻易改——但该改就改。`
 
 export function renderDailyMessage(ctx: DailyMessageContext): string {
   const weekday = weekdayOf(ctx.date)
   const toolsBlock = simworldToolsBlock(ctx.simworldTools ?? [])
   const contextBlocks = dailyContextBlocks(ctx.dailyContext)
   if (ctx.isFirstDay) {
-    // Day 1 = 冷启动：完整规则 + 工具/可买池/预取上下文 + 策略写作要求 + 记忆边界。
-    // 不嵌入两步法 / regime / 盈亏档动能档 / mem0 key 约定——除了"写策略"这一条硬要求外全自由。
+    // Day 1 = 冷启动：完整规则 + 工具/可买池/预取上下文 + methodology 提示 + 记忆边界。
+    // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
     const buyable = ctx.buyableFundCodes && ctx.buyableFundCodes.length ? buyableFundsBlock(ctx.buyableFundCodes) : ''
-    return `${fullRules(ctx.date, weekday, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${STRATEGY_WRITING}${FOOTER_FULL}\n`
+    return `${fullRules(ctx.date, weekday, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
   }
-  // Day N：briefRules + 工具/数据 + 自己 Day 1 写的策略。没有 AUTONOMY / playbook / 任何节奏指引。
-  return `${briefRules(ctx.date, weekday)}${toolsBlock}${contextBlocks}${strategyBlock(ctx.strategy)}\n`
+  // Day N：briefRules + 工具/数据 + methodology 短提示 + FOOTER_BRIEF（termination contract）。
+  // FOOTER_BRIEF 的"列了 todo 就要做 + 结束前 mem0_add"对所有 bot 都适用。
+  return `${briefRules(ctx.date, weekday)}${toolsBlock}${contextBlocks}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
 }

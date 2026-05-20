@@ -16,7 +16,7 @@
     "compact_max_tokens": 2000,
     "compact_temperature": 0.1
   },
-  "timeouts": { "chat_llm": 60, "compact_llm": 60, "skill_llm": 60 },
+  "timeouts": { "chat_llm": 180, "compact_llm": 60, "skill_llm": 60 },
   "tools": {
     "deny": [
       "bash",
@@ -25,9 +25,9 @@
       "spawn_skill_agent", "check_task", "wait_task", "kill_task",
       "start_research", "enter_phase", "ask_user", "finish_research",
       "expand_research_evidence", "expand_research_phase",
-      "load_skill", "list_skills",
       "submit_post"
-    ]
+    ],
+    "chat_auto_activate_deferred": true
   },
   "mcp": {
     "servers": {}

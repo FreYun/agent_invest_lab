@@ -118,12 +118,13 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
       assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r1', d, b), 'utf8')).status, 'ok')
     }
   }
-  // 首日发完整规则（含 simworld-data + portfolio_* 提示 + 策略写作要求）；
-  // 次日发精简规则——不再注入 AUTONOMY（embedded strategy 已删），节奏由 bot 自己在 Day 1 写的策略决定
+  // 首日发完整规则（含 simworld-data + portfolio_* 提示 + methodology Day-1 hint）；
+  // 次日发精简规则——不再注入 AUTONOMY（embedded strategy 已删），节奏由 bot 自己的 methodology 决定
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /simworld-data/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /portfolio_place_buy_order/)
-  // Day 1 prompt 要求 bot 写策略（含 MY_STRATEGY 前缀指令）
-  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /# MY_STRATEGY/)
+  // Day 1 prompt 提示 bot 按 system prompt 里的 ## METHODOLOGY.md section 决策（methodology-only 模式）
+  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /你的 methodology 已就位/)
+  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /## METHODOLOGY\.md/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /规则同前/)
   // Day N 不再有 AUTONOMY block
   assert.doesNotMatch(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /今天的节奏由你定/)
@@ -344,11 +345,13 @@ test('runWorld: every-5 cadence still drives the budget split (first/research �
   config.perBotTimeoutSeconds = 3
   await runWorld({ worldRoot, config, runId: 'rcad', startBotServer: stubStartBotServer })
   const sentOf = (d: string) => readFileSync(P.sentFile(worldRoot, 'rcad', d, 'bot1'), 'utf8')
-  // First day: full rules (no AUTONOMY, no banners) — cold start; 含策略写作要求
+  // First day: full rules (no AUTONOMY, no banners) — cold start; 含 methodology Day-1 hint
   assert.doesNotMatch(sentOf(dates[0]), /今天的节奏由你定/)
   assert.doesNotMatch(sentOf(dates[0]), /今天是研究日/)
   assert.doesNotMatch(sentOf(dates[0]), /今天是普通交易日/)
-  assert.match(sentOf(dates[0]), /# MY_STRATEGY/, 'Day 1 must include strategy-writing instruction')
+  // methodology-only 模式：Day 1 prompt 指向 system prompt 里的 ## METHODOLOGY.md section（不再要求 bot 现写 MY_STRATEGY）
+  assert.match(sentOf(dates[0]), /你的 methodology 已就位/, 'Day 1 must include methodology hint')
+  assert.match(sentOf(dates[0]), /## METHODOLOGY\.md/, 'Day 1 must reference METHODOLOGY.md section')
   // Day 2..5 (non-first): 也没有 AUTONOMY，也没有 banner——uniform 精简 prompt
   for (const d of dates.slice(1)) {
     assert.doesNotMatch(sentOf(d), /今天的节奏由你定/, `${d} should NOT carry AUTONOMY (deleted as embedded strategy)`)
@@ -389,6 +392,38 @@ test('botServerArgv: research-loop branch points at researchLoop/server.ts with 
   assert.equal(argv[1], '--experimental-strip-types')
   assert.equal(argv[2], '/tmp/research-loop/ts/server.ts')
   assert.deepEqual(argv.slice(3), ['--bot-id', 'bot7', '--workspace', '/tmp/ws/bot7', '--config', '/tmp/runs/r1/trading-rl-config.json'])
+})
+
+test('botServerArgv: research-loop with researchLoopRustBin spawns rust binary "server" subcommand (chat_error path)', () => {
+  const cfg: WorldConfig = {
+    researchLoop: '/tmp/research-loop/ts',
+    researchLoopRustBin: '/tmp/research-loop/rust/target/release/research-loop-rust2',
+    botsRoot: '/tmp/bots',
+    openclawJson: '/tmp/oc.json',
+    skillsRoot: '/tmp/skills',
+    bots: ['bot7'],
+    replay: { from: '2024-01-02', to: '2024-01-03' },
+    calendar: '/tmp/cal.json',
+    concurrency: 1,
+    perBotTimeoutSeconds: 30,
+    researchDayEvery: 0,
+    researchDayTimeoutSeconds: 300,
+    rlConfigBase: '/tmp/base.json',
+    rlOpenclawDir: undefined,
+    shadowInclude: [],
+    loop: 'research-loop',
+    openclawRoot: undefined,
+    piServerEntry: undefined,
+    simworldUpstreamUrl: 'http://127.0.0.1:1/mcp',
+  }
+  const argv = botServerArgv(cfg, 'bot7', '/tmp/ws/bot7', '/tmp/runs/r1/trading-rl-config.json')
+  assert.deepEqual(argv, [
+    '/tmp/research-loop/rust/target/release/research-loop-rust2',
+    'server',
+    '--bot-id', 'bot7',
+    '--workspace', '/tmp/ws/bot7',
+    '--config', '/tmp/runs/r1/trading-rl-config.json',
+  ])
 })
 
 test('botServerArgv: openclaw-pi branch points at piServerEntry with --openclaw-json', () => {

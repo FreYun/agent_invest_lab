@@ -256,9 +256,14 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
 }
 
 /** MCP handshake against upstream → tools/list → [{name, first-line desc}].
- *  Streamable-HTTP transport: initialize returns an mcp-session-id header that
- *  every subsequent request must carry. Body may be SSE (`event: …\ndata: …`)
- *  or pure JSON; we accept both. */
+ *  Streamable-HTTP transport: initialize MAY return an mcp-session-id header
+ *  (stateful mode) or MAY NOT (FastMCP stateless_http mode — current upstream).
+ *  We accept either: if we get a sid we carry it on subsequent calls and DELETE
+ *  it at the end; without one, we just send tools/list directly. Without this
+ *  fallback, a stateless upstream silently makes the probe return [] and the
+ *  daily prompt loses its tool catalog → bot hallucinates tool names by analogy
+ *  (e.g. fund_index_valuation from fund_index_return). Body may be SSE
+ *  (`event: …\ndata: …`) or pure JSON; we accept both. */
 async function probeUpstreamTools(upstreamUrl: string): Promise<SimworldToolSummary[]> {
   const baseHeaders = { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream' }
   const initResp = await fetch(upstreamUrl, {
@@ -269,10 +274,13 @@ async function probeUpstreamTools(upstreamUrl: string): Promise<SimworldToolSumm
   if (!initResp.ok) throw new Error(`initialize HTTP ${initResp.status}`)
   const sid = initResp.headers.get('mcp-session-id')
   await initResp.text() // drain body to free the connection
-  if (!sid) throw new Error('upstream did not return mcp-session-id')
 
-  const sessionHeaders = { ...baseHeaders, 'mcp-session-id': sid }
-  await fetch(upstreamUrl, { method: 'POST', headers: sessionHeaders, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) }).then(r => r.text())
+  const sessionHeaders: Record<string, string> = { ...baseHeaders }
+  if (sid) {
+    sessionHeaders['mcp-session-id'] = sid
+    // Only stateful upstreams need the post-initialize notification.
+    await fetch(upstreamUrl, { method: 'POST', headers: sessionHeaders, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) }).then(r => r.text())
+  }
 
   const listResp = await fetch(upstreamUrl, { method: 'POST', headers: sessionHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) })
   if (!listResp.ok) throw new Error(`tools/list HTTP ${listResp.status}`)
@@ -283,9 +291,12 @@ async function probeUpstreamTools(upstreamUrl: string): Promise<SimworldToolSumm
     : null
   if (!Array.isArray(tools)) throw new Error('tools/list result missing tools array')
 
-  // Try graceful session teardown so the upstream doesn't leak a dangling
-  // session for every run. Failure is silent — server will GC eventually.
-  fetch(upstreamUrl, { method: 'DELETE', headers: sessionHeaders }).catch(() => { /* best-effort */ })
+  // Stateful upstream: try graceful session teardown so it doesn't leak a
+  // dangling session per run. Stateless upstream: no session to delete.
+  // Failure is silent — server will GC eventually.
+  if (sid) {
+    fetch(upstreamUrl, { method: 'DELETE', headers: sessionHeaders }).catch(() => { /* best-effort */ })
+  }
 
   return tools
     .filter((t): t is Record<string, unknown> => isObject(t) && typeof t.name === 'string')

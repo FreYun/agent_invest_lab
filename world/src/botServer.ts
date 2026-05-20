@@ -18,6 +18,12 @@ export interface BotChatResult {
   usage: number
   iterations: number
   truncated_by_iterations: boolean
+  // research-loop server 在 chat.send() 因 chat_llm 超时 / 其他 LLM 错误 mid-flow 终止时
+  // 透传上来的错误文本。chat 本身 graceful return（带 lastReply），所以没有这字段 run.ts
+  // 没法区分"正常完成"和"被静默截断"——有则 run.ts 把当天标成 'error' 而不是 'ok'。
+  // ts/server.ts 当前没填这字段（只有 rs server.rs 填），未配 researchLoopRustBin 时
+  // 拿不到——这是 ts 路径已知的盲区。
+  chat_error?: string
 }
 
 export interface BotServerOptions {

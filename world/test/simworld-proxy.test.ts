@@ -201,6 +201,54 @@ test('mcp-session-id is round-tripped from upstream to client and back', async (
   }
 })
 
+// Regression for "0 tools captured for daily prompt" → bot hallucinates tool
+// names. Real upstream runs FastMCP stateless_http=True (no mcp-session-id
+// header on initialize, plain JSON body), and the probe used to require sid →
+// throw → return []. Probe must accept both stateful and stateless upstreams.
+async function startStatelessStubUpstream(): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      const chunks: Buffer[] = []
+      for await (const c of req) chunks.push(c as Buffer)
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown> : {}
+      const id = body.id as number | string | null | undefined
+      const method = body.method as string | undefined
+      const jsonOut = (payload: Record<string, unknown>): void => {
+        // NO mcp-session-id header — stateless_http mode.
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(payload))
+      }
+      if (method === 'initialize') {
+        return jsonOut({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'stateless-stub', version: '0' } } })
+      }
+      if (method === 'tools/list') {
+        return jsonOut({ jsonrpc: '2.0', id, result: { tools: [{ name: 'stateless_tool_a', description: 'a' }, { name: 'stateless_tool_b', description: 'b' }] } })
+      }
+      // notifications/initialized would 404 on a real stateless server — but
+      // probe must not send it. If we get any other method, fail loudly so the
+      // test catches a regression where probe still sends notifications.
+      res.writeHead(400, { 'content-type': 'text/plain' })
+      res.end(`stateless stub got unexpected method: ${method}`)
+    })().catch(() => { res.writeHead(500); res.end() })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  const port = (server.address() as AddressInfo).port
+  return { url: `http://127.0.0.1:${port}/mcp`, close: () => new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve())) }
+}
+
+test('probe captures tools from stateless upstream (no mcp-session-id)', async () => {
+  const up = await startStatelessStubUpstream()
+  const proxy = await createSimworldProxy({ upstreamUrl: up.url, getCurrentDate: () => '2024-03-15' })
+  try {
+    assert.equal(proxy.tools.length, 2)
+    assert.deepEqual(proxy.tools.map(t => t.name).sort(), ['stateless_tool_a', 'stateless_tool_b'])
+    assert.equal(proxy.tools[0].description, 'a')
+  } finally {
+    await proxy.close()
+    await up.close()
+  }
+})
+
 test('initialize / prompts / resources pass through unchanged', async () => {
   const up = await startStubUpstream()
   const proxy = await createSimworldProxy({ upstreamUrl: up.url, getCurrentDate: () => '2024-03-15' })

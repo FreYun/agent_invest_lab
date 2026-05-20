@@ -62,66 +62,52 @@ test('new MemoryStore loads existing file', () => {
   cleanup()
 })
 
-test('search excludes records starting with # MY_STRATEGY (server-side strategy filter)', () => {
-  // 策略文档每天都会被 world 注入到 prompt（strategyBlock），让它再进 mem0_search 命中
-  // 就成了无意义的"自己引用自己"，把真正昨天的判断挤出 hit list。在 store 层直接过滤掉。
+test('search start_date / end_date filter records inclusively by created_at', () => {
   const { file, cleanup } = tmpStore()
   const s = new MemoryStore(file)
-  // bot7：一份策略（含半导体关键词）+ 一条昨天的实际判断（半导体相关）
-  s.add({ text: '# MY_STRATEGY\n核心信念：看好半导体复苏，重仓封测设备', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-15' })
-  s.add({ text: '今天买入半导体ETF 30%仓位，理由：库存见底信号已现', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-16' })
+  s.add({ text: '半导体 看好', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-10' })
+  s.add({ text: '半导体 看好', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-15' })
+  s.add({ text: '半导体 看好', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-20' })
 
-  // 搜 "半导体" 应只命中实际判断，不命中策略副本
-  const hits = s.search('半导体', { agent_id: 'bot7', limit: 5 })
-  assert.equal(hits.length, 1)
-  assert.match(hits[0].memory, /今天买入半导体/)
-  assert.ok(!hits[0].memory.startsWith('# MY_STRATEGY'))
+  // both bounds (inclusive)
+  let hits = s.search('半导体', { agent_id: 'bot7', limit: 10, start_date: '2024-03-15', end_date: '2024-03-20' })
+  assert.deepEqual(hits.map(h => h.created_at).sort(), ['2024-03-15', '2024-03-20'])
 
-  // findLatestByPrefix 不受影响：策略抽取链路仍能拿到策略
-  const strat = s.findLatestByPrefix('bot7', '# MY_STRATEGY')
-  assert.ok(strat)
-  assert.match(strat!.text, /核心信念/)
+  // start only
+  hits = s.search('半导体', { agent_id: 'bot7', limit: 10, start_date: '2024-03-15' })
+  assert.deepEqual(hits.map(h => h.created_at).sort(), ['2024-03-15', '2024-03-20'])
+
+  // end only
+  hits = s.search('半导体', { agent_id: 'bot7', limit: 10, end_date: '2024-03-15' })
+  assert.deepEqual(hits.map(h => h.created_at).sort(), ['2024-03-10', '2024-03-15'])
   cleanup()
 })
 
-test('search filter is startsWith, not contains: notes mentioning the prefix mid-text are kept', () => {
+test('search applies recency decay when now is provided; tau=0 disables decay', () => {
   const { file, cleanup } = tmpStore()
   const s = new MemoryStore(file)
-  s.add({ text: '复盘：参考 # MY_STRATEGY 里写的止盈线，今天该减仓', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-16' })
-  const hits = s.search('复盘 止盈', { agent_id: 'bot7', limit: 5 })
-  assert.equal(hits.length, 1)
-  assert.match(hits[0].memory, /复盘/)
+  // Old record has 2x raw TF (科创 50 appears twice → tokens 科,创,50 each ×2 = 6),
+  // recent record has lower raw TF (3) but is the same day as `now`.
+  s.add({ text: '科创 50 科创 50', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-01-01' })
+  s.add({ text: '科创 50',           agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-30' })
+
+  // Without decay: old record wins by raw TF.
+  let hits = s.search('科创50', { agent_id: 'bot7', limit: 5, recency_tau_days: 0, now: '2024-03-30' })
+  assert.equal(hits[0].created_at, '2024-01-01')
+
+  // With τ=7 days and now=2024-03-30: old record (Δ≈89d) decays to ~6 * e^(-89/7) ≈ 0.002;
+  // recent record (Δ=0) keeps full 3. Recent wins.
+  hits = s.search('科创50', { agent_id: 'bot7', limit: 5, recency_tau_days: 7, now: '2024-03-30' })
+  assert.equal(hits[0].created_at, '2024-03-30')
+
+  // Default τ when `now` is provided is gentle (30d): old record (Δ≈89d → e^(-89/30) ≈ 0.052,
+  // score ≈ 6 * 0.052 = 0.31) still loses to recent (3).
+  hits = s.search('科创50', { agent_id: 'bot7', limit: 5, now: '2024-03-30' })
+  assert.equal(hits[0].created_at, '2024-03-30')
+
+  // When no `now` is passed, decay is disabled regardless of tau (PIT-safe default).
+  hits = s.search('科创50', { agent_id: 'bot7', limit: 5 })
+  assert.equal(hits[0].created_at, '2024-01-01')
   cleanup()
 })
 
-test('findLatestByPrefix returns the latest matching record for an agent; null when nothing matches', () => {
-  const { file, cleanup } = tmpStore()
-  const s = new MemoryStore(file)
-  // bot7 写了两版策略（不同日期）+ 一个普通笔记；bot1 也写了一份策略
-  s.add({ text: '# MY_STRATEGY\nv1: 第一版策略，激进风格', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-15' })
-  s.add({ text: '今天看好半导体', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-15' })
-  s.add({ text: '# MY_STRATEGY\nv2: 第二版策略，更稳健', agent_id: 'bot7', user_id: 'bot7', created_at: '2024-03-16' })
-  s.add({ text: '# MY_STRATEGY\nbot1 的策略', agent_id: 'bot1', user_id: 'bot1', created_at: '2024-03-15' })
-
-  // bot7 应该取到 v2（最新 created_at）
-  const bot7Strategy = s.findLatestByPrefix('bot7', '# MY_STRATEGY')
-  assert.ok(bot7Strategy)
-  assert.match(bot7Strategy!.text, /v2: 第二版策略/)
-  assert.equal(bot7Strategy!.agent_id, 'bot7')
-
-  // bot1 独立，取自己的
-  const bot1Strategy = s.findLatestByPrefix('bot1', '# MY_STRATEGY')
-  assert.ok(bot1Strategy)
-  assert.match(bot1Strategy!.text, /bot1 的策略/)
-
-  // 不存在前缀的 agent → null
-  assert.equal(s.findLatestByPrefix('bot7', '# NONEXISTENT'), null)
-
-  // agent 不存在 → null（不会取到别的 agent 的策略——cross-agent isolation）
-  assert.equal(s.findLatestByPrefix('bot999', '# MY_STRATEGY'), null)
-
-  // 前缀必须是 startsWith，不是 contains
-  s.add({ text: '中间嵌着 # MY_STRATEGY 的笔记', agent_id: 'bot8', user_id: 'bot8', created_at: '2024-03-15' })
-  assert.equal(s.findLatestByPrefix('bot8', '# MY_STRATEGY'), null)
-  cleanup()
-})
