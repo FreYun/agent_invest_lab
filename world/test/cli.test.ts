@@ -65,3 +65,21 @@ test('main: stop without --run-id exits 2', async () => {
     process.stderr.write = orig
   }
 })
+
+test('parseCliArgs: pause', () => {
+  assert.deepEqual(parseCliArgs(['pause', '--run-id', 'r1']),
+    { command: 'pause', config: undefined, runId: 'r1', worldDir: undefined })
+})
+
+test('main: pause without --run-id exits 2', async () => {
+  const errs: string[] = []
+  const orig = process.stderr.write.bind(process.stderr)
+  process.stderr.write = (chunk: any) => { errs.push(String(chunk)); return true }
+  try {
+    const code = await main(['pause'])
+    assert.equal(code, 2)
+    assert.match(errs.join(''), /--run-id <id> is required/)
+  } finally {
+    process.stderr.write = orig
+  }
+})
