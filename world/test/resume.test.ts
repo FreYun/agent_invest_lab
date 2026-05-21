@@ -50,10 +50,32 @@ test('resumeWorld continues from state.cursor without re-running completed days'
   cleanup()
 })
 
-test('resumeWorld refuses when state status is not running', async () => {
+test('resumeWorld resumes a paused run from state.cursor and clears the PAUSE sentinel', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir(['bot1'], ['2024-03-14', '2024-03-15', '2024-03-18'])
+  await runWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) })
+  // 模拟「跑完第 1 天后被 pause」：删掉 day2/day3 产物，state 翻成 paused、cursor=1
+  rmSync(P.botDayDir(worldRoot, 'r1', '2024-03-15', 'bot1'), { recursive: true, force: true })
+  rmSync(P.botDayDir(worldRoot, 'r1', '2024-03-18', 'bot1'), { recursive: true, force: true })
+  const s = readState(worldRoot, 'r1'); writeState(worldRoot, 'r1', { ...s, status: 'paused', cursor: 1, current_date: '2024-03-15' })
+  // 残留 PAUSE 哨兵不能让刚 resume 的 run 立刻又停
+  writeFileSync(P.pauseFile(worldRoot, 'r1'), 'pause\n')
+
+  await resumeWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) })
+  const st = readState(worldRoot, 'r1')
+  assert.equal(st.status, 'done')
+  assert.equal(st.cursor, 3)
+  assert.equal(existsSync(P.pauseFile(worldRoot, 'r1')), false)
+  assert.ok(existsSync(P.replyFile(worldRoot, 'r1', '2024-03-15', 'bot1')))
+  assert.ok(existsSync(P.replyFile(worldRoot, 'r1', '2024-03-18', 'bot1')))
+  cleanup()
+})
+
+test('resumeWorld refuses when state status is a terminal (done / aborted)', async () => {
   const { worldRoot, config, cleanup } = setupWorldDir(['bot1'], ['2024-03-14'])
   await runWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }) // status=done
-  await assert.rejects(() => resumeWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }), /not running|nothing to resume/i)
+  await assert.rejects(() => resumeWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }), /nothing to resume/i)
+  const s = readState(worldRoot, 'r1'); writeState(worldRoot, 'r1', { ...s, status: 'aborted' })
+  await assert.rejects(() => resumeWorld({ worldRoot, config, runId: 'r1', startBotServer: (b) => stubStart(b) }), /nothing to resume/i)
   cleanup()
 })
 
