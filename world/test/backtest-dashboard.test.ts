@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { writeState, readState, type WorldState } from '../src/state.ts'
 import { pauseFile } from '../src/paths.ts'
+import { pickBenchmarkFund } from '../src/backtest-dashboard/server.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DB = join(HERE, '../../data/fund.db')
@@ -174,4 +175,23 @@ test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', asyn
     proc.kill('SIGTERM')
     rmSync(worldRoot, { recursive: true, force: true })
   }
+})
+
+test('pickBenchmarkFund: 首笔 buy 的基金优先', () => {
+  const actions = [
+    { side: 'sell', fund_code: 'A' },
+    { side: 'buy', fund_code: 'B' },
+    { side: 'buy', fund_code: 'C' },
+  ] as unknown as Parameters<typeof pickBenchmarkFund>[0]
+  assert.equal(pickBenchmarkFund(actions, [] as never[]), 'B')
+})
+
+test('pickBenchmarkFund: 无 buy 时退到首个持仓', () => {
+  const actions = [{ side: 'hold', fund_code: 'A' }] as unknown as Parameters<typeof pickBenchmarkFund>[0]
+  const holdings = [{ fund_code: 'H1' }, { fund_code: 'H2' }] as unknown as Parameters<typeof pickBenchmarkFund>[1]
+  assert.equal(pickBenchmarkFund(actions, holdings), 'H1')
+})
+
+test('pickBenchmarkFund: 未建仓退到默认指数沪深300', () => {
+  assert.equal(pickBenchmarkFund([] as never[], [] as never[]), '510300')
 })
