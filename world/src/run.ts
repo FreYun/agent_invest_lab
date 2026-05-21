@@ -709,12 +709,15 @@ export interface ResumeWorldOptions {
 export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
   const { worldRoot, config, runId } = opts
   const state = readState(worldRoot, runId)
-  if (state.status !== 'running') throw new Error(`cannot resume: state status is "${state.status}", nothing to resume`)
+  // running = 崩溃残留(teardown 没跑、status 没翻终态)；paused = world pause 优雅停。两者都可续。
+  // done/aborted/failed/setup 不可续。
+  if (state.status !== 'running' && state.status !== 'paused') throw new Error(`cannot resume: state status is "${state.status}", nothing to resume`)
   if (state.loop !== config.loop) {
     throw new Error(`resume: state loop="${state.loop}" but world.yaml loop="${config.loop}" — refuse to resume across loop change`)
   }
-  // 清掉可能残留的 STOP 哨兵（否则 resume 会立刻被它中止）
+  // 清掉可能残留的 STOP / PAUSE 哨兵（否则 resume 会立刻被它中止/暂停）
   rmSync(P.stopFile(worldRoot, runId), { force: true })
+  rmSync(P.pauseFile(worldRoot, runId), { force: true })
   // setup（重启记忆服务、重建/复用影子 workspace、重起 bot server），但 trading_dates 取自 state
   const setupRes = await setup({ worldRoot, config, runId, startBotServer: opts.startBotServer })
   // 若 calendar/replay 变了导致交易日序列对不上，拒绝
