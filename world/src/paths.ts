@@ -23,6 +23,9 @@ export const statusFile = (w: string, runId: string, date: string, bot: string) 
 export const runLogFile = (w: string, runId: string) => join(runDir(w, runId), 'run.log')
 export const summaryFile = (w: string, runId: string) => join(runDir(w, runId), 'summary.json')
 export const stopFile = (w: string, runId: string) => join(runDir(w, runId), 'STOP')
+// PAUSE 哨兵：world pause 写它，runLoop 在交易日界检测到 → teardown 'paused'(可 resume)。
+// 与 STOP 区分：STOP → aborted(终态)，PAUSE → paused(可续)。resume 时两者都清。
+export const pauseFile = (w: string, runId: string) => join(runDir(w, runId), 'PAUSE')
 // One-line YYYY-MM-DD pin for loop processes (research-loop reads this via
 // WORLD_DATE_OVERRIDE_FILE) so their system prompt shows the world day, not host wall-clock.
 export const worldDateOverrideFile = (w: string, runId: string) => join(runDir(w, runId), 'world-date')
