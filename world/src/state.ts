@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { dirname } from 'node:path'
 import { runDir, runStateFile } from './paths.ts'
 
-export type RunStatus = 'setup' | 'running' | 'done' | 'failed' | 'aborted'
+export type RunStatus = 'setup' | 'running' | 'paused' | 'done' | 'failed' | 'aborted'
 
 export interface WorldState {
   run_id: string
