@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runWorld, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, proxyEnvSupplement } from '../src/run.ts'
+import { runWorld, requestPause, requestStop, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, proxyEnvSupplement } from '../src/run.ts'
 import { BotServer } from '../src/botServer.ts'
 import * as P from '../src/paths.ts'
-import { readState } from '../src/state.ts'
+import { readState, writeState } from '../src/state.ts'
 import type { WorldConfig } from '../src/config.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -612,4 +612,26 @@ test('cli_tools get_my_history requires --run-id (strict layer contract)', () =>
   }
   assert.notStrictEqual(r.status, 0, `expected non-zero exit when --run-id missing, got ${r.status}, stderr: ${r.stderr}`)
   assert.match(r.stderr, /--run-id/, `argparse error should mention --run-id, got: ${r.stderr}`)
+})
+
+test('requestPause writes a PAUSE sentinel when running, rejects otherwise', () => {
+  const { worldRoot, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
+  writeState(worldRoot, 'rp', { run_id: 'rp', status: 'running', current_date: '2024-03-14', trading_dates: ['2024-03-14', '2024-03-15'], cursor: 1, bots: ['bot1'], memory_port: 0, started_at: new Date().toISOString(), updated_at: new Date().toISOString(), loop: 'research-loop' })
+  const r = requestPause(worldRoot, 'rp')
+  assert.equal(r.ok, true)
+  assert.ok(existsSync(P.pauseFile(worldRoot, 'rp')))
+  // 非 running → 拒绝
+  writeState(worldRoot, 'rp', { ...readState(worldRoot, 'rp'), status: 'done' })
+  assert.equal(requestPause(worldRoot, 'rp').ok, false)
+  cleanup()
+})
+
+test('requestStop on a paused run flips it straight to aborted (no STOP sentinel)', () => {
+  const { worldRoot, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14'] })
+  writeState(worldRoot, 'rps', { run_id: 'rps', status: 'paused', current_date: '2024-03-14', trading_dates: ['2024-03-14'], cursor: 0, bots: ['bot1'], memory_port: 0, started_at: new Date().toISOString(), updated_at: new Date().toISOString(), loop: 'research-loop' })
+  const r = requestStop(worldRoot, 'rps')
+  assert.equal(r.ok, true)
+  assert.equal(readState(worldRoot, 'rps').status, 'aborted')
+  assert.equal(existsSync(P.stopFile(worldRoot, 'rps')), false)
+  cleanup()
 })
