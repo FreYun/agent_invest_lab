@@ -205,6 +205,15 @@ function classifyAction(actionType: string, finalDecision: string | null): 'buy'
   return 'hold'
 }
 
+// 未建仓 bot 没有首买基金时,用沪深300(510300 沪深300ETF华泰柏瑞)作默认参照,
+// 这样任何 bot 都至少有一条参照曲线。
+const DEFAULT_BENCHMARK_FUND = '510300'
+
+export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[]): string {
+  const firstBuy = actions.find(a => a.side === 'buy')
+  return firstBuy?.fund_code || holdings[0]?.fund_code || DEFAULT_BENCHMARK_FUND
+}
+
 async function loadBenchmark(
   dbPath: string,
   actions: BotAction[],
@@ -212,14 +221,12 @@ async function loadBenchmark(
   firstTradeDate: string,
   latestTradeDate: string,
 ): Promise<BotBenchmark | null> {
-  // Pick fund_code: first buy action wins; else fall back to first holding.
-  const firstBuy = actions.find(a => a.side === 'buy')
-  const fundCode = firstBuy?.fund_code || holdings[0]?.fund_code
-  if (!fundCode) return null
+  // Pick fund_code: first buy wins; else first holding; else default broad index.
+  const fundCode = pickBenchmarkFund(actions, holdings)
   // Anchor date = bot's first daily-snapshot date if available, else first buy.
   // Using the daily-series start makes the chart's two lines share the same window
   // and the same baseline (=1.0 at anchor), so visual comparison is apples-to-apples.
-  const anchorDate = firstTradeDate || firstBuy?.action_date || ''
+  const anchorDate = firstTradeDate || actions.find(a => a.side === 'buy')?.action_date || ''
   if (!anchorDate || !latestTradeDate) return null
 
   const rows = await queryRows<{ nav_date: string; nav: number | null; fund_name: string | null }>(dbPath, `
