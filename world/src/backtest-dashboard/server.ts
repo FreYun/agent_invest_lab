@@ -214,33 +214,24 @@ export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[]):
   return firstBuy?.fund_code || holdings[0]?.fund_code || DEFAULT_BENCHMARK_FUND
 }
 
-async function loadBenchmark(
+async function loadBenchmarkSeries(
   dbPath: string,
-  actions: BotAction[],
-  holdings: HoldingRow[],
-  firstTradeDate: string,
-  latestTradeDate: string,
+  fundCode: string,
+  anchorDate: string,
+  endDate: string,
 ): Promise<BotBenchmark | null> {
-  // Pick fund_code: first buy wins; else first holding; else default broad index.
-  const fundCode = pickBenchmarkFund(actions, holdings)
-  // Anchor date = bot's first daily-snapshot date if available, else first buy.
-  // Using the daily-series start makes the chart's two lines share the same window
-  // and the same baseline (=1.0 at anchor), so visual comparison is apples-to-apples.
-  const anchorDate = firstTradeDate || actions.find(a => a.side === 'buy')?.action_date || ''
-  if (!anchorDate || !latestTradeDate) return null
-
+  if (!fundCode || !anchorDate || !endDate) return null
   const rows = await queryRows<{ nav_date: string; nav: number | null; fund_name: string | null }>(dbPath, `
     SELECT n.nav_date, n.nav, COALESCE(i.fund_name, n.fund_code) AS fund_name
     FROM fund_nav n
     LEFT JOIN fund_info i ON i.fund_code = n.fund_code
     WHERE n.fund_code = ${quoteSql(fundCode)}
       AND n.nav_date >= ${quoteSql(anchorDate)}
-      AND n.nav_date <= ${quoteSql(latestTradeDate)}
+      AND n.nav_date <= ${quoteSql(endDate)}
       AND n.nav IS NOT NULL
     ORDER BY n.nav_date ASC
   `)
   if (!rows.length) return null
-
   const baselineNav = num(rows[0].nav)
   if (baselineNav <= 0) return null
   const fundName = rows[0].fund_name ?? fundCode
@@ -250,6 +241,19 @@ async function loadBenchmark(
     net_value: num(r.nav) / baselineNav,
   }))
   return { fundCode, fundName, anchorDate, baselineNav, series }
+}
+
+async function loadBenchmark(
+  dbPath: string,
+  actions: BotAction[],
+  holdings: HoldingRow[],
+  firstTradeDate: string,
+  latestTradeDate: string,
+): Promise<BotBenchmark | null> {
+  const fundCode = pickBenchmarkFund(actions, holdings)
+  const anchorDate = firstTradeDate || actions.find(a => a.side === 'buy')?.action_date || ''
+  if (!anchorDate || !latestTradeDate) return null
+  return loadBenchmarkSeries(dbPath, fundCode, anchorDate, latestTradeDate)
 }
 
 async function listAllBotIds(dbPath: string): Promise<string[]> {
@@ -561,6 +565,14 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         if (!runId) { sendJson(res, 400, { ok: false, error: 'runId required' }); return }
         const r = url.pathname.endsWith('/pause') ? requestPause(worldRoot, runId) : requestStop(worldRoot, runId)
         sendJson(res, r.ok ? 200 : 409, r)
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/backtest/benchmark') {
+        const fund = url.searchParams.get('fund') ?? ''
+        const from = url.searchParams.get('from') ?? ''
+        const to = url.searchParams.get('to') ?? ''
+        if (!fund || !from || !to) { sendJson(res, 400, { error: 'fund, from, to required' }); return }
+        sendJson(res, 200, await loadBenchmarkSeries(dbPath, fund, from, to))
         return
       }
       sendJson(res, 404, { error: 'not found' })
