@@ -43,20 +43,28 @@ export function readState(worldRoot: string, runId: string): WorldState {
   return raw as unknown as WorldState
 }
 
-/** Scan runtime/runs/* for state.json files and return only the running ones,
- *  sorted by started_at descending. Corrupt or missing state files are skipped. */
-export function listActiveRuns(worldRoot: string): WorldState[] {
+/** Scan runtime/runs/* and return every readable state.json, newest started_at first.
+ *  Corrupt or missing state files are skipped. */
+function scanRunStates(worldRoot: string): WorldState[] {
   const runsBase = dirname(runDir(worldRoot, '_')) // runtime/runs
   if (!existsSync(runsBase)) return []
   let entries: string[]
   try { entries = readdirSync(runsBase) } catch { return [] }
   const out: WorldState[] = []
   for (const runId of entries) {
-    try {
-      const st = readState(worldRoot, runId)
-      if (st.status === 'running') out.push(st)
-    } catch { /* missing or corrupt — skip */ }
+    try { out.push(readState(worldRoot, runId)) } catch { /* missing or corrupt — skip */ }
   }
   out.sort((a, b) => (a.started_at < b.started_at ? 1 : -1))
   return out
+}
+
+/** Only the running runs, newest first. */
+export function listActiveRuns(worldRoot: string): WorldState[] {
+  return scanRunStates(worldRoot).filter(s => s.status === 'running')
+}
+
+/** Runs a control panel can act on: running (pausable/stoppable) or paused (stoppable),
+ *  newest first. */
+export function listControllableRuns(worldRoot: string): WorldState[] {
+  return scanRunStates(worldRoot).filter(s => s.status === 'running' || s.status === 'paused')
 }

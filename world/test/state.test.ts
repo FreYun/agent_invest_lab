@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeState, readState, stateExists, listActiveRuns, type WorldState } from '../src/state.ts'
+import { writeState, readState, stateExists, listActiveRuns, listControllableRuns, type WorldState } from '../src/state.ts'
 import { runDir, runStateFile } from '../src/paths.ts'
 
 function tmpWorldRoot(): string {
@@ -84,5 +84,18 @@ test('listActiveRuns skips run dirs without state.json and corrupt state.json', 
   writeState(w, 'ok', { ...sample, run_id: 'ok', status: 'running' })
   const active = listActiveRuns(w)
   assert.deepEqual(active.map(s => s.run_id), ['ok'])
+  rmSync(w, { recursive: true, force: true })
+})
+
+test('listControllableRuns returns running + paused, newest first; excludes terminal', () => {
+  const w = tmpWorldRoot()
+  writeState(w, 'done', { ...sample, run_id: 'done', status: 'done', started_at: '2026-05-11T14:00:00.000Z' })
+  writeState(w, 'running', { ...sample, run_id: 'running', status: 'running', started_at: '2026-05-11T08:00:00.000Z' })
+  writeState(w, 'paused', { ...sample, run_id: 'paused', status: 'paused', started_at: '2026-05-11T12:00:00.000Z' })
+  writeState(w, 'aborted', { ...sample, run_id: 'aborted', status: 'aborted', started_at: '2026-05-11T13:00:00.000Z' })
+  const ctl = listControllableRuns(w)
+  assert.deepEqual(ctl.map(s => s.run_id), ['paused', 'running'])
+  // listActiveRuns stays running-only (paused excluded)
+  assert.deepEqual(listActiveRuns(w).map(s => s.run_id), ['running'])
   rmSync(w, { recursive: true, force: true })
 })
