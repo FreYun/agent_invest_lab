@@ -33,7 +33,18 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .panel-holdings{display:flex;flex-direction:column}.panel-holdings .holdings{flex:1;align-content:center}.holdings{display:grid;grid-template-columns:1fr;gap:10px}.holding{border:1px solid rgba(255,255,255,.05);border-radius:6px;background:rgba(255,255,255,.02);padding:12px 12px 10px}.holding-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.holding-name{font-size:13px;font-weight:700;line-height:1.35}.holding-code{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace;margin-top:2px}.holding-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;color:var(--dim);font-size:11px}.holding strong{color:var(--text)}.reason{margin-top:8px;font-size:12px;line-height:1.55;color:var(--dim);white-space:pre-wrap}.empty{border:1px dashed var(--border);border-radius:var(--radius);padding:24px;color:var(--dim);text-align:center}
 .action-row{cursor:pointer;transition:background .12s}.action-row:hover{background:rgba(255,255,255,.025)}.action-row.expanded{background:rgba(102,217,232,.04)}.action-chevron{display:inline-block;color:var(--dim);font-size:10px;transition:transform .15s ease}.action-row.expanded .action-chevron{transform:rotate(90deg);color:var(--accent)}.reason-row td{padding:0;border-bottom:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.22);border-left:3px solid var(--accent)}.reason-section{padding:10px 14px}.reason-section + .reason-section{border-top:1px solid rgba(255,255,255,.04)}.reason-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:4px;font-weight:600}.reason-body{font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap}.reason-body.reason-settle{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}.reason-body.reason-empty{padding:10px 14px;color:rgba(255,255,255,.25);font-style:italic;font-size:12px}
 .holding-weight{display:flex;align-items:baseline;gap:8px;margin-left:auto}.holding-weight-pct{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--accent);letter-spacing:.5px;line-height:1}.holding-weight-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.holding-weight-bar{margin-top:10px;height:6px;border-radius:999px;background:rgba(255,255,255,.05);overflow:hidden;position:relative}.holding-weight-bar-fill{height:100%;background:linear-gradient(90deg, var(--accent) 0%, rgba(102,217,232,.6) 100%);border-radius:inherit;transition:width .25s ease-out}
-@media (max-width:1100px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.layout,.grid-2{grid-template-columns:1fr}}@media (max-width:720px){.wrap{padding:14px}.hero{flex-direction:column;align-items:flex-start}.summary{grid-template-columns:1fr}.holdings{grid-template-columns:1fr}}
+.runs-panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:16px}.runs-panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.run-list{display:flex;flex-direction:column;gap:8px}
+.run-row{display:grid;grid-template-columns:minmax(120px,1fr) auto minmax(160px,1.4fr) minmax(80px,1fr) auto;gap:12px;align-items:center;padding:10px 12px;border:1px solid rgba(255,255,255,.06);border-radius:8px;background:rgba(255,255,255,.02)}
+.run-id{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);white-space:nowrap}.run-status::before{content:'';width:7px;height:7px;border-radius:999px}
+.run-status.running{color:var(--loss);border-color:rgba(101,217,165,.3);background:rgba(101,217,165,.06)}.run-status.running::before{background:var(--loss);box-shadow:0 0 6px rgba(101,217,165,.6);animation:livepulse 1.6s ease-in-out infinite}
+.run-status.paused{color:var(--accent2);border-color:rgba(255,184,107,.35);background:rgba(255,184,107,.06)}.run-status.paused::before{background:var(--accent2)}
+.run-prog{display:flex;flex-direction:column;gap:4px;min-width:0}.run-prog-bar{height:5px;border-radius:999px;background:rgba(255,255,255,.06);overflow:hidden}.run-prog-fill{height:100%;background:linear-gradient(90deg,var(--accent),rgba(102,217,232,.5));border-radius:inherit;transition:width .25s}.run-prog-txt{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
+.run-bots{font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run-ctrls{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+.run-btn{border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--text);border-radius:6px;padding:5px 12px;font-size:12px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s}.run-btn:hover{background:rgba(255,255,255,.09)}.run-btn:disabled{opacity:.5;cursor:not-allowed}.run-btn.pause{border-color:rgba(255,184,107,.4);color:var(--accent2)}.run-btn.stop{border-color:rgba(255,107,138,.4);color:var(--gain)}
+.run-hint{font-size:10px;color:var(--dim);font-style:italic;white-space:nowrap}
+@media (max-width:1100px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.layout,.grid-2{grid-template-columns:1fr}}@media (max-width:720px){.wrap{padding:14px}.hero{flex-direction:column;align-items:flex-start}.summary{grid-template-columns:1fr}.holdings{grid-template-columns:1fr}.run-row{grid-template-columns:1fr 1fr}}
 .position-chart-title{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:8px 0 4px}
 .position-chart{height:auto}
 .pos-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10px;color:var(--dim);margin-top:6px}
@@ -63,6 +74,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
     </div>
   </div>
   <div class="summary" id="summary"></div>
+  <div class="runs-panel" id="runsPanel" hidden></div>
   <div class="layout">
     <aside class="sidebar">
       <div class="section-head"><span>Bot 列表</span><span id="botCount"></span></div>
@@ -727,9 +739,54 @@ async function refreshData({ initial = false } = {}){
   if (bot) renderDetail(bot)
   updateRefreshBadge()
 }
+// ---- live run control ------------------------------------------------------
+function renderRuns(runs){
+  const panel = byId('runsPanel')
+  if (!runs || !runs.length){ panel.hidden = true; panel.innerHTML = ''; return }
+  panel.hidden = false
+  const rows = runs.map(r => {
+    const pct = r.total ? Math.max(0, Math.min(100, Math.round(100 * r.cursor / r.total))) : 0
+    const isRunning = r.status === 'running'
+    const ctrls = isRunning
+      ? `<button class="run-btn pause" data-run-act="pause" data-run-id="${esc(r.runId)}">暂停</button><button class="run-btn stop" data-run-act="stop" data-run-id="${esc(r.runId)}">停止</button>`
+      : `<button class="run-btn stop" data-run-act="stop" data-run-id="${esc(r.runId)}">停止</button><span class="run-hint">resume 用 CLI</span>`
+    return `<div class="run-row">`
+      + `<div class="run-id" title="${esc(r.runId)}">${esc(r.runId)}</div>`
+      + `<span class="run-status ${isRunning ? 'running' : 'paused'}">${isRunning ? '运行中' : '已暂停'}</span>`
+      + `<div class="run-prog"><div class="run-prog-bar"><div class="run-prog-fill" style="width:${pct}%"></div></div><span class="run-prog-txt">${r.cursor}/${r.total} 交易日 · ${esc(r.currentDate || '--')}</span></div>`
+      + `<div class="run-bots" title="${esc((r.bots || []).join(', '))}">${esc((r.bots || []).join(', '))}</div>`
+      + `<div class="run-ctrls">${ctrls}</div>`
+      + `</div>`
+  }).join('')
+  panel.innerHTML = `<h2>实时 Run 控制</h2><div class="run-list">${rows}</div>`
+}
+async function refreshRuns(){
+  try {
+    const res = await fetch('/api/runs', { cache: 'no-store' })
+    if (!res.ok) return
+    const { runs } = await res.json()
+    renderRuns(runs)
+  } catch { /* ignore — leave the panel as-is until the next poll */ }
+}
+async function runControl(act, runId, btn){
+  // pause is non-destructive (resumable); stop is terminal → confirm first.
+  if (act === 'stop' && !confirm(`确定停止 run「${runId}」？这是终态，不可 resume。`)) return
+  if (btn) btn.disabled = true
+  try {
+    const res = await fetch(`/api/runs/${act}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId }) })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok || !body.ok) alert(`${act === 'pause' ? '暂停' : '停止'}失败：${body.reason || body.error || ('HTTP ' + res.status)}`)
+  } catch (err) {
+    alert(`${act === 'pause' ? '暂停' : '停止'}失败：${err && err.message ? err.message : String(err)}`)
+  } finally {
+    if (btn) btn.disabled = false
+    void refreshRuns()
+  }
+}
 async function boot(){
   await refreshData({ initial: true })
-  setInterval(() => { void refreshData() }, REFRESH_MS)
+  void refreshRuns()
+  setInterval(() => { void refreshData(); void refreshRuns() }, REFRESH_MS)
 }
 document.addEventListener('change', (e) => {
   const sel = e.target.closest?.('.bot-run-select, .detail-run-select')
@@ -749,6 +806,11 @@ document.addEventListener('change', (e) => {
   }
 })
 document.addEventListener('click', (e) => {
+  const runBtn = e.target.closest?.('.run-btn[data-run-act]')
+  if (runBtn) {
+    void runControl(runBtn.dataset.runAct, runBtn.dataset.runId, runBtn)
+    return
+  }
   const btn = e.target.closest?.('.range-presets button[data-range]')
   if (btn) {
     const preset = btn.dataset.range
