@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { loadWorldConfig } from './config.ts'
-import { runWorld, resumeWorld, requestStop } from './run.ts'
+import { runWorld, resumeWorld, requestStop, requestPause } from './run.ts'
 import { readState, stateExists } from './state.ts'
 import * as P from './paths.ts'
 
 export interface CliArgs {
-  command: 'run' | 'resume' | 'status' | 'stop' | 'help' | 'unknown'
+  command: 'run' | 'resume' | 'status' | 'stop' | 'pause' | 'help' | 'unknown'
   config?: string
   runId?: string
   worldDir?: string
@@ -18,7 +18,8 @@ const HELP = `world — agent_invest_lab 日度滚动金融世界系统
   world run    --config <world.yaml> [--run-id <id>] [--world-dir <dir>]   开新 run
   world resume --config <world.yaml> --run-id <id> [--world-dir <dir>]     续跑指定 run（从 state.json.cursor）
   world status --run-id <id> [--world-dir <dir>]                            查看某 run 的进度
-  world stop   --run-id <id> [--world-dir <dir>]                            请求优雅终止某 run
+  world stop   --run-id <id> [--world-dir <dir>]                            请求优雅终止某 run（当前交易日跑完后 abort，不可 resume）
+  world pause  --run-id <id> [--world-dir <dir>]                            请求暂停某 run（立即终止当前交易日，可 resume，从该日重跑）
   world --help
 
 注：--run-id 现在是 resume/status/stop 的必填项。dashboard 通过扫描
@@ -30,7 +31,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
   const cmd = argv[0]
   const valueOf = (name: string): string | undefined => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
   const base: CliArgs = { command: 'unknown', config: valueOf('--config'), runId: valueOf('--run-id'), worldDir: valueOf('--world-dir') }
-  if (cmd === 'run' || cmd === 'resume' || cmd === 'status' || cmd === 'stop') return { ...base, command: cmd }
+  if (cmd === 'run' || cmd === 'resume' || cmd === 'status' || cmd === 'stop' || cmd === 'pause') return { ...base, command: cmd }
   return base
 }
 
@@ -83,6 +84,15 @@ function cmdStop(args: CliArgs): number {
   return 0
 }
 
+function cmdPause(args: CliArgs): number {
+  if (!args.runId) { process.stderr.write('pause: --run-id <id> is required\n'); return 2 }
+  const worldRoot = resolveWorldRoot(args)
+  const r = requestPause(worldRoot, args.runId)
+  if (!r.ok) { process.stderr.write(`pause: ${r.reason}\n`); return 2 }
+  process.stdout.write(`pause requested — run "${args.runId}" will halt the current trading day (resume re-runs it).\n`)
+  return 0
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   const args = parseCliArgs(argv)
   switch (args.command) {
@@ -91,6 +101,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     case 'resume': return cmdResume(args)
     case 'status': return cmdStatus(args)
     case 'stop': return cmdStop(args)
+    case 'pause': return cmdPause(args)
     default: process.stderr.write(`unknown command: ${argv.join(' ')}\n\n${HELP}`); return 2
   }
 }
