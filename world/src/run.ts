@@ -556,9 +556,25 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   let aborted = false
   const onSigint = (): void => { aborted = true; log(worldRoot, runId, 'SIGINT received — will abort after current day') }
   process.on('SIGINT', onSigint)
+  // Immediate pause: `world pause` writes a PAUSE sentinel. Unlike STOP (which waits for
+  // the day boundary → aborted, terminal), pause kills the *current* day right now and
+  // leaves the run resumable. We poll the sentinel so an in-flight chat doesn't have to
+  // run to completion: on detection we shut the bot servers down, which makes their
+  // pending chat requests reject (stdout closes) → mapWithConcurrency resolves → the loop
+  // bails BEFORE advancing the cursor, so resume re-runs this whole day from scratch
+  // (each world day is an isolated session, so a fresh re-run is safe).
+  let pauseRequested = false
+  const pausePoll = setInterval(() => {
+    if (!pauseRequested && existsSync(P.pauseFile(worldRoot, runId))) {
+      pauseRequested = true
+      log(worldRoot, runId, 'pause requested — killing current day (resumable from this day)')
+      for (const b of setupRes.bots) { void b.server.shutdown({ timeoutMs: 2000 }).catch(() => { /* ignore — we're tearing down */ }) }
+    }
+  }, 1000)
   try {
     for (let cursor = fromCursor; cursor < dates.length; cursor++) {
       if (aborted || existsSync(P.stopFile(worldRoot, runId))) { log(worldRoot, runId, 'stop requested — aborting'); await teardown(worldRoot, runId, setupRes, 'aborted', days); return }
+      if (pauseRequested || existsSync(P.pauseFile(worldRoot, runId))) { log(worldRoot, runId, 'pause requested — pausing (resumable from this day)'); await teardown(worldRoot, runId, setupRes, 'paused', days); return }
       // Drain pending restarts BEFORE today's chat goes out. Each timeout from yesterday
       // owns a still-in-flight chat on its bot's server; we kill+spawn so today's chat
       // hits a clean server with no leftover tool-call stream.
@@ -648,6 +664,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         if (s.status === 'dead') brokenBots.add(s.bot)
         else if (s.status === 'timeout') needsRestart.add(s.bot)
       }
+      // The poller killed the bot servers mid-chat → bail BEFORE close_my_day and BEFORE
+      // advancing the cursor. cursor stays on this day so resume re-runs it from scratch.
+      if (pauseRequested) { log(worldRoot, runId, `pause requested — dropping day ${date} (resume will re-run it)`); await teardown(worldRoot, runId, setupRes, 'paused', days); return }
       // 系统侧 close：每个 bot（不论 chat 状态如何）跑一次 close_my_day 落收盘快照。
       // bot 在 BOT_ONLY 端口看不到 close_my_day，只能 world 触发；这是"每天收盘核算"的硬契约。
       // snapshot 文本写到 <botDayDir>/close_my_day.json，方便后续审阅。
@@ -675,6 +694,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
     await teardown(worldRoot, runId, setupRes, 'failed', days)
     throw err
   } finally {
+    clearInterval(pausePoll)
     process.off('SIGINT', onSigint)
   }
 }
