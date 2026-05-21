@@ -4,7 +4,9 @@
 
 **Goal:** 给 `world` 编排器加「暂停(可续)」语义,让优雅停止的 run 也能 resume,修正当前「崩溃残留可续、`world stop` 反而不可续」的拧巴状态机。
 
-**Architecture:** 新增 `paused` 状态;`world pause` 写 PAUSE 哨兵,runLoop 在交易日界检测到后 `teardown('paused')`;`resumeWorld` 放宽门禁接受 `running|paused` 并在续跑前清掉 STOP/PAUSE 哨兵;`world stop` 对已 `paused` 的 run 直接翻成终态 `aborted`。改动面纯在 `world/`(state / paths / run / cli),无 dashboard / 脚本依赖。
+**Architecture:** 新增 `paused` 状态;`world pause` 写 PAUSE 哨兵,runLoop 用一个 1s poller 轮询该哨兵——发现即 shutdown 所有 bot server(解除 in-flight chat),循环在推进 cursor 前 `teardown('paused')`,**立即终止当前交易日**(不等当天跑完);`resumeWorld` 放宽门禁接受 `running|paused` 并在续跑前清掉 STOP/PAUSE 哨兵,`fromCursor=state.cursor` 即从被中断那天整段重跑;`world stop`/SIGINT 维持原语义(等当天跑完→`aborted` 终态),`world stop` 对已 `paused` 的 run 直接翻成 `aborted`。改动面纯在 `world/`(state / paths / run / cli),无 dashboard / 脚本依赖。
+
+> **注**:Task 3 的最终实现与下文初稿不同——改为 poller 立即杀当天(见 Architecture 与设计 spec 的「立即暂停」节),而非"等日界"。其余 Task 与初稿一致。
 
 **Tech Stack:** TypeScript (Node ≥22.6 `--experimental-strip-types`),`node:test` 测试,无第三方测试库。
 
