@@ -5,6 +5,8 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { universeContaminationFile } from '../paths.ts'
+import { listControllableRuns, type WorldState } from '../state.ts'
+import { requestPause, requestStop } from '../run-control.ts'
 import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
 
 const execFileAsync = promisify(execFile)
@@ -455,6 +457,39 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html)
 }
 
+/** Light per-run view for /api/runs — only what the control panel renders. */
+function runSummary(s: WorldState): Record<string, unknown> {
+  return {
+    runId: s.run_id,
+    status: s.status,
+    currentDate: s.current_date,
+    cursor: s.cursor,
+    total: s.trading_dates.length,
+    bots: s.bots,
+    loop: s.loop,
+    startedAt: s.started_at,
+    updatedAt: s.updated_at,
+  }
+}
+
+function readJsonBody(req: IncomingMessage, limitBytes = 64 * 1024): Promise<Record<string, unknown>> {
+  return new Promise((resolveP, reject) => {
+    let raw = ''
+    let tooBig = false
+    req.on('data', (c: Buffer) => {
+      raw += c.toString()
+      if (raw.length > limitBytes) { tooBig = true; req.destroy() }
+    })
+    req.on('end', () => {
+      if (tooBig) return reject(new Error('request body too large'))
+      if (!raw.trim()) return resolveP({})
+      try { resolveP(JSON.parse(raw) as Record<string, unknown>) }
+      catch { reject(new Error('invalid JSON body')) }
+    })
+    req.on('error', reject)
+  })
+}
+
 function parseArgs(argv: string[]): { host: string; port: number; dbPath: string; worldRoot: string } {
   let host = '0.0.0.0'
   let port = 48080
@@ -502,6 +537,23 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         const bot = await loadBotForRun(dbPath, botId, runId, runs)
         if (!bot) { sendJson(res, 404, { error: 'no data for bot/run' }); return }
         sendJson(res, 200, bot)
+        return
+      }
+      // Live run control: list controllable runs (running/paused) read from per-run
+      // state.json, and trigger pause/stop. Resume stays CLI-only (it must spawn a
+      // long-lived `world resume` with the world config, which the dashboard lacks).
+      if (req.method === 'GET' && url.pathname === '/api/runs') {
+        sendJson(res, 200, { runs: listControllableRuns(worldRoot).map(runSummary) })
+        return
+      }
+      if (req.method === 'POST' && (url.pathname === '/api/runs/pause' || url.pathname === '/api/runs/stop')) {
+        let body: Record<string, unknown>
+        try { body = await readJsonBody(req) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }
+        const runId = typeof body.runId === 'string' ? body.runId : ''
+        if (!runId) { sendJson(res, 400, { ok: false, error: 'runId required' }); return }
+        const r = url.pathname.endsWith('/pause') ? requestPause(worldRoot, runId) : requestStop(worldRoot, runId)
+        sendJson(res, r.ok ? 200 : 409, r)
         return
       }
       sendJson(res, 404, { error: 'not found' })

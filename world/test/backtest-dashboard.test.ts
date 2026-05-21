@@ -1,8 +1,12 @@
 import { spawn } from 'node:child_process'
+import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { writeState, readState, type WorldState } from '../src/state.ts'
+import { pauseFile } from '../src/paths.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DB = join(HERE, '../../data/fund.db')
@@ -117,5 +121,57 @@ test('backtest dashboard serves data', async () => {
     assert.equal(badRes.status, 404)
   } finally {
     proc.kill('SIGTERM')
+  }
+})
+
+test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', async () => {
+  const worldRoot = mkdtempSync(join(tmpdir(), 'dash-runs-'))
+  const baseState: WorldState = {
+    run_id: 'x', status: 'running', current_date: '2024-03-15',
+    trading_dates: ['2024-03-14', '2024-03-15', '2024-03-18'], cursor: 1,
+    bots: ['bot1'], memory_port: 0,
+    started_at: '2026-05-11T10:00:00.000Z', updated_at: '2026-05-11T10:00:00.000Z',
+    loop: 'research-loop',
+  }
+  writeState(worldRoot, 'rrun', { ...baseState, run_id: 'rrun', status: 'running', started_at: '2026-05-11T08:00:00.000Z' })
+  writeState(worldRoot, 'rpaused', { ...baseState, run_id: 'rpaused', status: 'paused', started_at: '2026-05-11T12:00:00.000Z' })
+  writeState(worldRoot, 'rdone', { ...baseState, run_id: 'rdone', status: 'done', started_at: '2026-05-11T14:00:00.000Z' })
+
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB, '--world-root', worldRoot], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
+    const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
+
+    // GET /api/runs → controllable runs (running + paused), newest first, done excluded
+    const listRes = await fetch(`${base}/api/runs`)
+    assert.equal(listRes.status, 200)
+    const { runs } = await listRes.json() as { runs: Array<{ runId: string; status: string; cursor: number; total: number }> }
+    assert.deepEqual(runs.map(r => r.runId), ['rpaused', 'rrun'])
+    const rrun = runs.find(r => r.runId === 'rrun')!
+    assert.equal(rrun.status, 'running')
+    assert.equal(rrun.cursor, 1)
+    assert.equal(rrun.total, 3)
+
+    // POST pause without runId → 400
+    const noId = await fetch(`${base}/api/runs/pause`, { method: 'POST', body: '{}' })
+    assert.equal(noId.status, 400)
+
+    // POST pause a running run → 200 ok, PAUSE sentinel written
+    const pauseRes = await fetch(`${base}/api/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rrun' }) })
+    assert.equal(pauseRes.status, 200)
+    assert.deepEqual(await pauseRes.json(), { ok: true })
+    assert.ok(existsSync(pauseFile(worldRoot, 'rrun')), 'PAUSE sentinel written')
+
+    // POST pause a non-running (done) run → 409 conflict
+    const pauseDone = await fetch(`${base}/api/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rdone' }) })
+    assert.equal(pauseDone.status, 409)
+
+    // POST stop a paused run → flips straight to aborted (terminal)
+    const stopRes = await fetch(`${base}/api/runs/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rpaused' }) })
+    assert.equal(stopRes.status, 200)
+    assert.equal(readState(worldRoot, 'rpaused').status, 'aborted')
+  } finally {
+    proc.kill('SIGTERM')
+    rmSync(worldRoot, { recursive: true, force: true })
   }
 })
