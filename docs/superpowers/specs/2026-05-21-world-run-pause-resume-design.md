@@ -53,23 +53,37 @@ stop/resume 控件。所以本设计不与既有自愈逻辑冲突,改动面纯�
   [run.ts:715](../../../world/src/run.ts#L715)):仅当 `status === 'running'` 时写 PAUSE 哨兵;
   否则返回 `{ ok: false, reason }`。
 
-## 日界检查(runLoop 顶部)
+## 立即暂停(runLoop:哨兵 poller + 日界检查)
 
-现状([run.ts:561](../../../world/src/run.ts#L561)):
+设计取舍(关键):暂停**立即生效**,不等当天 chat 跑完。因为每个交易日是隔离 session,
+当天可以整段废弃、resume 时从头重跑——所以暂停 = 杀掉当前在跑的那一天,cursor 不推进。
+
+`world stop` / SIGINT 维持原语义:**等当天跑完**、在日界 `teardown 'aborted'`(终态、不可续)。
+
+实现:在 runLoop 起一个 1s 间隔的 poller 轮询 PAUSE 哨兵:
 
 ```
-if (aborted || stopFile存在) { teardown 'aborted'; return }
+let pauseRequested = false
+const pausePoll = setInterval(() => {
+  if (!pauseRequested && pauseFile存在) {
+    pauseRequested = true
+    for (const b of bots) b.server.shutdown()   // 杀 bot → in-flight chat 因 stdout 关闭而 reject
+  }
+}, 1000)
 ```
 
-改为(abort 优先于 pause):
+bot server 进程被 kill 后,正在 await 的 `chatOneBot` 请求 reject([botServer.ts:50-52](../../../world/src/botServer.ts#L50-L52)),
+被捕获成 `dead` 状态,`mapWithConcurrency` 随即 resolve。然后循环在三处 bail 到 `paused`:
 
-```
-if (aborted || stopFile存在) { teardown 'aborted'; return }
-if (pauseFile存在)            { teardown 'paused';  return }
-```
+1. 日界顶部(处理"两日之间/settle 期间"请求的 pause):
+   `if (pauseRequested || pauseFile存在) { teardown 'paused'; return }`(放在 STOP 检查**之后**,abort 优先)。
+2. chat 之后、`close_my_day` 与 cursor 推进**之前**:`if (pauseRequested) { teardown 'paused'; return }`。
 
-暂停在**下一个交易日开头**生效:当前交易日完整跑完(chat + settle + close_my_day +
-state.cursor 推进)才停,保证当天产物落盘、cursor 不倒退。SIGINT 行为**不变**(仍 abort)。
+两处都在 `writeState(cursor+1)` 之前返回,所以 `state.cursor` 停在当前在跑的那一天;
+resume `fromCursor = state.cursor` 即从该日整段重跑。poller 在 `finally` 里 `clearInterval`。
+
+注意(已知取舍):若当天 bot 在被杀前已经下过单(order_date=today),resume 重跑当天可能重复下单。
+fund run 需自行接受或在 resume 前清理当天残留单——本设计按用户决策"重跑当天"执行。
 
 ## 续跑(resumeWorld)
 
@@ -100,9 +114,9 @@ state.cursor 推进)才停,保证当天产物落盘、cursor 不倒退。SIGINT 
 - `CliArgs.command` 联合类型加 `'pause'`。
 - `parseCliArgs`:`cmd === 'pause'` 纳入已知命令分支。
 - `cmdPause(args)`:校验 `--run-id`,调 `requestPause`,成功打印
-  「pause requested — run "<id>" will halt after the current trading day.」。
+  「pause requested — run "<id>" will halt the current trading day (resume re-runs it).」。
 - `main` switch 加 `case 'pause'`。
-- HELP 文本加一行 `world pause --run-id <id> [--world-dir <dir>]   请求在当前交易日后暂停(可 resume)`。
+- HELP 文本加一行 `world pause --run-id <id> [--world-dir <dir>]   请求暂停(立即终止当前交易日,可 resume,从该日重跑)`。
 
 ## 测试
 
@@ -111,9 +125,11 @@ state.cursor 推进)才停,保证当天产物落盘、cursor 不倒退。SIGINT 
     `resumeWorld` 从 cursor 续完,断言 `status==='done'`、cursor 到底、被跳过的日子产物补齐。
   - 调整:现有「resumeWorld refuses when state status is not running」用例覆盖到 `done`
     与 `aborted` 仍被拒(`paused` 不再属于被拒集合)。
-- `world/test/run.test.ts`(或新增 `world/test/pause.test.ts`)
+- `world/test/run.test.ts`
   - `requestPause` 在 `running` 时写 PAUSE 哨兵、返回 ok;非 running 时拒绝。
-  - runLoop 见 PAUSE 后 teardown 状态为 `paused` 且 `cursor` 不倒退。
+  - 日界:PAUSE 哨兵在 run 前就存在 → teardown `paused`、cursor=0、无当天产物。
+  - mid-day:`STUB_CHAT_MODE=hang` 的慢 chat 在飞行中写 PAUSE → poller 杀 bot →
+    run 以 `paused` 结束、cursor 不推进(证明立即生效)。
   - `requestStop` 对 `paused` run 直接写 `aborted`。
 - `world/test/cli.test.ts`
   - `parseCliArgs(['pause','--run-id','r1'])` → `command: 'pause'`。
@@ -121,5 +137,5 @@ state.cursor 推进)才停,保证当天产物落盘、cursor 不倒退。SIGINT 
 ## 不做(YAGNI)
 
 - dashboard 暂停按钮(当前无 stop/resume UI)。
-- 交易日中途(mid-day)暂停——隔离单元是「天」,中途暂停会丢当天 session 进度。
+- 跨重跑的"当天残留单"清理——按用户决策接受重跑当天的副作用(见上文取舍)。
 - orphan 自愈改写(当前未实现,不在本设计范围)。
