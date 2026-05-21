@@ -117,6 +117,21 @@ test('backtest dashboard serves data', async () => {
       assert.ok(Math.abs((a.weight_after - a.weight_before) - a.weight_delta) < 1e-9, 'weight_delta = after - before')
     }
 
+    // /api/backtest/benchmark: 任意基金按 [from,to] 归一化,起点对齐 1.0
+    const bmRes = await fetch(`${base}/api/backtest/benchmark?fund=510300&from=2025-01-02&to=2025-06-30`)
+    assert.equal(bmRes.status, 200)
+    const bm = await bmRes.json() as { fundCode: string; series: Array<{ trade_date: string; net_value: number }> } | null
+    assert.ok(bm && bm.fundCode === '510300', 'benchmark endpoint returns the requested fund')
+    assert.ok(bm.series.length > 0, 'benchmark series non-empty')
+    assert.ok(Math.abs(bm.series[0].net_value - 1) < 1e-9, 'benchmark normalized to 1.0 at start')
+    for (let i = 1; i < bm.series.length; i++) {
+      assert.ok(bm.series[i].trade_date >= bm.series[i - 1].trade_date, 'benchmark series sorted by date')
+    }
+
+    // 缺参数 → 400
+    const bmBad = await fetch(`${base}/api/backtest/benchmark?fund=510300`)
+    assert.equal(bmBad.status, 400)
+
     // bad bot_id / run_id combo → 404
     const badRes = await fetch(`${base}/api/backtest/bot?bot_id=does-not-exist&run_id=nope`)
     assert.equal(badRes.status, 404)
