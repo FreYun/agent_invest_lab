@@ -285,20 +285,41 @@ function renderChart(bot){
   const xLabels = series.filter((_, i) => i === 0 || i === series.length - 1 || i % Math.ceil(series.length / 4) === 0)
   const innerW = width - pad.l - pad.r
   const seriesIdxByDate = new Map(series.map((p, i) => [p.trade_date, i]))
-  const actionMarks = bot.actions.map(action => {
-    // 1) prefer series exact match — gives bot's actual net_value on that day
-    const seriesIdx = seriesIdxByDate.get(action.action_date)
-    if (seriesIdx != null) return { action, x: botCoords.xs[seriesIdx], y: botCoords.ys[seriesIdx] }
-    // 2) action date not in series (e.g. buy before daily snapshots started):
-    //    place on shared X axis, snap Y to nearest visible bot point
-    const axisIdx = dateToIdx.get(action.action_date)
-    if (axisIdx == null) return null
-    const x = pad.l + (xAxisDates.length <= 1 ? innerW / 2 : innerW * (axisIdx / (xAxisDates.length - 1)))
-    // pick the nearest series Y (first if action is before series, last if after)
-    const firstSeriesAxisIdx = dateToIdx.get(series[0]?.trade_date)
-    const nearestIdx = (firstSeriesAxisIdx != null && axisIdx < firstSeriesAxisIdx) ? 0 : series.length - 1
-    return { action, x, y: botCoords.ys[nearestIdx] }
-  }).filter(Boolean)
+  // 同一天、同方向(买/卖)的多笔交易合并成一个标记,锚定在该日期真实的 X 坐标上,
+  // 这样十字光标的竖线能精准穿过标记;每笔明细仍可在 tooltip / 持仓面板查看。
+  const firstSeriesAxisIdx = dateToIdx.get(series[0]?.trade_date)
+  const markerGroups = new Map()  // key: `${date}|${side}`
+  for (const action of bot.actions){
+    const key = `${action.action_date}|${action.side}`
+    let g = markerGroups.get(key)
+    if (!g){
+      let x, y
+      const seriesIdx = seriesIdxByDate.get(action.action_date)
+      if (seriesIdx != null){
+        // 当日有净值快照:直接用机器人当日真实净值点
+        x = botCoords.xs[seriesIdx]; y = botCoords.ys[seriesIdx]
+      } else {
+        // 交易日不在净值序列里(如快照开始前的建仓):落在共享 X 轴,Y 贴最近的可见净值点
+        const axisIdx = dateToIdx.get(action.action_date)
+        if (axisIdx == null) continue
+        x = pad.l + (xAxisDates.length <= 1 ? innerW / 2 : innerW * (axisIdx / (xAxisDates.length - 1)))
+        const nearestIdx = (firstSeriesAxisIdx != null && axisIdx < firstSeriesAxisIdx) ? 0 : series.length - 1
+        y = botCoords.ys[nearestIdx]
+      }
+      g = { action_date: action.action_date, side: action.side, x, y, count: 0, amount: 0, funds: [] }
+      markerGroups.set(key, g)
+    }
+    g.count++
+    g.amount += Number(action.amount || 0)
+    if (action.fund_name && !g.funds.includes(action.fund_name)) g.funds.push(action.fund_name)
+  }
+  // 记录每个日期出现了哪些方向,用于同日买卖并存时竖直错开
+  const sidesByDate = new Map()
+  for (const g of markerGroups.values()){
+    if (!sidesByDate.has(g.action_date)) sidesByDate.set(g.action_date, new Set())
+    sidesByDate.get(g.action_date).add(g.side)
+  }
+  const actionMarks = [...markerGroups.values()]
   const baselineNear = Math.abs(1 - yMin) < 0.2 || Math.abs(1 - yMax) < 0.2
   const baselineY = height - pad.b - (height - pad.t - pad.b) * ((1 - yMin) / ySpan)
 
@@ -318,9 +339,16 @@ function renderChart(bot){
       + `<path d="${botCoords.area}" class="area"></path>`
       + `<path d="${botCoords.d}" class="line"></path>`
       + (benchCoords ? `<path d="${benchCoords.d}" class="bench-line"></path>` : '')
-      + actionMarks.map((m, i) => {
-          const dx = m.x + (i % 3 - 1) * 6
-          return `<g><circle cx="${dx}" cy="${m.y}" r="5.5" class="${markerClass(m.action.side)}"></circle><text x="${dx}" y="${m.action.side === 'sell' ? m.y - 18 : m.y + 22}" text-anchor="middle" class="marker-text">${actionLabel(m.action)}</text><title>${esc(m.action.action_date)} ${esc(m.action.fund_code)} ${esc(m.action.fund_name)} ${esc(m.action.action_type)} ¥${fmtMoney(m.action.amount || 0)}</title></g>`
+      + actionMarks.map(m => {
+          // 同日买卖并存时上下错开,避免圆点重叠;cx 始终为真实日期 X,光标竖线可同时穿过两点
+          const both = (sidesByDate.get(m.action_date)?.size || 0) > 1
+          const cy = both ? (m.side === 'sell' ? m.y - 7 : m.y + 7) : m.y
+          const labelY = m.side === 'sell' ? cy - 18 : cy + 22
+          const sideText = m.side === 'sell' ? '卖出' : m.side === 'buy' ? '买入' : '观察'
+          const countText = m.count > 1 ? ` ${m.count}笔` : ''
+          const fundText = m.funds.length ? ' ' + m.funds.join('、') : ''
+          const title = `${m.action_date} ${sideText}${countText} ¥${fmtMoney(m.amount)}${fundText}`
+          return `<g><circle cx="${m.x}" cy="${cy}" r="5.5" class="${markerClass(m.side)}"></circle><text x="${m.x}" y="${labelY}" text-anchor="middle" class="marker-text">${actionLabel(m)}</text><title>${esc(title)}</title></g>`
         }).join('')
       + xLabels.map(p => {
           const idx = dateToIdx.get(p.trade_date)
