@@ -614,6 +614,40 @@ test('cli_tools get_my_history requires --run-id (strict layer contract)', () =>
   assert.match(r.stderr, /--run-id/, `argparse error should mention --run-id, got: ${r.stderr}`)
 })
 
+test('runWorld pauses (status=paused) when a PAUSE sentinel is present at a day boundary', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15', '2024-03-18'] })
+  const pausePath = P.pauseFile(worldRoot, 'rpause')
+  mkdirSync(dirname(pausePath), { recursive: true })
+  writeFileSync(pausePath, 'pause\n')
+  await runWorld({ worldRoot, config, runId: 'rpause', startBotServer: stubStartBotServer })
+  const st = readState(worldRoot, 'rpause')
+  assert.equal(st.status, 'paused')
+  // 循环在第一次迭代顶部就发现 PAUSE → cursor 停在 0，没有任何当天产物
+  assert.equal(st.cursor, 0)
+  assert.equal(existsSync(P.sentFile(worldRoot, 'rpause', '2024-03-14', 'bot1')), false)
+  cleanup()
+})
+
+test('runWorld pauses immediately mid-day: a PAUSE during an in-flight chat kills the day without advancing the cursor', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
+  // hang mode: the stub never replies on its own, so the only way the day ends is the
+  // pause poller killing the bot server. Proves pause interrupts an in-flight chat.
+  const start = (botId: string) => BotServer.start(botId, {
+    argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+    readyTimeoutMs: 5000,
+    env: { STUB_CHAT_MODE: 'hang' },
+  })
+  // Drop the PAUSE sentinel shortly after the chat goes in flight; the 1s poller picks it up.
+  const t = setTimeout(() => { writeFileSync(P.pauseFile(worldRoot, 'rmid'), 'pause\n') }, 300)
+  await runWorld({ worldRoot, config, runId: 'rmid', startBotServer: start })
+  clearTimeout(t)
+  const st = readState(worldRoot, 'rmid')
+  assert.equal(st.status, 'paused')
+  // day 0 was killed mid-flight → cursor never advanced → resume re-runs day 0
+  assert.equal(st.cursor, 0)
+  cleanup()
+})
+
 test('requestPause writes a PAUSE sentinel when running, rejects otherwise', () => {
   const { worldRoot, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
   writeState(worldRoot, 'rp', { run_id: 'rp', status: 'running', current_date: '2024-03-14', trading_dates: ['2024-03-14', '2024-03-15'], cursor: 1, bots: ['bot1'], memory_port: 0, started_at: new Date().toISOString(), updated_at: new Date().toISOString(), loop: 'research-loop' })
