@@ -69,6 +69,7 @@ test('backtest dashboard serves data', async () => {
     for (const b of def.bots) {
       assert.ok(b.botId, 'each bot has a botId')
       assert.ok(typeof b.runId === 'string' && b.runId.length > 0, `bot ${b.botId} has a runId`)
+      assert.equal((b as { realUsers?: unknown }).realUsers, undefined, `summary 不含 realUsers (${b.botId})`)
       assert.ok(Array.isArray(b.availableRuns) && b.availableRuns.length > 0, `bot ${b.botId} has availableRuns`)
       assert.ok(b.availableRuns.some(r => r.runId === b.runId), `bot ${b.botId} runId is in its availableRuns`)
       // sorted newest-first by runId (timestamps are lexicographically chronological)
@@ -88,6 +89,17 @@ test('backtest dashboard serves data', async () => {
     const one = await oneRes.json() as Bot
     assert.equal(one.botId, target.botId)
     assert.equal(one.runId, target.runId)
+
+    // realUsers: 仅 per-bot 详情返回；数组,数量受 MAX_REAL_USERS(10) 约束
+    const oneRU = one as Bot & {
+      realUsers?: Array<{ fundCode: string; cycleId: string; clearReturn2: number; series: Array<{ trade_date: string; net_value: number }> }>
+    }
+    assert.ok(Array.isArray(oneRU.realUsers), 'per-bot 响应含 realUsers 数组')
+    assert.ok(oneRU.realUsers!.length <= 10, 'realUsers ≤ 10')
+    for (const u of oneRU.realUsers!) {
+      assert.ok(typeof u.fundCode === 'string' && u.fundCode.length > 0, '用户有 fundCode')
+      assert.ok(Array.isArray(u.series), '用户有 series 数组')
+    }
 
     type HoldingByDateRow = { fund_code: string; fund_name: string; weight: number; market_value: number }
     type BotWithExt = Bot & {

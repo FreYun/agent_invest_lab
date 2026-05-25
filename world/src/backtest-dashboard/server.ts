@@ -115,6 +115,17 @@ interface BotBenchmark {
   series: BenchmarkPoint[]
 }
 
+interface RealUserSeries {
+  fundCode: string
+  fundName: string
+  cycleId: string
+  clearReturn2: number
+  bigLossRate: number | null
+  bigProfitRate: number | null
+  txnCount: number
+  series: { trade_date: string; net_value: number }[]
+}
+
 interface BotDataset {
   botId: string
   firstTradeDate: string
@@ -142,6 +153,7 @@ interface BotDataset {
   holdingsByDate: Record<string, Omit<HoldingRow, 'trade_date'>[]>
   reviews: ReviewRow[]
   benchmark: BotBenchmark | null
+  realUsers: RealUserSeries[]
   runId: string
   availableRuns: BotRunRef[]
 }
@@ -157,7 +169,7 @@ interface BotRunRef {
 
 /** Summary variant used in /api/backtest/data (polled every 10 s).
  *  holdingsByDate is stripped — it is only needed on the per-bot detail view. */
-type BotDatasetSummary = Omit<BotDataset, 'holdingsByDate'>
+type BotDatasetSummary = Omit<BotDataset, 'holdingsByDate' | 'realUsers'>
 
 interface Dataset {
   generatedAt: string
@@ -344,6 +356,77 @@ async function listRunsForBot(dbPath: string, worldRoot: string, botId: string):
   })
 }
 
+async function tableExists(dbPath: string, name: string): Promise<boolean> {
+  const rows = await queryRows<{ n: number }>(dbPath,
+    `SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=${quoteSql(name)}`)
+  return num(rows[0]?.n) > 0
+}
+
+/** 取 bot 触碰过的基金上的真实用户曲线：候选→按基金分配配额→池内代表性选取→拉曲线。
+ *  real_user_* 表不存在(未落库)时返回 []——保证功能可加性,不破坏看板。 */
+async function loadRealUsers(dbPath: string, fundCodes: string[]): Promise<RealUserSeries[]> {
+  const codes = [...new Set(fundCodes)].filter(Boolean)
+  if (!codes.length) return []
+  if (!(await tableExists(dbPath, 'real_user_cycles'))) return []
+  const inList = codes.map(quoteSql).join(',')
+  const cycles = await queryRows<{
+    cycle_id: string; fund_code: string; fund_name: string
+    clear_return2: number | null; big_loss_rate: number | null; big_profit_rate: number | null
+    txn_count: number
+  }>(dbPath, `
+    SELECT c.cycle_id, c.fund_code,
+           COALESCE(i.fund_name, c.fund_code) AS fund_name,
+           c.clear_return2, c.big_loss_rate, c.big_profit_rate,
+           (SELECT COUNT(*) FROM real_user_txns t WHERE t.cycle_id = c.cycle_id) AS txn_count
+    FROM real_user_cycles c
+    LEFT JOIN fund_info i ON i.fund_code = c.fund_code
+    WHERE c.fund_code IN (${inList})
+      AND EXISTS (SELECT 1 FROM real_user_curves v WHERE v.cycle_id = c.cycle_id)
+    ORDER BY c.fund_code ASC, c.clear_return2 ASC
+  `)
+  if (!cycles.length) return []
+
+  const byFund = new Map<string, typeof cycles>()
+  for (const c of cycles) {
+    const arr = byFund.get(c.fund_code) ?? []
+    arr.push(c)
+    byFund.set(c.fund_code, arr)
+  }
+  const poolSizes = new Map<string, number>()
+  for (const [code, arr] of byFund) poolSizes.set(code, arr.length)
+  const quota = allocateQuota(poolSizes, MAX_REAL_USERS)
+
+  const chosen: typeof cycles = []
+  for (const [code, arr] of byFund) {
+    chosen.push(...selectRepresentative(arr, quota.get(code) ?? 0))  // arr 已按 clear_return2 升序
+  }
+  if (!chosen.length) return []
+
+  const curveRows = await queryRows<{ cycle_id: string; trade_date: string; net_value: number }>(dbPath, `
+    SELECT cycle_id, trade_date, net_value
+    FROM real_user_curves
+    WHERE cycle_id IN (${chosen.map(c => quoteSql(c.cycle_id)).join(',')})
+    ORDER BY cycle_id ASC, trade_date ASC
+  `)
+  const curveByCycle = new Map<string, { trade_date: string; net_value: number }[]>()
+  for (const r of curveRows) {
+    const arr = curveByCycle.get(r.cycle_id) ?? []
+    arr.push({ trade_date: r.trade_date, net_value: num(r.net_value) })
+    curveByCycle.set(r.cycle_id, arr)
+  }
+
+  return chosen.map(c => ({
+    fundCode: c.fund_code,
+    fundName: c.fund_name,
+    cycleId: c.cycle_id,
+    clearReturn2: num(c.clear_return2),
+    bigLossRate: c.big_loss_rate,
+    bigProfitRate: c.big_profit_rate,
+    txnCount: num(c.txn_count),
+    series: curveByCycle.get(c.cycle_id) ?? [],
+  })).filter(u => u.series.length > 0)
+}
+
 async function loadBotForRun(dbPath: string, botId: string, runId: string, availableRuns: BotRunRef[]): Promise<BotDataset | null> {
   const runIdSql = quoteSql(runId)
   const botIdSql = quoteSql(botId)
@@ -424,6 +507,12 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
     ? await loadBenchmark(dbPath, actions, holdings, firstDateForBench, lastDateForBench)
     : null
 
+  const touchedFunds = [...new Set([
+    ...allHoldings.map(h => h.fund_code),
+    ...actions.map(a => a.fund_code),
+  ])].filter(Boolean)
+  const realUsers = await loadRealUsers(dbPath, touchedFunds)
+
   return {
     botId,
     firstTradeDate: first?.trade_date ?? (actions[0]?.action_date ?? ''),
@@ -464,6 +553,7 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
     holdingsByDate,
     reviews,
     benchmark,
+    realUsers,
     runId,
     availableRuns,
   }
@@ -480,7 +570,7 @@ async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> 
       // /api/backtest/data is polled every 10s by the frontend, which reads
       // holdingsByDate only on the per-bot detail view (/api/backtest/bot).
       // Strip the per-day history here to keep poll payload small.
-      const { holdingsByDate: _drop, ...summary } = bot
+      const { holdingsByDate: _drop, realUsers: _dropUsers, ...summary } = bot
       bots.push(summary)
     }
   }
