@@ -205,6 +205,35 @@ function classifyAction(actionType: string, finalDecision: string | null): 'buy'
   return 'hold'
 }
 
+/** 每个 bot 最多展示的真实用户数。 */
+const MAX_REAL_USERS = 10
+
+/** 在候选基金池间分配总配额：先 floor(total/n) 平均，余数按候选数从多到少补，
+ *  每池不超过其候选数。返回 fund_code -> 配额。 */
+export function allocateQuota(poolSizes: Map<string, number>, total: number): Map<string, number> {
+  const alloc = new Map<string, number>()
+  const pools = [...poolSizes.keys()]
+  for (const p of pools) alloc.set(p, 0)
+  if (!pools.length || total <= 0) return alloc
+  const base = Math.floor(total / pools.length)
+  for (const p of pools) alloc.set(p, Math.min(base, poolSizes.get(p) ?? 0))
+  let remaining = total - [...alloc.values()].reduce((s, v) => s + v, 0)
+  const order = [...pools].sort((a, b) => (poolSizes.get(b)! - poolSizes.get(a)!) || a.localeCompare(b))
+  while (remaining > 0) {
+    let progressed = false
+    for (const p of order) {
+      if (remaining <= 0) break
+      if (alloc.get(p)! < (poolSizes.get(p) ?? 0)) {
+        alloc.set(p, alloc.get(p)! + 1)
+        remaining--
+        progressed = true
+      }
+    }
+    if (!progressed) break  // 所有池已封顶,剩余配额无处可放
+  }
+  return alloc
+}
+
 // 未建仓 bot 没有首买基金时,用沪深300(510300 沪深300ETF华泰柏瑞)作默认参照,
 // 这样任何 bot 都至少有一条参照曲线。
 const DEFAULT_BENCHMARK_FUND = '510300'
