@@ -192,7 +192,10 @@ function quoteSql(s: string): string {
 }
 
 async function queryRows<T>(dbPath: string, sql: string): Promise<T[]> {
-  const { stdout } = await execFileAsync('sqlite3', ['-json', dbPath, sql], { maxBuffer: 16 * 1024 * 1024 })
+  // fund.db is WAL-mode and written concurrently by live world runs; without a busy
+  // timeout the sqlite3 CLI fails instantly with SQLITE_BUSY ("database is locked")
+  // during a writer/checkpoint window, surfacing as flaky 500s. Wait it out instead.
+  const { stdout } = await execFileAsync('sqlite3', ['-json', '-cmd', '.timeout 5000', dbPath, sql], { maxBuffer: 16 * 1024 * 1024 })
   const text = stdout.trim()
   if (!text) return []
   const parsed = JSON.parse(text) as T[]
