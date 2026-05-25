@@ -89,6 +89,15 @@ export interface IndexQuote {
   ma20: number | null
   vs_ma5_pct: number | null
   vs_ma20_pct: number | null
+  // 长周期趋势锚——方法论要求趋势在 MA60/120/200 上判，而非 MA5/20。预喂这几条，
+  // 让 bot 不必每天自己再调 market_index_quote 取长窗口（否则它会偷懒拿 MA5 当扳机）。
+  ma60: number | null
+  ma120: number | null
+  ma200: number | null
+  vs_ma60_pct: number | null
+  vs_ma200_pct: number | null
+  // 由均线排列推出的粗趋势标签：多头排列 / 空头排列 / 纠缠（过渡）。null = 数据不足。
+  trend: '多头排列' | '空头排列' | '纠缠' | null
 }
 
 export interface BenchmarkSeries {
@@ -96,6 +105,19 @@ export interface BenchmarkSeries {
   name: string                                    // e.g. '沪深300'，or '买池 N 只等权 B&H' for multi-fund
   pointsByDate: Record<string, number>            // ISO date → cumulative % since runStartDate (run-start day = 0)
   latestCumulativePct: number | null              // convenience: cumulative pct at the last available trading date < asOfDate
+  // since-inception 区间口径风险调整指标，口径完全对齐 bot 的 _compute_bot_performance
+  // since_inception 行（rf=1.8%/252，波动/夏普不年化，calmar=return/|mdd|）——让 daily prompt
+  // 能并排打出"你 vs 不择时躺平"的 Sharpe / Calmar / 回撤 / 波动，而不仅是累计收益。
+  metrics?: BenchmarkMetrics
+}
+
+export interface BenchmarkMetrics {
+  return_pct: number                              // (last_nv / first_nv - 1) * 100
+  max_drawdown_pct: number                        // peak-to-trough on the B&H net-value series
+  volatility_pct: number | null                   // stdev(daily%) 不年化（样本 N-1），<2 个日收益 → null
+  sharpe_ratio: number | null                     // (mean_daily - rf_daily) / std_daily，不年化
+  calmar_ratio: number | null                     // return_pct / |mdd|；mdd≈0 → null
+  data_points: number                             // 参与计算的 NAV 点数（= 交易日数）
 }
 
 // 单基金交易费率（每天都注入 daily prompt）。purchase_fee/redeem_tiers 来自 fund_info，
@@ -535,9 +557,22 @@ function priorDay(asOfDate: string): string {
 }
 
 // ============================================================================
-// Index snapshots — latest close + MA5/MA20. simworld returns ~20 records by
-// default which is exactly enough for MA20.
+// Index snapshots — latest close + 短均线(MA5/MA20) + 长趋势锚(MA60/120/200) +
+// 趋势标签。方法论要求趋势在长均线上判，所以拉一个能算 MA200 的窗口（~320 自然日
+// ≈ 220 交易日），让 bot 直接拿到长趋势，不必为判方向再自己调 market_index_quote。
 // ============================================================================
+
+// 由收盘 vs MA60/120/200 的排列推趋势标签。需要至少 MA60；MA120/200 缺失时按
+// 已有的均线宽松判断（多头=价在所有可得长均线之上且短长依次递减；空头反之）。
+function classifyTrend(close: number, ma60: number | null, ma120: number | null, ma200: number | null): IndexQuote['trend'] {
+  if (ma60 === null) return null
+  const longMas = [ma60, ma120, ma200].filter((x): x is number => x !== null)
+  const bullStack = longMas.every((m, i) => i === 0 || longMas[i - 1] >= m)  // MA60>=MA120>=MA200
+  const bearStack = longMas.every((m, i) => i === 0 || longMas[i - 1] <= m)
+  if (close > ma60 && bullStack) return '多头排列'
+  if (close < ma60 && bearStack) return '空头排列'
+  return '纠缠'
+}
 
 async function fetchIndexSnapshots(opts: {
   simworldUrl: string
@@ -551,6 +586,9 @@ async function fetchIndexSnapshots(opts: {
       market: 'cn',
       symbols: opts.indices.map(i => i.code),
       simulated_datetime: simDt,
+      // ~220 交易日窗口，够算 MA200；end 收到 asOfDate（PIT 由 simulated_datetime 兜底）。
+      start_date: computeWindowStart(opts.asOfDate, 320),
+      end_date: opts.asOfDate,
     }) as { items?: { 指数标识?: string; 是否可用?: boolean; 行情记录?: { 日期?: string; 收盘?: number }[] }[] } | null
     if (!raw?.items) return []
     const byCode = new Map<string, IndexQuote>()
@@ -562,8 +600,12 @@ async function fetchIndexSnapshots(opts: {
         .filter(r => r.date && r.close > 0)
       if (closes.length === 0) continue
       const last = closes[closes.length - 1]
+      const maOf = (n: number) => closes.length >= n ? mean(closes.slice(-n).map(r => r.close)) : null
       const ma5 = mean(closes.slice(-5).map(r => r.close))
-      const ma20 = closes.length >= 20 ? mean(closes.slice(-20).map(r => r.close)) : null
+      const ma20 = maOf(20)
+      const ma60 = maOf(60)
+      const ma120 = maOf(120)
+      const ma200 = maOf(200)
       byCode.set(code, {
         code,
         name: opts.indices.find(i => i.code === code)?.name ?? code,
@@ -573,6 +615,12 @@ async function fetchIndexSnapshots(opts: {
         ma20,
         vs_ma5_pct: pctChange(ma5, last.close),
         vs_ma20_pct: pctChange(ma20, last.close),
+        ma60,
+        ma120,
+        ma200,
+        vs_ma60_pct: pctChange(ma60, last.close),
+        vs_ma200_pct: pctChange(ma200, last.close),
+        trend: classifyTrend(last.close, ma60, ma120, ma200),
       })
     }
     // Preserve requested order so the prompt is stable.
@@ -610,6 +658,64 @@ function mean(xs: number[]): number {
 
 const DEFAULT_BENCHMARK = { code: '000300.SH', name: '沪深300' }
 
+// rf / 年化口径常量——必须与 fund-portfolio-mcp server.py 的 _BOT_PERF_* 完全一致，
+// 否则 bot 的区间 Sharpe 和这里算的基准 Sharpe 就不是同口径，对比失真。
+const BENCH_RF_ANNUAL_PCT = 1.8
+const BENCH_TRADING_DAYS_PER_YEAR = 252
+const BENCH_RF_DAILY_PCT = BENCH_RF_ANNUAL_PCT / BENCH_TRADING_DAYS_PER_YEAR
+
+// 样本标准差（N-1 分母）——对齐 server.py:_stdev。<2 点返回 0。
+function sampleStdev(values: number[]): number {
+  const n = values.length
+  if (n < 2) return 0
+  const mean = values.reduce((a, b) => a + b, 0) / n
+  const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)
+  return Math.sqrt(variance)
+}
+
+// peak-to-trough（%）——对齐 server.py:_calc_max_drawdown。
+function maxDrawdownPct(navList: number[]): number {
+  if (navList.length === 0) return 0
+  let peak = navList[0]
+  let maxDd = 0
+  for (const nav of navList) {
+    if (nav > peak) peak = nav
+    const dd = ((nav - peak) / peak) * 100
+    if (dd < maxDd) maxDd = dd
+  }
+  return maxDd
+}
+
+// 从 B&H 净值序列（norm = nav/base，runStartDate 起锚定 1.0）算 since-inception 区间指标。
+// 口径完全对齐 bot 的 _compute_bot_performance since_inception：
+//   - return_pct = (last/first - 1)*100
+//   - 日收益序列首日补 0（对齐 bot Day-1 snapshot 的 daily_return_pct=0：prev_total=initial→0），
+//     使日收益点数 = 交易日数 N，mean/std 与 bot 同口径
+//   - volatility = stdev(daily%) 不年化；sharpe = (mean - rf_daily)/std；calmar = return/|mdd|
+function computeBenchmarkMetrics(navSeries: number[]): BenchmarkMetrics | undefined {
+  if (navSeries.length < 2) return undefined
+  const first = navSeries[0]
+  const last = navSeries[navSeries.length - 1]
+  if (!(first > 0)) return undefined
+  const return_pct = (last / first - 1) * 100
+  const mdd = maxDrawdownPct(navSeries)
+  // 首日 0% + 后续逐日收益 → N 个点，与 bot since_inception 的 daily_return_pct 序列对齐。
+  const daily: number[] = [0]
+  for (let i = 1; i < navSeries.length; i++) {
+    if (navSeries[i - 1] > 0) daily.push((navSeries[i] / navSeries[i - 1] - 1) * 100)
+  }
+  let volatility_pct: number | null = null
+  let sharpe_ratio: number | null = null
+  if (daily.length >= 2) {
+    const mean = daily.reduce((a, b) => a + b, 0) / daily.length
+    const std = sampleStdev(daily)
+    volatility_pct = std
+    sharpe_ratio = std > 1e-9 ? (mean - BENCH_RF_DAILY_PCT) / std : null
+  }
+  const calmar_ratio = Math.abs(mdd) > 1e-9 ? return_pct / Math.abs(mdd) : null
+  return { return_pct, max_drawdown_pct: mdd, volatility_pct, sharpe_ratio, calmar_ratio, data_points: navSeries.length }
+}
+
 async function fetchIndexBenchmark(opts: {
   simworldUrl: string
   code: string
@@ -637,8 +743,10 @@ async function fetchIndexBenchmark(opts: {
     // trading day onwards, which is exactly what we want.
     const base = closes[0].close
     const pointsByDate: Record<string, number> = {}
+    const navSeries: number[] = []
     for (const r of closes) {
       pointsByDate[r.date] = ((r.close - base) / base) * 100
+      navSeries.push(r.close / base)
     }
     const lastDate = closes[closes.length - 1].date
     return {
@@ -646,6 +754,7 @@ async function fetchIndexBenchmark(opts: {
       name: opts.name,
       pointsByDate,
       latestCumulativePct: pointsByDate[lastDate] ?? null,
+      metrics: computeBenchmarkMetrics(navSeries),
     }
   } catch {
     return null
@@ -695,6 +804,7 @@ async function fetchFundPoolBenchmark(opts: {
   if (present.length === 0) return null
   const sortedDates = Array.from(allDates).sort()
   const pointsByDate: Record<string, number> = {}
+  const navSeries: number[] = []  // 等权合成净值（单只 → 该基金 norm），喂给区间指标
   for (const d of sortedDates) {
     let sum = 0, n = 0
     for (const code of present) {
@@ -702,14 +812,16 @@ async function fetchFundPoolBenchmark(opts: {
       if (v !== undefined) { sum += v; n++ }
     }
     if (n === 0) continue
-    pointsByDate[d] = (sum / n - 1) * 100
+    const compositeNv = sum / n
+    pointsByDate[d] = (compositeNv - 1) * 100
+    navSeries.push(compositeNv)
   }
   const lastDate = sortedDates[sortedDates.length - 1]
   const name = present.length === 1
     ? `${perFundName[present[0]]} B&H`
     : `买池 ${present.length} 只等权 B&H`
   const code = present.length === 1 ? present[0] : 'buyable-pool'
-  return { code, name, pointsByDate, latestCumulativePct: pointsByDate[lastDate] ?? null }
+  return { code, name, pointsByDate, latestCumulativePct: pointsByDate[lastDate] ?? null, metrics: computeBenchmarkMetrics(navSeries) }
 }
 
 // 调 fund-portfolio-mcp 的 get_fund_fees CLI 子命令读 fund_info 费率字段。fee

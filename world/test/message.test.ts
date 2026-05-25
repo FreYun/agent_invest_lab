@@ -74,20 +74,24 @@ test('non-first-day message: concise rules only, no AUTONOMY / playbook / day-ty
   rmSync(w, { recursive: true, force: true })
 })
 
-test('first-day broadcasts the per-run curated buyable funds list; later days do not (bot self-queries via portfolio_get_buyable_funds)', () => {
+test('every day broadcasts the per-run curated buyable pool + position-adjustment guidance (single → pure index timing, multi → rotate within pool)', () => {
   const w = tmpWorldWithOverview('2024-03-18', 'overview')
   const codes = ['510300', '159915', '002611']
   const first = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md', buyableFundCodes: codes })
   const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md', buyableFundCodes: codes })
-  // Day 1: explicit list of codes appears
-  for (const c of codes) assert.match(first, new RegExp(c))
-  assert.match(first, /本次指定投资标的/)
-  // Day 2+: not re-broadcast
-  assert.doesNotMatch(brief, /本次指定投资标的/)
-  for (const c of codes) assert.doesNotMatch(brief, new RegExp(c))
-  // Day 1 without list (e.g., world.yaml didn't set buyable_fund_codes): block omitted
+  // Both Day 1 and Day N: pool header + every code re-broadcast
+  for (const msg of [first, brief]) {
+    assert.match(msg, /当前可买池/)
+    for (const c of codes) assert.match(msg, new RegExp(c))
+  }
+  // multi-fund pool → 池内配置/轮动 guidance
+  assert.match(brief, /轮动/)
+  // single-fund pool → 单指数择时 guidance, no rotation
+  const single = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md', buyableFundCodes: ['510300'] })
+  assert.match(single, /单指数择时/)
+  // No list provided (world.yaml didn't set buyable_fund_codes): block omitted
   const firstNoList = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
-  assert.doesNotMatch(firstNoList, /本次指定投资标的/)
+  assert.doesNotMatch(firstNoList, /当前可买池/)
   rmSync(w, { recursive: true, force: true })
 })
 
@@ -192,6 +196,7 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
         code: '000300.SH', name: '沪深300',
         pointsByDate: { '2024-03-15': -0.30, '2024-03-16': 0.10 },
         latestCumulativePct: 0.10,
+        metrics: { return_pct: 0.10, max_drawdown_pct: -0.30, volatility_pct: 0.21, sharpe_ratio: 0.0050, calmar_ratio: 0.33, data_points: 2 },
       },
       fundSeries: [
         {
@@ -204,7 +209,7 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
         },
       ],
       indices: [
-        { code: '000300.SH', name: '沪深300', latest_date: '2024-03-15', latest_close: 3500.12, ma5: 3490.00, ma20: 3470.00, vs_ma5_pct: 0.29, vs_ma20_pct: 0.87 },
+        { code: '000300.SH', name: '沪深300', latest_date: '2024-03-15', latest_close: 3500.12, ma5: 3490.00, ma20: 3470.00, vs_ma5_pct: 0.29, vs_ma20_pct: 0.87, ma60: 3450.00, ma120: 3400.00, ma200: 3350.00, vs_ma60_pct: 1.45, vs_ma200_pct: 4.48, trend: '多头排列' },
       ],
     },
   })
@@ -231,6 +236,14 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   assert.match(withCtx, /跑输 -0\.08% pp/)
   // Per-row 超额 column present
   assert.match(withCtx, /超额\(pp\)/)
+  // 你 vs 基准 risk-adjusted comparison block — Sharpe + Calmar side-by-side + diff.
+  // bot since_inception: ret 0.02 / mdd -0.05 / vol 0.18 / sharpe 0.0033 / calmar 0.4
+  // benchmark:          ret 0.10 / mdd -0.30 / vol 0.21 / sharpe 0.0050 / calmar 0.33
+  assert.match(withCtx, /你 vs 基准（since inception 区间口径，不年化，rf=1\.80% 年化；基准 = 沪深300）/)
+  assert.match(withCtx, /Sharpe\s+0\.0033\s+0\.0050\s+-0\.0017/)
+  assert.match(withCtx, /Calmar\s+0\.4000\s+0\.3300\s+\+0\.0700/)
+  assert.match(withCtx, /波动率%\s+0\.1800\s+0\.2100\s+-0\.0300/)
+  assert.match(withCtx, /样本数：你 2d ｜ 基准 2d/)
   // Performance summary block — every metric we have should be in there
   assert.match(withCtx, /整体绩效/)
   assert.match(withCtx, /累计收益 \+0\.02%/)
@@ -255,11 +268,15 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   assert.match(withCtx, /持仓基金近 20 交易日 NAV/)
   assert.match(withCtx, /近 1m \+1\.20%/)
   assert.match(withCtx, /近 3m \+3\.40%/)
-  // Index block
+  // Index block — 趋势标签 + 长均线锚先行，短均线退为情绪、只给 vs%
   assert.match(withCtx, /主要指数（5 个/)
   assert.match(withCtx, /000300\.SH/)
-  assert.match(withCtx, /MA5 3490/)
-  assert.match(withCtx, /MA20 3470/)
+  assert.match(withCtx, /【多头排列】/)
+  assert.match(withCtx, /趋势锚（判方向看这个）/)
+  assert.match(withCtx, /MA60 3450/)
+  assert.match(withCtx, /MA200 3350/)
+  assert.match(withCtx, /短期情绪（非趋势扳机）/)
+  assert.match(withCtx, /vs MA5 \+0\.29%/)
   rmSync(w, { recursive: true, force: true })
 })
 
