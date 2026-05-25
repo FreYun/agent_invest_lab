@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { writeState, readState, type WorldState } from '../src/state.ts'
 import { pauseFile } from '../src/paths.ts'
-import { pickBenchmarkFund, allocateQuota } from '../src/backtest-dashboard/server.ts'
+import { pickBenchmarkFund, allocateQuota, selectRepresentative } from '../src/backtest-dashboard/server.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DB = join(HERE, '../../data/fund.db')
@@ -233,4 +233,26 @@ test('allocateQuota: 候选总量不足时不超总可用', () => {
   const q = allocateQuota(new Map([['A', 4], ['B', 4]]), 10)
   assert.equal(q.get('A'), 4)
   assert.equal(q.get('B'), 4)
+})
+
+test('selectRepresentative: quota>=n 全取', () => {
+  const arr = [1, 2, 3]
+  assert.deepEqual(selectRepresentative(arr, 5), [1, 2, 3])
+})
+
+test('selectRepresentative: 覆盖最差/最好/中位,去重,且为输入子集', () => {
+  const arr = Array.from({ length: 20 }, (_, i) => i)  // 升序 0..19
+  const picked = selectRepresentative(arr, 10)
+  assert.equal(picked.length, 10)
+  assert.ok(picked.includes(0), '含最差(0)')
+  assert.ok(picked.includes(19), '含最好(19)')
+  assert.ok(picked.includes(10), '含中位(round(0.5*19))')
+  assert.equal(new Set(picked).size, picked.length, '无重复')
+  for (const v of picked) assert.ok(arr.includes(v), '是输入子集')
+  for (let i = 1; i < picked.length; i++) assert.ok(picked[i] > picked[i - 1])
+})
+
+test('selectRepresentative: quota<=0 或空输入 → 空', () => {
+  assert.deepEqual(selectRepresentative([1, 2, 3], 0), [])
+  assert.deepEqual(selectRepresentative([], 5), [])
 })
