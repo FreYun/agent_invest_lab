@@ -4,7 +4,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from ingest_user_data import classify, reconstruct_curve
+from ingest_user_data import classify, reconstruct_curve, _read_csv, _group_cycles
 
 
 def test_classify_buy():
@@ -112,3 +112,33 @@ def test_reconstruct_empty_when_no_nav_in_window():
     series, method = reconstruct_curve([_buy("d1", 100.0, 100.0)], {}, "d1", "d2", 0.1)
     assert series == []
     assert method == "empty"
+
+
+def test_group_cycles(tmp_path):
+    csv_text = (
+        "#,FundCode,Customerno,id,StartDate,EndDate,ClearReturn2,BigLossRate,BigProfitRate,"
+        "C_BUSINTYPE,C_BUSINNAME,C_CFMAMOUNT,C_CFMVOL,C_TRANSACTIONDATE\n"
+        "1,012894,cust1,cycA,2025-01-02,2025-06-30,0.05,-0.04,0.16,122,申购确认,100.0,100.0,2025-01-02\n"
+        "2,012894,cust1,cycA,2025-01-02,2025-06-30,0.05,-0.04,0.16,124,赎回确认,60.0,50.0,2025-03-10\n"
+        "3,000051,cust2,cycB,2025-02-01,2025-07-01,0.20,,,139,定时定额投资确认,50.0,40.0,2025-02-01\n"
+    )
+    p = tmp_path / "mini.csv"
+    p.write_text(csv_text, encoding="utf-8")
+
+    cycles = _group_cycles(_read_csv(str(p)))
+    assert set(cycles.keys()) == {"cycA", "cycB"}
+
+    a = cycles["cycA"]
+    assert a.fund_code == "012894"
+    assert a.customerno == "cust1"
+    assert a.start_date == "2025-01-02"
+    assert a.end_date == "2025-06-30"
+    assert abs(a.clear_return2 - 0.05) < 1e-9
+    assert len(a.txns) == 2
+    assert a.txns[0]["busin_name"] == "申购确认"
+    assert abs(a.txns[1]["vol"] - 50.0) < 1e-9
+
+    b = cycles["cycB"]
+    assert b.fund_code == "000051"
+    assert b.big_loss_rate is None   # empty cell → None
+    assert len(b.txns) == 1

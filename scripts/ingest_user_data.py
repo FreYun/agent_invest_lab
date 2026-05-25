@@ -107,3 +107,64 @@ def reconstruct_curve(txns, nav_by_date, start_date, end_date, clear_return2):
     shift = c - roi_end
     series = [{"trade_date": d, "net_value": 1.0 + roi + shift} for d, roi in raw]
     return series, "shift"
+
+
+@dataclass
+class Cycle:
+    cycle_id: str
+    fund_code: str
+    customerno: str
+    start_date: str
+    end_date: str
+    clear_return2: float
+    big_loss_rate: float | None
+    big_profit_rate: float | None
+    txns: list = field(default_factory=list)
+
+
+def _to_float(v) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _to_float_or_none(v):
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_csv(path):
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _group_cycles(rows):
+    cycles: dict[str, Cycle] = {}
+    for r in rows:
+        cid = r["id"]
+        c = cycles.get(cid)
+        if c is None:
+            c = Cycle(
+                cycle_id=cid,
+                fund_code=r["FundCode"],
+                customerno=r.get("Customerno", ""),
+                start_date=r["StartDate"],
+                end_date=r["EndDate"],
+                clear_return2=_to_float(r.get("ClearReturn2")),
+                big_loss_rate=_to_float_or_none(r.get("BigLossRate")),
+                big_profit_rate=_to_float_or_none(r.get("BigProfitRate")),
+            )
+            cycles[cid] = c
+        c.txns.append({
+            "busin_type": r.get("C_BUSINTYPE", ""),
+            "busin_name": r.get("C_BUSINNAME", ""),
+            "amount": _to_float(r.get("C_CFMAMOUNT")),
+            "vol": _to_float(r.get("C_CFMVOL")),
+            "txn_date": r.get("C_TRANSACTIONDATE", ""),
+        })
+    return cycles
