@@ -6,8 +6,8 @@ export interface DailyMessageContext {
   isFirstDay: boolean
   quotesPath: string        // 绝对路径，保留 forward-compat（未来 quotes-MCP 可能按路径暴露）
   journalRelPath: string    // 同上
-  // 本轮 user 选定的可买基金白名单。day-1 prompt 显式播报；后续日由 bot 自行用
-  // portfolio_get_buyable_funds 取（也会被 server 端按同一份 curated 收窄）。
+  // 本轮 user 选定的可买基金白名单。每天都显式播报（含仓位调整指引：单只 → 纯单指数
+  // 择时，多只 → 可在池内配置/轮动）；server 端 place_buy_order 也按同一份 curated 校验。
   buyableFundCodes?: string[]
   // simworld-data 的全部工具（name + 一句话描述）。每天都注入，bot 看到全貌再
   // 决定 discover_tools 拉哪几个，避免"只看行情不研究"。空数组 → 跳过该 block。
@@ -107,15 +107,20 @@ function simworldToolsBlock(tools: { name: string; description: string }[]): str
 ${lines}`
 }
 
-// Day-1 显式播报本轮可买基金清单：bot 不必自己 portfolio_get_buyable_funds，
-// 也不会迷信"我能买任何 fund_code"——server 端 place_buy_order 同样按这份 curated 校验。
+// 每天都显式播报本轮可买池 + 仓位调整指引：单只 → 纯单指数择时（只调仓位高低，无标的轮动），
+// 多只 → 可在池内配置 / 轮动。bot 不必自己 portfolio_get_buyable_funds，也不会迷信"我能买
+// 任何 fund_code"——server 端 place_buy_order 同样按这份 curated 校验。
 function buyableFundsBlock(codes: string[]): string {
+  const guidance = codes.length === 1
+    ? `可买池只有 1 只 —— 你只做这一只的单指数择时：决策就是调整它的仓位高低（空仓 ↔ 满仓之间），没有标的轮动。`
+    : `你可以在可买池内进行仓位调整：既能调整总仓位高低，也能在这 ${codes.length} 只之间配置 / 轮动。`
   return `
 
-【本次指定投资标的（${codes.length} 只，具体如下）】
+【当前可买池（${codes.length} 只）】
 ${codes.join(', ')}
 
-下单时 fund_code 必须从这份里选；不在这份里的 fund_code 会被 portfolio_place_buy_order 直接拒。后续日想确认这份还在不在，可以再调一次 portfolio_get_buyable_funds。`
+${guidance}
+下单时 fund_code 必须从这份里选；不在这份里的会被 portfolio_place_buy_order 直接拒。`
 }
 
 // ============================================================================
@@ -215,6 +220,53 @@ ${header}
 ${rows.join('\n')}`
 }
 
+// 你 vs 基准 的 since-inception 风险调整对比（Sharpe / Calmar / 回撤 / 波动）。
+// pnlTrendBlock 已经给了累计收益的逐日对比和 verdict；这一块补上风险调整维度——只看累计
+// 收益会奖励"高波动赌对方向"，Sharpe/Calmar 才看出是不是靠运气。两边口径完全一致：
+// bot 取 interval since_inception 行（perf CLI 算，rf=1.8%/252，不年化），基准用同口径在
+// daily-context 里现算（见 computeBenchmarkMetrics）。任一缺失就跳过整块。
+function benchmarkComparisonBlock(perf: PerformanceData | undefined, benchmark: BenchmarkSeries | undefined): string {
+  const m = benchmark?.metrics
+  if (!m) return ''
+  const botRow = perf?.intervals?.rows.find(r => r.period === 'since_inception')
+  if (!botRow) return ''
+
+  const fmtSigned = (n: number, digits = 4): string => {
+    if (!Number.isFinite(n)) return 'n/a'
+    const sign = n > 0 ? '+' : ''
+    return `${sign}${n.toFixed(digits)}`
+  }
+  // value: pct 类带符号(%)，ratio/vol 类纯量；diff: 一律带符号
+  const lineP = (label: string, you: number | null | undefined, bench: number | null | undefined): string => {
+    const yv = you == null || !Number.isFinite(you) ? 'n/a' : fmtPct(you)
+    const bv = bench == null || !Number.isFinite(bench) ? 'n/a' : fmtPct(bench)
+    const d = you == null || bench == null || !Number.isFinite(you) || !Number.isFinite(bench) ? null : you - bench
+    const dv = d == null ? 'n/a' : fmtPct(d)
+    return `  ${label.padEnd(8)} ${yv.padStart(9)}  ${bv.padStart(9)}  ${dv.padStart(9)}`
+  }
+  const lineR = (label: string, you: number | null | undefined, bench: number | null | undefined, digits = 4): string => {
+    const yv = you == null || !Number.isFinite(you) ? 'n/a' : you.toFixed(digits)
+    const bv = bench == null || !Number.isFinite(bench) ? 'n/a' : bench.toFixed(digits)
+    const d = you == null || bench == null || !Number.isFinite(you) || !Number.isFinite(bench) ? null : you - bench
+    const dv = d == null ? 'n/a' : fmtSigned(d, digits)
+    return `  ${label.padEnd(8)} ${yv.padStart(9)}  ${bv.padStart(9)}  ${dv.padStart(9)}`
+  }
+
+  const lines: string[] = [
+    `  ${'指标'.padEnd(8)} ${'你'.padStart(9)}  ${'基准'.padStart(9)}  ${'差(你-基准)'.padStart(9)}`,
+    lineP('累计收益%', botRow.return_pct, m.return_pct),
+    lineP('最大回撤%', botRow.max_drawdown_pct, m.max_drawdown_pct),
+    lineR('波动率%', botRow.volatility_pct, m.volatility_pct),
+    lineR('Sharpe', botRow.sharpe_ratio, m.sharpe_ratio),
+    lineR('Calmar', botRow.calmar_ratio, m.calmar_ratio),
+    `  样本数：你 ${botRow.data_points}d ｜ 基准 ${m.data_points}d`,
+  ]
+  return `
+
+【你 vs 基准（since inception 区间口径，不年化，rf=1.80% 年化；基准 = ${benchmark!.name}）】Sharpe 越高=单位波动赚得越多；Calmar 越高=单位回撤赚得越多。只赢累计收益但 Sharpe/Calmar 跑输 = 靠加波动博来的，不算真本事。
+${lines.join('\n')}`
+}
+
 function fundSeriesBlock(series: FundSeries[]): string {
   if (series.length === 0) return ''
   const parts: string[] = []
@@ -290,14 +342,25 @@ ${lineRows.join('\n')}`
 function indexBlock(indices: IndexQuote[]): string {
   if (indices.length === 0) return ''
   const rows = indices.map(i => {
-    const trendVsMa5 = i.vs_ma5_pct === null ? '' : `vs MA5 ${fmtPct(i.vs_ma5_pct)}`
-    const trendVsMa20 = i.vs_ma20_pct === null ? '' : `vs MA20 ${fmtPct(i.vs_ma20_pct)}`
-    const trend = [trendVsMa5, trendVsMa20].filter(Boolean).join(' ｜ ')
-    return `  ${i.code} ${i.name}：${i.latest_date} 收 ${fmtNum(i.latest_close, 2)} ｜ MA5 ${fmtNum(i.ma5, 2)} ｜ MA20 ${fmtNum(i.ma20, 2)}${trend ? ' ｜ ' + trend : ''}`
+    // 长趋势锚先行：趋势标签 + vs MA60/200。这是判方向该看的尺度。
+    const trendTag = i.trend ? `【${i.trend}】` : ''
+    const longParts = [
+      `MA60 ${fmtNum(i.ma60, 2)}`,
+      `MA120 ${fmtNum(i.ma120, 2)}`,
+      `MA200 ${fmtNum(i.ma200, 2)}`,
+      i.vs_ma60_pct === null ? '' : `vs MA60 ${fmtPct(i.vs_ma60_pct)}`,
+      i.vs_ma200_pct === null ? '' : `vs MA200 ${fmtPct(i.vs_ma200_pct)}`,
+    ].filter(Boolean).join(' ｜ ')
+    // 短均线退到末尾，明确标注为"短期情绪、非趋势扳机"。
+    const shortParts = [
+      i.vs_ma5_pct === null ? '' : `vs MA5 ${fmtPct(i.vs_ma5_pct)}`,
+      i.vs_ma20_pct === null ? '' : `vs MA20 ${fmtPct(i.vs_ma20_pct)}`,
+    ].filter(Boolean).join(' ｜ ')
+    return `  ${i.code} ${i.name}：${i.latest_date} 收 ${fmtNum(i.latest_close, 2)} ${trendTag}\n      趋势锚（判方向看这个）：${longParts}\n      短期情绪（非趋势扳机）：${shortParts}`
   })
   return `
 
-【主要指数（5 个，latest close + MA5/MA20）】
+【主要指数（5 个）｜ 趋势看长均线 MA60/120/200，MA5/MA20 只是短期情绪，别拿它单独翻仓】
 ${rows.join('\n')}`
 }
 
@@ -349,6 +412,7 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
     parts.push(intervalMetricsBlock(dc.performance.intervals.rows, dc.performance.intervals.as_of_perf_date, dc.performance.intervals.rf_annual_pct))
   }
   if (dc.pnlTrend && dc.pnlTrend.length) parts.push(pnlTrendBlock(dc.pnlTrend, dc.benchmark))
+  parts.push(benchmarkComparisonBlock(dc.performance, dc.benchmark))
   if (dc.fundSeries && dc.fundSeries.length) parts.push(fundSeriesBlock(dc.fundSeries))
   if (dc.indices && dc.indices.length) parts.push(indexBlock(dc.indices))
   if (dc.fundFees && dc.fundFees.length) parts.push(tradingFeesBlock(dc.fundFees))
@@ -361,7 +425,7 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
 // Day N 只一行 reminder。
 const METHODOLOGY_DAY1_HINT = `
 
-【你的 methodology 已就位】你的 system prompt 里的 \`## METHODOLOGY.md\` section 就是你的投资框架——今天直接按它决策、下单。
+【你的 methodology 已就位】你的 system prompt 里的 \`## METHODOLOGY.md\` section 就是你的投资框架。
 
 如果跑了一段时间发现 methodology 哪里失效 / 有漏洞，可以调 \`update_my_strategy(bot_id, strategy, reason)\` 工具完整重写 METHODOLOGY.md（不是 diff，是完整新版本）。reason 写清为什么改（会进审计日志）。修改下一交易日的 system prompt 生效。不轻易改——但发现 thesis 失效或风控漏洞，该改就改。`
 
@@ -374,13 +438,14 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const weekday = weekdayOf(ctx.date)
   const toolsBlock = simworldToolsBlock(ctx.simworldTools ?? [])
   const contextBlocks = dailyContextBlocks(ctx.dailyContext)
+  // 可买池每天都播报（含单只→纯择时 / 多只→池内轮动 的仓位调整指引），不再只 Day 1 播一次。
+  const buyable = ctx.buyableFundCodes && ctx.buyableFundCodes.length ? buyableFundsBlock(ctx.buyableFundCodes) : ''
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 工具/可买池/预取上下文 + methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    const buyable = ctx.buyableFundCodes && ctx.buyableFundCodes.length ? buyableFundsBlock(ctx.buyableFundCodes) : ''
     return `${fullRules(ctx.date, weekday, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
   }
-  // Day N：briefRules + 工具/数据 + methodology 短提示 + FOOTER_BRIEF（termination contract）。
+  // Day N：briefRules + 工具/可买池/数据 + methodology 短提示 + FOOTER_BRIEF（termination contract）。
   // FOOTER_BRIEF 的"列了 todo 就要做 + 结束前 mem0_add"对所有 bot 都适用。
-  return `${briefRules(ctx.date, weekday)}${toolsBlock}${contextBlocks}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
+  return `${briefRules(ctx.date, weekday)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
 }
