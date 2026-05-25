@@ -718,8 +718,10 @@ export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
   // 清掉可能残留的 STOP / PAUSE 哨兵（否则 resume 会立刻被它中止/暂停）
   rmSync(P.stopFile(worldRoot, runId), { force: true })
   rmSync(P.pauseFile(worldRoot, runId), { force: true })
-  // setup（重启记忆服务、重建/复用影子 workspace、重起 bot server），但 trading_dates 取自 state
-  const setupRes = await setup({ worldRoot, config, runId, startBotServer: opts.startBotServer })
+  // resume = 续跑既有账户，setup 的 init_fund_account 绝不能带 --reset：force=true 会清掉
+  // 本 run 的 holdings/actions/snapshots 并把现金重置成初始资金，等于把续跑变成"从断点重开"。
+  // 强制 fundInitReset=false（无视 yaml），让 init 对已存在账户走 no-op，账本原样保留。
+  const setupRes = await setup({ worldRoot, config: { ...config, fundInitReset: false }, runId, startBotServer: opts.startBotServer })
   // 若 calendar/replay 变了导致交易日序列对不上，拒绝
   if (setupRes.tradingDates.length !== state.trading_dates.length || setupRes.tradingDates[0] !== state.trading_dates[0] || setupRes.tradingDates[setupRes.tradingDates.length - 1] !== state.trading_dates[state.trading_dates.length - 1]) {
     for (const b of setupRes.bots) { try { await b.server.shutdown({ timeoutMs: 2000 }) } catch { /* ignore */ } }

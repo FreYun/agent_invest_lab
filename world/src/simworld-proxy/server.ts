@@ -230,14 +230,28 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
   })
   const port = (server.address() as AddressInfo).port
 
-  // One-shot upstream tools/list probe at startup so daily prompts can list
-  // every simworld-data tool. Best-effort: on failure bot still has the
-  // discover_tools fallback hint in the prompt.
-  const tools = await probeUpstreamTools(opts.upstreamUrl).catch(err => {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`simworld-proxy: tools/list probe failed (${msg}); daily prompt will omit tool list\n`)
-    return [] as SimworldToolSummary[]
-  })
+  // Upstream tools/list probe at startup so daily prompts can list every
+  // simworld-data tool. Retries a few times: when several runs boot at once the
+  // upstream can transiently drop the probe connection ("fetch failed"), and an
+  // empty list sticks for the proxy's whole life → the bot wastes its 200s budget
+  // on discover_tools and times out with no real decision. Still best-effort:
+  // after all retries fail the bot has the discover_tools fallback hint.
+  let tools: SimworldToolSummary[] = []
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      tools = await probeUpstreamTools(opts.upstreamUrl)
+      if (tools.length > 0) break
+      throw new Error('tools/list returned empty')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (attempt === 4) {
+        process.stderr.write(`simworld-proxy: tools/list probe failed after ${attempt} attempts (${msg}); daily prompt will omit tool list\n`)
+      } else {
+        process.stderr.write(`simworld-proxy: tools/list probe attempt ${attempt} failed (${msg}); retrying in ${attempt}s\n`)
+        await new Promise(r => setTimeout(r, attempt * 1000))
+      }
+    }
+  }
 
   return {
     port,

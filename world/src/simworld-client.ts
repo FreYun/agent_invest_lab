@@ -34,7 +34,15 @@ function parseJsonOrSse(text: string): unknown {
 /** Open a session, call one tool, tear down. The tool result's first text
  *  content block is returned as already-parsed JSON (every simworld-data tool
  *  we use returns JSON in a text block). Returns null on transport error or
- *  if the upstream wraps an `error` envelope. */
+ *  if the upstream wraps an `error` envelope.
+ *
+ *  Session model mirrors simworld-proxy/server.ts:probeUpstreamTools — the
+ *  streamable-HTTP `initialize` MAY return an `mcp-session-id` header. simworld-
+ *  data runs FastMCP in stateless mode (uvicorn) and returns NO sid; a stateful
+ *  upstream would. We accept either: carry the sid on subsequent calls + DELETE
+ *  it at the end when present, otherwise proceed header-less (stateless). The
+ *  old code hard-threw on a missing sid, which silently nulled out every world-
+ *  side prefetch (indices + benchmark) for the entire run. */
 export async function callSimworldTool(
   upstreamUrl: string,
   toolName: string,
@@ -53,14 +61,18 @@ export async function callSimworldTool(
   if (!initResp.ok) throw new Error(`simworld init HTTP ${initResp.status}`)
   const sid = initResp.headers.get('mcp-session-id')
   await initResp.text()
-  if (!sid) throw new Error('simworld init: no mcp-session-id')
-  const sessionHeaders = { ...baseHeaders, 'mcp-session-id': sid }
+  const sessionHeaders: Record<string, string> = { ...baseHeaders }
+  if (sid) sessionHeaders['mcp-session-id'] = sid
 
   try {
-    await fetch(upstreamUrl, {
-      method: 'POST', headers: sessionHeaders, signal: abort,
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }),
-    }).then(r => r.text())
+    // Stateful upstream expects the initialized notification before tool calls;
+    // stateless has no session to acknowledge, so skip it (matches the proxy).
+    if (sid) {
+      await fetch(upstreamUrl, {
+        method: 'POST', headers: sessionHeaders, signal: abort,
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }),
+      }).then(r => r.text())
+    }
 
     const callResp = await fetch(upstreamUrl, {
       method: 'POST', headers: sessionHeaders, signal: abort,
@@ -76,7 +88,8 @@ export async function callSimworldTool(
     if (!textBlock?.text) return null
     try { return JSON.parse(textBlock.text) } catch { return textBlock.text }
   } finally {
-    // Best-effort session teardown so upstream doesn't accumulate dangling sessions.
-    fetch(upstreamUrl, { method: 'DELETE', headers: sessionHeaders }).catch(() => { /* ignore */ })
+    // Best-effort session teardown so a stateful upstream doesn't accumulate
+    // dangling sessions. Stateless upstream has no session → nothing to DELETE.
+    if (sid) fetch(upstreamUrl, { method: 'DELETE', headers: sessionHeaders }).catch(() => { /* ignore */ })
   }
 }
