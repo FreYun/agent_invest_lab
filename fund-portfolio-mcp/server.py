@@ -115,6 +115,19 @@ def _require_run_id(run_id: str) -> str | None:
     return None
 
 
+def _require_reason(reason: str, action: str) -> str | None:
+    """买/卖单必须带 reason——每笔交易要留下决策理由（进审计日志，供日后复盘）。
+    bot 偶尔忘传，这里硬拦：缺失直接报错让它补写。返回错误 JSON 串，None 表示通过。
+    action 是动作词（"买入"/"卖出"），拼进提示让 bot 知道该补什么。"""
+    if not reason or not isinstance(reason, str) or not reason.strip():
+        return json.dumps({
+            "success": False,
+            "message": f"reason 缺失：{action}必须写明理由（为什么现在{action}这只基金），"
+                       f"再带上 reason 重新下单。每笔交易的 reason 会进审计日志供复盘。",
+        }, ensure_ascii=False)
+    return None
+
+
 # Per-run 可买基金白名单：world 每轮 replay 在 setup 时写一份 JSON 到
 # <FUND_BUYABLE_CODES_DIR>/<run_id>.json，本进程每次相关 tool call 时按 run_id 读对应文件
 # （不缓存——文件随 world 切换 run 而变；现在按 run 物理隔离，并发不再互相覆盖）。
@@ -1465,10 +1478,14 @@ async def portfolio_place_buy_order(
       - fund_code 必须在 fund_info
       - trade_date 必须在 fund_nav 有 nav 行（缺失直接报错，外部 loop 自己保数据齐）
       - amount > 0 且 ≤ accounts.cash（available，不含 in_transit）
+      - reason 必填：写明为什么现在买这只基金（缺失直接报错让你补写，进审计日志）
 
     返回 JSON 带 order_id / reference_nav / estimated_fee / estimated_shares / cash_after。
     """
     err = _require_run_id(run_id)
+    if err:
+        return err
+    err = _require_reason(reason, "买入")
     if err:
         return err
     if amount <= 0:
@@ -1562,10 +1579,14 @@ async def portfolio_place_sell_order(
       - 账户存在；持仓存在且 active
       - shares > 0 且 ≤ holding.shares（新机制 shares 实时反映可卖额，pending_sell_shares 保持 0）
       - trade_date 在 fund_nav 有 nav
+      - reason 必填：写明为什么现在卖这只基金（缺失直接报错让你补写，进审计日志）
 
     pending_sell_shares 字段保留只是兼容存量旧路径订单，新订单不再用份额冻结。
     """
     err = _require_run_id(run_id)
+    if err:
+        return err
+    err = _require_reason(reason, "卖出")
     if err:
         return err
     if shares <= 0:
