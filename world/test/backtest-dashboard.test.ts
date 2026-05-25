@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { writeState, readState, type WorldState } from '../src/state.ts'
 import { pauseFile } from '../src/paths.ts'
-import { pickBenchmarkFund } from '../src/backtest-dashboard/server.ts'
+import { pickBenchmarkFund, allocateQuota } from '../src/backtest-dashboard/server.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DB = join(HERE, '../../data/fund.db')
@@ -209,4 +209,28 @@ test('pickBenchmarkFund: 无 buy 时退到首个持仓', () => {
 
 test('pickBenchmarkFund: 未建仓退到默认指数沪深300', () => {
   assert.equal(pickBenchmarkFund([] as never[], [] as never[]), '510300')
+})
+
+test('allocateQuota: 单池上限封顶到候选数', () => {
+  const q = allocateQuota(new Map([['A', 12]]), 10)
+  assert.equal(q.get('A'), 10)
+})
+
+test('allocateQuota: 双池平均分', () => {
+  const q = allocateQuota(new Map([['A', 20], ['B', 20]]), 10)
+  assert.equal(q.get('A'), 5)
+  assert.equal(q.get('B'), 5)
+})
+
+test('allocateQuota: 余数给候选更多的池,且不超可用', () => {
+  const q = allocateQuota(new Map([['A', 3], ['B', 20]]), 10)
+  assert.equal(q.get('A'), 3)            // capped by availability
+  assert.equal(q.get('B'), 7)            // base 5 + remainder 2
+  assert.equal(q.get('A')! + q.get('B')!, 10)
+})
+
+test('allocateQuota: 候选总量不足时不超总可用', () => {
+  const q = allocateQuota(new Map([['A', 4], ['B', 4]]), 10)
+  assert.equal(q.get('A'), 4)
+  assert.equal(q.get('B'), 4)
 })
