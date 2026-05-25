@@ -234,6 +234,21 @@ export function allocateQuota(poolSizes: Map<string, number>, total: number): Ma
   return alloc
 }
 
+/** 在按 clear_return2 升序的候选里挑 quota 个代表：先锚定 最差/最好/中位/p25/p75,
+ *  再按均匀分布补足,去重,返回保持升序的子集。 */
+export function selectRepresentative<T>(sortedAsc: T[], quota: number): T[] {
+  const n = sortedAsc.length
+  if (quota <= 0 || n === 0) return []
+  if (quota >= n) return [...sortedAsc]
+  const idxAt = (frac: number) => Math.round(frac * (n - 1))
+  const picks: number[] = []
+  const take = (i: number) => { if (picks.length < quota && !picks.includes(i)) picks.push(i) }
+  for (const a of [0, 1, 0.5, 0.25, 0.75]) take(idxAt(a))   // 代表性锚点
+  for (let s = 0; picks.length < quota && s < n * 2; s++) take(idxAt(s / Math.max(1, quota - 1)))
+  for (let i = 0; picks.length < quota && i < n; i++) take(i)  // 兜底填满
+  return picks.sort((a, b) => a - b).map(i => sortedAsc[i])
+}
+
 // 未建仓 bot 没有首买基金时,用沪深300(510300 沪深300ETF华泰柏瑞)作默认参照,
 // 这样任何 bot 都至少有一条参照曲线。
 const DEFAULT_BENCHMARK_FUND = '510300'
