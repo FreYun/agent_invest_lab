@@ -262,48 +262,189 @@ def backfill_synthetic_lots(conn: sqlite3.Connection) -> tuple[int, list[str]]:
 
 
 def check_invariants(conn: sqlite3.Connection) -> list[str]:
-    """Compare sum(open lot.shares/cost) to fund_bot_holdings.shares/amount_invested."""
+    """Compare open-lot sums to active-holding sums at (bot, fund, run) granularity.
+
+    The lots runtime (_consume_lots_fifo) consumes by (bot, fund, run), NOT per
+    holding_id, so the invariant that must hold is the GROUP aggregate:
+        SUM(open lot.shares) for (bot,fund,run) == SUM(active holdings.shares)
+    Comparing per individual holding gives false positives when a (bot,fund,run)
+    group legitimately has more than one active holdings row.
+
+    Tolerances are relative: float-stored shares drift by ~1e-3, and the holdings
+    cost column is 2-decimal, so we scale the threshold with the magnitude.
+    """
     warnings: list[str] = []
-    rows = conn.execute(
-        "SELECT h.holding_id, h.bot_id, h.fund_code, COALESCE(h.run_id,'') AS run_id, "
-        "       h.shares, h.amount_invested, h.entry_date, "
-        "       (SELECT COALESCE(SUM(shares_remaining), 0) "
-        "          FROM fund_bot_holding_lots l "
-        "         WHERE l.bot_id=h.bot_id AND l.fund_code=h.fund_code "
-        "           AND l.run_id=COALESCE(h.run_id,'') AND l.status='open') AS lot_shares, "
-        "       (SELECT COALESCE(SUM(cost_remaining), 0) "
-        "          FROM fund_bot_holding_lots l "
-        "         WHERE l.bot_id=h.bot_id AND l.fund_code=h.fund_code "
-        "           AND l.run_id=COALESCE(h.run_id,'') AND l.status='open') AS lot_cost, "
-        "       (SELECT MIN(entry_date) "
-        "          FROM fund_bot_holding_lots l "
-        "         WHERE l.bot_id=h.bot_id AND l.fund_code=h.fund_code "
-        "           AND l.run_id=COALESCE(h.run_id,'') AND l.status='open') AS lot_entry "
-        "FROM fund_bot_holdings h "
-        "WHERE h.status='active'"
+
+    # Aggregate active holdings by (bot, fund, run).
+    hold_rows = conn.execute(
+        "SELECT bot_id, fund_code, COALESCE(run_id,'') AS run_id, "
+        "       COUNT(*) AS n_active, "
+        "       COALESCE(SUM(shares), 0) AS h_shares, "
+        "       COALESCE(SUM(amount_invested), 0) AS h_cost, "
+        "       MIN(entry_date) AS h_entry "
+        "FROM fund_bot_holdings WHERE status='active' "
+        "GROUP BY bot_id, fund_code, COALESCE(run_id,'')"
     ).fetchall()
-    for r in rows:
-        hid, bot, fund, rid, h_shares, h_cost, h_entry, lot_shares, lot_cost, lot_entry = r
+
+    # Aggregate open lots by (bot, fund, run) into a lookup.
+    lot_rows = conn.execute(
+        "SELECT bot_id, fund_code, run_id, "
+        "       COALESCE(SUM(shares_remaining), 0) AS lot_shares, "
+        "       COALESCE(SUM(cost_remaining), 0) AS lot_cost, "
+        "       MIN(entry_date) AS lot_entry "
+        "FROM fund_bot_holding_lots WHERE status='open' "
+        "GROUP BY bot_id, fund_code, run_id"
+    ).fetchall()
+    lots_by_key = {
+        (r[0], r[1], r[2]): (float(r[3] or 0.0), float(r[4] or 0.0), r[5])
+        for r in lot_rows
+    }
+
+    for bot, fund, rid, n_active, h_shares, h_cost, h_entry in hold_rows:
         h_shares = float(h_shares or 0.0)
         h_cost = float(h_cost or 0.0)
-        lot_shares = float(lot_shares or 0.0)
-        lot_cost = float(lot_cost or 0.0)
-        if abs(h_shares - lot_shares) > TOLERANCE_SHARES:
+        lot_shares, lot_cost, lot_entry = lots_by_key.get((bot, fund, rid), (0.0, 0.0, None))
+
+        tag = f"({bot}/{fund}/run={rid})"
+        if n_active > 1:
+            tag += f" [{n_active} active holdings rows — pre-existing duplicate]"
+
+        share_tol = max(TOLERANCE_SHARES, 1e-6 * h_shares)
+        cost_tol = max(1.0, 1e-3 * h_cost)
+        if abs(h_shares - lot_shares) > share_tol:
             warnings.append(
-                f"holding_id={hid} ({bot}/{fund}/run={rid}) shares mismatch: "
-                f"holdings={h_shares:.4f} lots_sum={lot_shares:.4f}"
+                f"{tag} shares mismatch: holdings_sum={h_shares:.4f} "
+                f"lots_sum={lot_shares:.4f} (diff {h_shares - lot_shares:+.4f})"
             )
-        if abs(h_cost - lot_cost) > TOLERANCE_COST:
+        if abs(h_cost - lot_cost) > cost_tol:
             warnings.append(
-                f"holding_id={hid} ({bot}/{fund}/run={rid}) cost mismatch: "
-                f"holdings.amount_invested={h_cost:.2f} lots_sum={lot_cost:.2f}"
+                f"{tag} cost mismatch: holdings_sum={h_cost:.2f} "
+                f"lots_sum={lot_cost:.2f} (diff {h_cost - lot_cost:+.2f})"
             )
         if lot_entry and h_entry and lot_entry != h_entry:
             warnings.append(
-                f"holding_id={hid} ({bot}/{fund}/run={rid}) entry_date drift: "
-                f"holdings={h_entry} oldest_open_lot={lot_entry}"
+                f"{tag} entry_date drift: holdings_min={h_entry} "
+                f"oldest_open_lot={lot_entry} (cosmetic — lots carry own entry_date)"
             )
     return warnings
+
+
+def close_orphan_lots(conn: sqlite3.Connection) -> tuple[int, list[str]]:
+    """Mark open lots as 'orphan' when their (bot, fund, run) has no active holding.
+
+    Action replay groups by actions.run_id, but the holdings table sometimes keys the
+    SAME logical position under a different run_id (the order_run_id / settle_run_id
+    split documented in server.py). That leaves open lots under run_ids that own no
+    active holding — stale residue the SELL path can never reach (no holding → no sell).
+
+    Active holdings are already fully covered by lots under their own run_id (the
+    invariant check passes), so these orphan lots are not needed by any live position.
+    We flip them to status='orphan' (excluded from FIFO, which only selects 'open')
+    rather than DELETE, so the replay record stays auditable.
+
+    Returns (count, summary_warnings).
+    """
+    rows = conn.execute(
+        "SELECT l.bot_id, l.fund_code, l.run_id, "
+        "       COUNT(*) AS n_lots, COALESCE(SUM(l.shares_remaining), 0) AS sh "
+        "FROM fund_bot_holding_lots l "
+        "WHERE l.status='open' AND NOT EXISTS ("
+        "   SELECT 1 FROM fund_bot_holdings h "
+        "    WHERE h.bot_id=l.bot_id AND h.fund_code=l.fund_code "
+        "      AND COALESCE(h.run_id,'')=l.run_id AND h.status='active') "
+        "GROUP BY l.bot_id, l.fund_code, l.run_id"
+    ).fetchall()
+    notes: list[str] = []
+    total = 0
+    for bot, fund, rid, n_lots, sh in rows:
+        conn.execute(
+            "UPDATE fund_bot_holding_lots SET status='orphan' "
+            "WHERE status='open' AND bot_id=? AND fund_code=? AND run_id=?",
+            (bot, fund, rid),
+        )
+        total += n_lots
+        notes.append(
+            f"orphaned {n_lots} open lots ({float(sh):.4f} shares) for "
+            f"{bot}/{fund}/run={rid or '<null>'} — no active holding under this run_id"
+        )
+    return total, notes
+
+
+def reconcile_holdings_to_fifo(conn: sqlite3.Connection) -> tuple[int, list[str]]:
+    """Overwrite active holdings' amount_invested / entry_date / unrealized_pnl to match
+    the FIFO open-lot sums (the new cost convention the user adopted).
+
+    Single-holding (bot,fund,run) groups reconcile at group granularity — this also
+    covers open lots whose holding_id is NULL. The lone multi-holding group reconciles
+    per holding_id (its lots all carry a holding_id, so the split is well-defined).
+
+    market_value / latest_nav are left untouched; unrealized_pnl is recomputed from the
+    existing market_value and the new cost so the row stays internally consistent.
+    """
+    notes: list[str] = []
+    updated = 0
+    groups = conn.execute(
+        "SELECT bot_id, fund_code, COALESCE(run_id,'') AS rid, COUNT(*) AS n, "
+        "       GROUP_CONCAT(holding_id) AS hids "
+        "FROM fund_bot_holdings WHERE status='active' "
+        "GROUP BY bot_id, fund_code, COALESCE(run_id,'')"
+    ).fetchall()
+
+    for bot, fund, rid, n, hids in groups:
+        if n == 1:
+            hid = int(hids)
+            row = conn.execute(
+                "SELECT COALESCE(SUM(cost_remaining), 0), MIN(entry_date) "
+                "FROM fund_bot_holding_lots "
+                "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open'",
+                (bot, fund, rid),
+            ).fetchone()
+            if _apply_reconcile(conn, hid, float(row[0] or 0.0), row[1], notes,
+                                bot, fund, rid):
+                updated += 1
+        else:
+            for hid_str in str(hids).split(","):
+                hid = int(hid_str)
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(cost_remaining), 0), MIN(entry_date) "
+                    "FROM fund_bot_holding_lots WHERE holding_id=? AND status='open'",
+                    (hid,),
+                ).fetchone()
+                if _apply_reconcile(conn, hid, float(row[0] or 0.0), row[1], notes,
+                                    bot, fund, rid):
+                    updated += 1
+    return updated, notes
+
+
+def _apply_reconcile(conn: sqlite3.Connection, holding_id: int, lot_cost: float,
+                     lot_entry: str | None, notes: list[str],
+                     bot: str, fund: str, rid: str) -> bool:
+    cur = conn.execute(
+        "SELECT amount_invested, entry_date, market_value "
+        "FROM fund_bot_holdings WHERE holding_id=?",
+        (holding_id,),
+    ).fetchone()
+    if cur is None:
+        return False
+    old_cost = float(cur[0] or 0.0)
+    old_entry = cur[1]
+    mv = float(cur[2] or 0.0)
+    new_cost = round(lot_cost, 2)
+    new_entry = lot_entry or old_entry
+    new_pnl = round(mv - new_cost, 2)
+    new_pnl_pct = round((mv - new_cost) / new_cost * 100, 4) if new_cost else 0.0
+    conn.execute(
+        "UPDATE fund_bot_holdings SET amount_invested=?, entry_date=?, "
+        "unrealized_pnl=?, unrealized_pnl_pct=? WHERE holding_id=?",
+        (new_cost, new_entry, new_pnl, new_pnl_pct, holding_id),
+    )
+    changed = abs(old_cost - new_cost) > 0.01 or (old_entry != new_entry)
+    if changed:
+        notes.append(
+            f"reconciled holding_id={holding_id} ({bot}/{fund}/run={rid}): "
+            f"cost {old_cost:.2f}->{new_cost:.2f} entry {old_entry}->{new_entry}"
+        )
+    return changed
 
 
 def main():
@@ -367,7 +508,20 @@ def main():
         print(f"Backfilled synthetic lots for {backfilled} holdings "
               f"(action ledger gaps).")
 
-        # Invariants run AFTER inserts + backfill so check sees the final table state.
+        # Neutralize open lots that belong to a (bot,fund,run) with no active holding
+        # (replay residue from the order_run_id/settle_run_id split). They become
+        # status='orphan' so FIFO never touches them.
+        orphaned, orphan_notes = close_orphan_lots(conn)
+        all_warnings.extend(orphan_notes)
+        print(f"Orphaned {orphaned} open lots with no active holding (run_id residue).")
+
+        # Reconcile active holdings' cost basis + entry_date to the FIFO open-lot sums
+        # (user chose 方案A: holdings adopt the FIFO convention immediately).
+        reconciled, reconcile_notes = reconcile_holdings_to_fifo(conn)
+        all_warnings.extend(reconcile_notes)
+        print(f"Reconciled {reconciled} active holdings to FIFO cost/entry_date.")
+
+        # Invariants run AFTER inserts + backfill + reconcile so check sees final state.
         inv_warnings = check_invariants(conn)
         all_warnings.extend(inv_warnings)
         if all_warnings:
