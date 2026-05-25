@@ -168,3 +168,124 @@ def _group_cycles(rows):
             "txn_date": r.get("C_TRANSACTIONDATE", ""),
         })
     return cycles
+
+
+_SCHEMA = """
+DROP TABLE IF EXISTS real_user_curves;
+DROP TABLE IF EXISTS real_user_txns;
+DROP TABLE IF EXISTS real_user_cycles;
+
+CREATE TABLE real_user_cycles (
+  cycle_id        TEXT PRIMARY KEY,
+  fund_code       TEXT NOT NULL,
+  customerno      TEXT,
+  start_date      TEXT NOT NULL,
+  end_date        TEXT NOT NULL,
+  clear_return2   REAL,
+  big_loss_rate   REAL,
+  big_profit_rate REAL
+);
+CREATE INDEX idx_ruc_fund ON real_user_cycles(fund_code);
+
+CREATE TABLE real_user_txns (
+  cycle_id    TEXT NOT NULL,
+  fund_code   TEXT NOT NULL,
+  busin_type  TEXT,
+  busin_name  TEXT NOT NULL,
+  amount      REAL,
+  vol         REAL,
+  txn_date    TEXT NOT NULL
+);
+CREATE INDEX idx_rut_cycle ON real_user_txns(cycle_id);
+
+CREATE TABLE real_user_curves (
+  cycle_id    TEXT NOT NULL,
+  trade_date  TEXT NOT NULL,
+  net_value   REAL NOT NULL,
+  PRIMARY KEY (cycle_id, trade_date)
+);
+"""
+
+
+def _default_db_path() -> str:
+    if os.environ.get("FUND_DB_PATH"):
+        return os.environ["FUND_DB_PATH"]
+    import db as db_mod
+    return db_mod.DB_PATH
+
+
+def _load_nav(conn, fund_codes):
+    """{fund_code: {nav_date: nav}} for the given funds (skips NULL nav)."""
+    nav: dict[str, dict[str, float]] = {}
+    codes = [c for c in fund_codes if c]
+    if not codes:
+        return nav
+    placeholders = ",".join("?" * len(codes))
+    cur = conn.execute(
+        f"SELECT fund_code, nav_date, nav FROM fund_nav "
+        f"WHERE fund_code IN ({placeholders}) AND nav IS NOT NULL",
+        codes,
+    )
+    for fund_code, nav_date, nav_val in cur:
+        nav.setdefault(fund_code, {})[nav_date] = float(nav_val)
+    return nav
+
+
+def ingest(csv_path, conn):
+    cycles = _group_cycles(_read_csv(csv_path))
+    nav = _load_nav(conn, {c.fund_code for c in cycles.values()})
+    conn.executescript(_SCHEMA)
+    stats = {"cycles": 0, "txns": 0, "curve_points": 0,
+             "scale": 0, "shift": 0, "empty": 0}
+    for c in cycles.values():
+        conn.execute(
+            "INSERT INTO real_user_cycles VALUES (?,?,?,?,?,?,?,?)",
+            (c.cycle_id, c.fund_code, c.customerno, c.start_date, c.end_date,
+             c.clear_return2, c.big_loss_rate, c.big_profit_rate),
+        )
+        stats["cycles"] += 1
+        for t in c.txns:
+            conn.execute(
+                "INSERT INTO real_user_txns VALUES (?,?,?,?,?,?,?)",
+                (c.cycle_id, c.fund_code, t["busin_type"], t["busin_name"],
+                 t["amount"], t["vol"], t["txn_date"]),
+            )
+            stats["txns"] += 1
+        series, method = reconstruct_curve(
+            c.txns, nav.get(c.fund_code, {}), c.start_date, c.end_date, c.clear_return2)
+        stats[method] += 1
+        for pt in series:
+            conn.execute(
+                "INSERT INTO real_user_curves VALUES (?,?,?)",
+                (c.cycle_id, pt["trade_date"], pt["net_value"]),
+            )
+            stats["curve_points"] += 1
+    conn.commit()
+    return stats
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--csv", default=os.path.join(HERE, "..", "data", "user", "Result_7.csv"))
+    ap.add_argument("--db", default=_default_db_path())
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args(argv)
+
+    if args.dry_run:
+        cycles = _group_cycles(_read_csv(args.csv))
+        funds = {c.fund_code for c in cycles.values()}
+        txns = sum(len(c.txns) for c in cycles.values())
+        print(f"[dry-run] cycles={len(cycles)} funds={len(funds)} txns={txns}")
+        return 0
+
+    conn = sqlite3.connect(args.db)
+    try:
+        stats = ingest(args.csv, conn)
+    finally:
+        conn.close()
+    print(f"ingested into {args.db}: {stats}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
