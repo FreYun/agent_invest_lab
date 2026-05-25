@@ -115,6 +115,13 @@ interface BotBenchmark {
   series: BenchmarkPoint[]
 }
 
+interface UserTxnMark {
+  date: string
+  side: 'buy' | 'sell'
+  amount: number
+  count: number
+}
+
 interface RealUserSeries {
   fundCode: string
   fundName: string
@@ -124,6 +131,7 @@ interface RealUserSeries {
   bigProfitRate: number | null
   txnCount: number
   series: { trade_date: string; net_value: number }[]
+  txns: UserTxnMark[]
 }
 
 interface BotDataset {
@@ -222,6 +230,39 @@ function classifyAction(actionType: string, finalDecision: string | null): 'buy'
 
 /** 每个 bot 最多展示的真实用户数。 */
 const MAX_REAL_USERS = 10
+
+/** 真实用户交易类型 → 买/卖/跳过。
+ *  买入: 139 定时定额投资, 122 申购; 卖出: 124 赎回, 142 强行赎回。
+ *  其余(129 分红设置 / 136,137 转换 / 126,127 转托管 / 1T1,1T2 账户转入转出)为中性, 不打点。 */
+export function classifyBusinType(businType: string): 'buy' | 'sell' | null {
+  if (businType === '139' || businType === '122') return 'buy'
+  if (businType === '124' || businType === '142') return 'sell'
+  return null
+}
+
+/** 把逐笔交易按 (cycle, 日期, 方向) 合并: amount 求和、count 计数, 中性交易丢弃。
+ *  返回 cycle_id -> 按日期(再按方向)升序的标记数组。 */
+export function mergeUserTxns(
+  rows: { cycle_id: string; busin_type: string; amount: number | null; txn_date: string }[],
+): Map<string, UserTxnMark[]> {
+  const byCycle = new Map<string, Map<string, UserTxnMark>>()
+  for (const r of rows) {
+    const side = classifyBusinType(r.busin_type)
+    if (!side) continue
+    let marks = byCycle.get(r.cycle_id)
+    if (!marks) { marks = new Map(); byCycle.set(r.cycle_id, marks) }
+    const key = `${r.txn_date}|${side}`
+    const cur = marks.get(key)
+    if (cur) { cur.amount += num(r.amount); cur.count++ }
+    else marks.set(key, { date: r.txn_date, side, amount: num(r.amount), count: 1 })
+  }
+  const out = new Map<string, UserTxnMark[]>()
+  for (const [cid, marks] of byCycle) {
+    out.set(cid, [...marks.values()].sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : a.side < b.side ? -1 : 1))
+  }
+  return out
+}
 
 /** 在候选基金池间分配总配额：先 floor(total/n) 平均，余数按候选数从多到少补，
  *  每池不超过其候选数。返回 fund_code -> 配额。 */
@@ -418,6 +459,13 @@ async function loadRealUsers(dbPath: string, fundCodes: string[]): Promise<RealU
     curveByCycle.set(r.cycle_id, arr)
   }
 
+  const txnRows = await queryRows<{ cycle_id: string; busin_type: string; amount: number | null; txn_date: string }>(dbPath, `
+    SELECT cycle_id, busin_type, amount, txn_date
+    FROM real_user_txns
+    WHERE cycle_id IN (${chosen.map(c => quoteSql(c.cycle_id)).join(',')})
+  `)
+  const txnsByCycle = mergeUserTxns(txnRows)
+
   return chosen.map(c => ({
     fundCode: c.fund_code,
     fundName: c.fund_name,
@@ -427,6 +475,7 @@ async function loadRealUsers(dbPath: string, fundCodes: string[]): Promise<RealU
     bigProfitRate: c.big_profit_rate,
     txnCount: num(c.txn_count),
     series: curveByCycle.get(c.cycle_id) ?? [],
+    txns: txnsByCycle.get(c.cycle_id) ?? [],
   })).filter(u => u.series.length > 0)
 }
 

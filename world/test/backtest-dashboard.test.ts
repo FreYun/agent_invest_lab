@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { writeState, readState, type WorldState } from '../src/state.ts'
 import { pauseFile } from '../src/paths.ts'
-import { pickBenchmarkFund, allocateQuota, selectRepresentative } from '../src/backtest-dashboard/server.ts'
+import { pickBenchmarkFund, allocateQuota, selectRepresentative, classifyBusinType, mergeUserTxns } from '../src/backtest-dashboard/server.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DB = join(HERE, '../../data/fund.db')
@@ -267,4 +267,52 @@ test('selectRepresentative: 覆盖最差/最好/中位,去重,且为输入子集
 test('selectRepresentative: quota<=0 或空输入 → 空', () => {
   assert.deepEqual(selectRepresentative([1, 2, 3], 0), [])
   assert.deepEqual(selectRepresentative([], 5), [])
+})
+
+test('classifyBusinType: 定投/申购=买, 赎回/强赎=卖, 其余=null', () => {
+  assert.equal(classifyBusinType('139'), 'buy')   // 定时定额投资
+  assert.equal(classifyBusinType('122'), 'buy')   // 申购
+  assert.equal(classifyBusinType('124'), 'sell')  // 赎回
+  assert.equal(classifyBusinType('142'), 'sell')  // 强行赎回
+  assert.equal(classifyBusinType('129'), null)    // 设置分红方式
+  assert.equal(classifyBusinType('136'), null)    // 转换
+  assert.equal(classifyBusinType('1T1'), null)    // 转出投资账户
+  assert.equal(classifyBusinType(''), null)
+})
+
+test('mergeUserTxns: 同日同方向合并 amount/count, 丢弃中性, 按日期再方向升序', () => {
+  const rows = [
+    { cycle_id: 'A', busin_type: '139', amount: 100, txn_date: '2025-03-20' },
+    { cycle_id: 'A', busin_type: '122', amount: 50, txn_date: '2025-03-20' },   // 同日同向(买) → 合并
+    { cycle_id: 'A', busin_type: '124', amount: 30, txn_date: '2025-03-20' },   // 同日卖 → 单独
+    { cycle_id: 'A', busin_type: '129', amount: 0, txn_date: '2025-03-20' },    // 中性 → 丢弃
+    { cycle_id: 'A', busin_type: '139', amount: 100, txn_date: '2025-01-10' },  // 更早的买
+    { cycle_id: 'B', busin_type: '124', amount: 999, txn_date: '2025-06-01' },  // 另一个 cycle
+  ]
+  const out = mergeUserTxns(rows)
+  assert.deepEqual(out.get('A'), [
+    { date: '2025-01-10', side: 'buy', amount: 100, count: 1 },
+    { date: '2025-03-20', side: 'buy', amount: 150, count: 2 },
+    { date: '2025-03-20', side: 'sell', amount: 30, count: 1 },
+  ])
+  assert.deepEqual(out.get('B'), [
+    { date: '2025-06-01', side: 'sell', amount: 999, count: 1 },
+  ])
+})
+
+test('mergeUserTxns: 全中性或空 → 该 cycle 不出现', () => {
+  const out = mergeUserTxns([
+    { cycle_id: 'A', busin_type: '129', amount: 0, txn_date: '2025-03-20' },
+    { cycle_id: 'A', busin_type: '136', amount: 5, txn_date: '2025-03-21' },
+  ])
+  assert.equal(out.has('A'), false)
+  assert.equal(out.size, 0)
+})
+
+test('mergeUserTxns: amount 为 null 当 0 处理', () => {
+  const out = mergeUserTxns([
+    { cycle_id: 'A', busin_type: '139', amount: null, txn_date: '2025-03-20' },
+    { cycle_id: 'A', busin_type: '139', amount: 100, txn_date: '2025-03-20' },
+  ])
+  assert.deepEqual(out.get('A'), [{ date: '2025-03-20', side: 'buy', amount: 100, count: 2 }])
 })
