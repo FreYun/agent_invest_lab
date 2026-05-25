@@ -16,8 +16,15 @@ session/
 # git worktrees
 .claude/worktrees/
 
+# symlink to ../.openclaw (separate git repo, for read/edit convenience only)
+/.openclaw
+
 # debug screenshots
 *.png
 
 # fund-portfolio runtime db
 fund-portfolio-mcp/fund.db
+
+# research backtest artifacts (generated equity curves / run cards / result csvs)
+research/**/runs/
+research/**/*.csv
