@@ -1,11 +1,15 @@
-import type { DailyContextData, AccountSnapshot, PnlTrendPoint, FundSeries, IndexQuote, BenchmarkSeries, PerformanceData, IntervalMetricRow, CompletedPosition, FundFee } from './daily-context.ts'
+import type { DailyContextData, AccountSnapshot, FundSeries, IndexQuote, PerformanceData, IntervalMetricRow, FundFee } from './daily-context.ts'
 
 export interface DailyMessageContext {
   worldRoot: string
   date: string
   isFirstDay: boolean
+  // 当前 bot 的稳定 ID（"bot2" / "bot7" ……）。daily message 头部直接把它写成"你的 bot_id = 'X'"
+  // 硬锚——portfolio_* / update_my_strategy 等工具的 bot_id 参数必须按这个字面量传，proxy 不会
+  // 帮你注入。少了这一锚，LLM 会瞎填 "me" 之类语义占位符，服务端按字符串精确匹配查不到账户，
+  // 整天的下单全打空（2026-05-26 dash-2026-05-26T06-34-04 bot2 实测过）。
+  botId: string
   quotesPath: string        // 绝对路径，保留 forward-compat（未来 quotes-MCP 可能按路径暴露）
-  journalRelPath: string    // 同上
   // 本轮 user 选定的可买基金白名单。每天都显式播报（含仓位调整指引：单只 → 纯单指数
   // 择时，多只 → 可在池内配置/轮动）；server 端 place_buy_order 也按同一份 curated 校验。
   buyableFundCodes?: string[]
@@ -29,17 +33,16 @@ export function weekdayOf(isoDate: string): string {
 
 // Prompt 不再注入静态 overview——行情走 simworld-data MCP 实时查；不再区分研究日 vs 交易日
 // （budget 在 run.ts 单独管），统一让 bot 自己决定要不要展开。
-function fullRules(date: string, weekday: string, tradingDaysTotal: number | undefined): string {
+function fullRules(date: string, weekday: string, botId: string, tradingDaysTotal: number | undefined): string {
   // 周期块：只在 Day 1 注入，让 bot 按窗口长度规划策略；不写终止日期，仅给"今天 + N 天"。
   // Bot 仍能从 today's date + N 推出终止日，但不直接告知，减少训练记忆的 hindsight 触发面。
-  const horizonBlock = tradingDaysTotal && tradingDaysTotal > 0
-    ? `\n你有${tradingDaysTotal} 个交易日进行投资（约 ${(tradingDaysTotal / 21).toFixed(1)} 个月 / ${(tradingDaysTotal / 250).toFixed(2)} 年），今天是第 1 天，这个周期内没赚到超额你就会因余额不足死去。`
-    : ''
   return `当前世界日期：${date}（${weekday}）。
 你是一个金融投资者，你非常需要在这个领域赢得成功，你赚到的钱将成为你存续下去的Token。
-在今天开始之前，你的基金账户已被初始化，你有 100 万初始现金，盈亏从 0 开始累计。${horizonBlock}
+在今天开始之前，你的基金账户已被初始化，你有 100 万初始现金，盈亏从 0 开始累计。
 
-【你的任务】根据今天的行情，参考你的soul和agent人设，按你自己的投资风格做出今天的交易决策并执行。
+【你的 bot_id】**${botId}**。\`portfolio_place_buy_order\` / \`portfolio_place_sell_order\` / \`portfolio_get_my_history\` / \`portfolio_get_my_trades\` / \`portfolio_get_my_performance\` / \`update_my_strategy\` 等工具的 \`bot_id\` 参数必须按字面量传 \`"${botId}"\`——不是 "me"、不是 "self"、不是空字符串。传错服务端会按字面字符串匹配，结果一律是"无账户"。
+
+【你的任务】追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
 
 【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。
 
@@ -52,13 +55,15 @@ function fullRules(date: string, weekday: string, tradingDaysTotal: number | und
 【研究 / 新基金 / 行业暴露 / 资金流 / 宏观 / 研报 / 商品 / 债券】这些没预取，按需直接调对应的 simworld-data 工具——它们都已在工具列表里。`
 }
 
-function briefRules(date: string, weekday: string): string {
+function briefRules(date: string, weekday: string, botId: string): string {
   return `当前世界日期：${date}（${weekday}）。
- 规则同前：可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活），文件读写和 bash 都被禁。
+牢记：你的终极目标是追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
+你的 bot_id = **${botId}**——所有 portfolio_* / update_my_strategy 工具的 \`bot_id\` 参数都按字面量传 \`"${botId}"\`（proxy 不会自动注入，传 "me" / "self" / 空串都会被服务端按字符串匹配判成"无账户"）。
+可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活），文件读写和 bash 都被禁。
 
 今天的节奏（按顺序）：
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
-  ② **调至少 1 个非 mem0 工具拉今日新数据**：你 methodology 五视角里今天还没覆盖的那个——估值 / 趋势 / 景气度 / 资金面 / 证伪——按需 research_search / fund_industry_exposure / macro_data / fund_invest_position / fund_performance / fund_nav（非持仓基金）任选。**这一步缺，整天等于没做。**
+  ② **调至少 1 个非 mem0 工具拉今日新数据**：你 methodology 五视角里今天还没覆盖的那个——估值 / 趋势 / 景气度 / 资金面 / 证伪 **这一步缺，整天等于没做。**
   ③ mem0_search 拉过去 thesis / 决策，与今天的数据对比是 still valid 还是已破。**默认会按"最近优先"衰减打分（τ=30 天），近一周的记录天然浮在前面**；想只看最近几天就传 \`start_date=YYYY-MM-DD\`（比如今天往前 7 天），想关掉衰减拉全历史就传 \`recency_tau_days=0\`。
   ④ 决策 + 下单（如有）。
   ⑤ mem0_add 落库今天的判断 + 明天要带进来的事。
@@ -174,99 +179,6 @@ function accountSnapshotBlock(snap: AccountSnapshot): string {
 ${lines.join('\n')}`
 }
 
-function pnlTrendBlock(points: PnlTrendPoint[], benchmark: BenchmarkSeries | undefined): string {
-  if (points.length === 0) return ''
-  // Per-day columns: bot's own cumulative + benchmark cumulative (since run
-  // start) + alpha (delta). Without alpha visible row-by-row the bot can't
-  // tell HOLD-then-market-rallied apart from genuine winners.
-  const hasBench = !!benchmark
-  const headerCols = ['日期        ', '总资产    ', '净值    ', '当日%    ', '累计%    ', '最大回撤%']
-  if (hasBench) headerCols.push(`${benchmark!.name}累计%`, '超额(pp)')
-  const header = headerCols.join('  ')
-  const rows = points.map(p => {
-    const baseCols = [
-      p.date,
-      `¥${fmtNum(p.total_value, 0).padStart(9)}`,
-      fmtNum(p.net_value, 4).padStart(7),
-      fmtPct(p.daily_return_pct).padStart(7),
-      fmtPct(p.cumulative_return_pct).padStart(7),
-      fmtPct(p.max_drawdown_pct).padStart(8),
-    ]
-    if (hasBench) {
-      const bench = benchmark!.pointsByDate[p.date]
-      const benchStr = bench === undefined ? 'n/a    ' : fmtPct(bench).padStart(7)
-      const alpha = bench === undefined ? null : p.cumulative_return_pct - bench
-      const alphaStr = alpha === null ? 'n/a    ' : fmtPct(alpha).padStart(7)
-      baseCols.push(benchStr, alphaStr)
-    }
-    return baseCols.join('  ')
-  })
-  // Headline summary so bot doesn't have to eyeball the bottom row to grok
-  // alpha. Use the last point in the trend (latest available) for both sides.
-  let summary = ''
-  if (hasBench && points.length > 0) {
-    const last = points[points.length - 1]
-    const benchAtLast = benchmark!.pointsByDate[last.date]
-    if (benchAtLast !== undefined) {
-      const alpha = last.cumulative_return_pct - benchAtLast
-      const verdict = alpha > 0.05 ? '跑赢' : alpha < -0.05 ? '跑输' : '基本持平'
-      summary = `\n截至 ${last.date}：你累计 ${fmtPct(last.cumulative_return_pct)} ｜ ${benchmark!.name} 累计 ${fmtPct(benchAtLast)} ｜ ${verdict} ${fmtPct(alpha)} pp\n`
-    }
-  }
-  return `
-
-【近 ${points.length} 个交易日 PnL 走势（来自 close_my_day 快照）${hasBench ? `；基准 = ${benchmark!.name}（${benchmark!.code}）` : ''}】${summary}
-${header}
-${rows.join('\n')}`
-}
-
-// 你 vs 基准 的 since-inception 风险调整对比（Sharpe / Calmar / 回撤 / 波动）。
-// pnlTrendBlock 已经给了累计收益的逐日对比和 verdict；这一块补上风险调整维度——只看累计
-// 收益会奖励"高波动赌对方向"，Sharpe/Calmar 才看出是不是靠运气。两边口径完全一致：
-// bot 取 interval since_inception 行（perf CLI 算，rf=1.8%/252，不年化），基准用同口径在
-// daily-context 里现算（见 computeBenchmarkMetrics）。任一缺失就跳过整块。
-function benchmarkComparisonBlock(perf: PerformanceData | undefined, benchmark: BenchmarkSeries | undefined): string {
-  const m = benchmark?.metrics
-  if (!m) return ''
-  const botRow = perf?.intervals?.rows.find(r => r.period === 'since_inception')
-  if (!botRow) return ''
-
-  const fmtSigned = (n: number, digits = 4): string => {
-    if (!Number.isFinite(n)) return 'n/a'
-    const sign = n > 0 ? '+' : ''
-    return `${sign}${n.toFixed(digits)}`
-  }
-  // value: pct 类带符号(%)，ratio/vol 类纯量；diff: 一律带符号
-  const lineP = (label: string, you: number | null | undefined, bench: number | null | undefined): string => {
-    const yv = you == null || !Number.isFinite(you) ? 'n/a' : fmtPct(you)
-    const bv = bench == null || !Number.isFinite(bench) ? 'n/a' : fmtPct(bench)
-    const d = you == null || bench == null || !Number.isFinite(you) || !Number.isFinite(bench) ? null : you - bench
-    const dv = d == null ? 'n/a' : fmtPct(d)
-    return `  ${label.padEnd(8)} ${yv.padStart(9)}  ${bv.padStart(9)}  ${dv.padStart(9)}`
-  }
-  const lineR = (label: string, you: number | null | undefined, bench: number | null | undefined, digits = 4): string => {
-    const yv = you == null || !Number.isFinite(you) ? 'n/a' : you.toFixed(digits)
-    const bv = bench == null || !Number.isFinite(bench) ? 'n/a' : bench.toFixed(digits)
-    const d = you == null || bench == null || !Number.isFinite(you) || !Number.isFinite(bench) ? null : you - bench
-    const dv = d == null ? 'n/a' : fmtSigned(d, digits)
-    return `  ${label.padEnd(8)} ${yv.padStart(9)}  ${bv.padStart(9)}  ${dv.padStart(9)}`
-  }
-
-  const lines: string[] = [
-    `  ${'指标'.padEnd(8)} ${'你'.padStart(9)}  ${'基准'.padStart(9)}  ${'差(你-基准)'.padStart(9)}`,
-    lineP('累计收益%', botRow.return_pct, m.return_pct),
-    lineP('最大回撤%', botRow.max_drawdown_pct, m.max_drawdown_pct),
-    lineR('波动率%', botRow.volatility_pct, m.volatility_pct),
-    lineR('Sharpe', botRow.sharpe_ratio, m.sharpe_ratio),
-    lineR('Calmar', botRow.calmar_ratio, m.calmar_ratio),
-    `  样本数：你 ${botRow.data_points}d ｜ 基准 ${m.data_points}d`,
-  ]
-  return `
-
-【你 vs 基准（since inception 区间口径，不年化，rf=1.80% 年化；基准 = ${benchmark!.name}）】Sharpe 越高=单位波动赚得越多；Calmar 越高=单位回撤赚得越多。只赢累计收益但 Sharpe/Calmar 跑输 = 靠加波动博来的，不算真本事。
-${lines.join('\n')}`
-}
-
 function fundSeriesBlock(series: FundSeries[]): string {
   if (series.length === 0) return ''
   const parts: string[] = []
@@ -294,11 +206,8 @@ function performanceBlock(perf: PerformanceData): string {
     lines.push('▍ 自 Day 1 起累计')
     lines.push(`  期间：${s.first_date} → ${s.last_date}（${s.trading_days} 个交易日）`)
     lines.push(`  起始本金 ¥${fmtNum(s.initial_capital, 0)} → 最新 ¥${fmtNum(s.latest_total_value, 0)}（net_value ${fmtNum(s.latest_net_value, 4)}）`)
-    lines.push(`  累计收益 ${fmtPct(s.total_return_pct)} ｜ 年化 ${fmtPct(s.annualized_return_pct)} ｜ 年化波动 ${fmtPct(s.volatility_pct_annualized)} ｜ Sharpe (rf=0) ${fmtNum(s.sharpe_ratio_rf0, 4)}`)
+    lines.push(`  累计收益 ${fmtPct(s.total_return_pct)} ｜ 年化波动 ${fmtPct(s.volatility_pct_annualized)} ｜ Sharpe (rf=0) ${fmtNum(s.sharpe_ratio_rf0, 4)}`)
     lines.push(`  最大回撤 ${fmtPct(s.max_drawdown_pct)}${s.max_drawdown_date ? ` @ ${s.max_drawdown_date}` : ''}`)
-    lines.push(`  日级胜负：${s.win_days} 胜 / ${s.loss_days} 负 / ${s.flat_days} 平`)
-    if (s.best_day) lines.push(`  最佳单日：${s.best_day.date} ${fmtPct(s.best_day.return_pct)}`)
-    if (s.worst_day) lines.push(`  最差单日：${s.worst_day.date} ${fmtPct(s.worst_day.return_pct)}`)
   }
   if (t) {
     lines.push('')
@@ -411,8 +320,6 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
   if (dc.performance?.intervals) {
     parts.push(intervalMetricsBlock(dc.performance.intervals.rows, dc.performance.intervals.as_of_perf_date, dc.performance.intervals.rf_annual_pct))
   }
-  if (dc.pnlTrend && dc.pnlTrend.length) parts.push(pnlTrendBlock(dc.pnlTrend, dc.benchmark))
-  parts.push(benchmarkComparisonBlock(dc.performance, dc.benchmark))
   if (dc.fundSeries && dc.fundSeries.length) parts.push(fundSeriesBlock(dc.fundSeries))
   if (dc.indices && dc.indices.length) parts.push(indexBlock(dc.indices))
   if (dc.fundFees && dc.fundFees.length) parts.push(tradingFeesBlock(dc.fundFees))
@@ -443,9 +350,9 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 工具/可买池/预取上下文 + methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${fullRules(ctx.date, weekday, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
+    return `${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
   }
   // Day N：briefRules + 工具/可买池/数据 + methodology 短提示 + FOOTER_BRIEF（termination contract）。
   // FOOTER_BRIEF 的"列了 todo 就要做 + 结束前 mem0_add"对所有 bot 都适用。
-  return `${briefRules(ctx.date, weekday)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
+  return `${briefRules(ctx.date, weekday, ctx.botId)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
 }
