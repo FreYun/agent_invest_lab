@@ -47,7 +47,17 @@ export function openclawJsonSource(config: WorldConfig): string {
  *  bot 看不见，只能由 world setup / 每日收盘自动触发。 */
 export async function runFundCli(cliPath: string, cmd: string, args: string[], opts: { timeoutMs?: number } = {}): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolveP, reject) => {
-    const child = spawn('python3', [cliPath, cmd, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const venvPython = join(dirname(cliPath), '.venv', 'bin', 'python')
+    const python = existsSync(venvPython) ? venvPython : 'python3'
+    const child = spawn(python, [cliPath, cmd, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        OPENCLAW_ROOT: process.env.OPENCLAW_ROOT ?? join(dirname(cliPath), '..'),
+        FUND_DB_PATH: process.env.FUND_DB_PATH ?? join(dirname(cliPath), '..', 'data', 'fund.db'),
+        FUND_BUYABLE_CODES_DIR: process.env.FUND_BUYABLE_CODES_DIR ?? join(dirname(cliPath), '..', 'data', 'buyable'),
+      },
+    })
     let stdout = ''
     let stderr = ''
     const timer = opts.timeoutMs ? setTimeout(() => { try { child.kill('SIGKILL') } catch { /* ignore */ } reject(new Error(`fund cli ${cmd} timeout (${opts.timeoutMs}ms)`)) }, opts.timeoutMs) : null

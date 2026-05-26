@@ -11,7 +11,9 @@ world/config/world-tmp-*.yaml
 bots/*/memory/
 data/
 session/
+world/runtime/
 *.bak
+record.md
 
 # git worktrees
 .claude/worktrees/
@@ -21,3 +23,6 @@ session/
 
 # fund-portfolio runtime db
 fund-portfolio-mcp/fund.db
+fund-portfolio-mcp/.venv/
+
+.openclaw
