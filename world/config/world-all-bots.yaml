@@ -1,23 +1,23 @@
 research_loop: /home/rooot/.openclaw/research-loop/ts
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
 
-bots: [bot101, bot102, bot103]
+# 全量 bot 配置：用于同一回测系统下同时跑单基金旧 bot 与多基金新 bot。
+bots: [bot101, bot102, bot103, bot1, bot2, bot3, bot4, bot5, bot6, bot7, bot8, bot9, bot10, bot11, bot12, bot13, bot14, bot15, bot16, bot17, bot18, bot19, bot20]
 
 replay:
   from: "2024-03-14"
-  to: "2024-03-27"   # 10 trading days
+  to: "2024-03-27"
 
 calendar: ../runtime/calendar.json
 
-concurrency: 1
-per_bot_timeout_seconds: 60
+concurrency: 3
+per_bot_timeout_seconds: 300
 research_day_every: 5
-research_day_timeout_seconds: 300
+research_day_timeout_seconds: 600
 
-# 系统侧基金生命周期：world setup 调一次 init_fund_account（默认 reset+100w 现金），
-# 每天结束调一次 close_my_day。bot 在 BOT_ONLY 端口（28172）只有 place_buy/sell 可用。
 fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
 
-# 本轮 user 显式选定的可买基金（6 位代码）。day-1 prompt 会播报；server 端也按这份校验。
+# 默认多指数权益基金池。单基金回测时可在 dashboard 新建 run 或复制本配置后改成单只基金。
 buyable_fund_codes:
   - "000051"   # 华夏沪深300ETF联接A
   - "000962"   # 天弘中证500ETF联接A
