@@ -1,6 +1,6 @@
 research_loop: /home/rooot/.openclaw/research-loop/ts
 
-bots: [bot1]
+bots: [bot101, bot102, bot103]
 
 replay:
   from: "2024-03-14"
@@ -20,11 +20,15 @@ fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
 # 本轮 user 显式选定的可买基金（6 位代码）。day-1 prompt 会播报；server 端 BOT_ONLY
 # 模式下也会按这份 curated 校验 portfolio_place_buy_order；fund_mcp_cli 启用时必填。
 buyable_fund_codes:
-  - "510300"   # 沪深300ETF (华泰柏瑞)
-  - "159915"   # 创业板 ETF (易方达)
-  - "510500"   # 中证500ETF
-  - "002611"   # 黄金 ETF 联接 C
-  - "159938"   # 医药 ETF
+  - "000051"   # 华夏沪深300ETF联接A
+  - "000962"   # 天弘中证500ETF联接A
+  - "001592"   # 天弘创业板ETF联接A
+  - "161907"   # 红利ETF联接
+  - "001550"   # 天弘中证医药100A
+  - "001552"   # 天弘中证证券保险A
+  - "001617"   # 天弘中证电子ETF联接A
+  - "004854"   # 广发中证全指汽车指数A
+  - "005223"   # 广发中证基建工程ETF联接A
+  - "012543"   # 嘉实中证新能源汽车指数A
 
-# simworld-data MCP 代理：world 进程内起，注入 simulated_datetime，bot 看不到这个参数。
 simworld_upstream_url: http://127.0.0.1:18078/mcp

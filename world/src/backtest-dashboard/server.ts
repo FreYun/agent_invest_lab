@@ -654,7 +654,7 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html)
 }
 
-/** Light per-run view for /api/runs — only what the control panel renders. */
+/** Light per-run view for /api/backtest/runs — only what the control panel renders. */
 function runSummary(s: WorldState): Record<string, unknown> {
   return {
     runId: s.run_id,
@@ -688,7 +688,7 @@ function readJsonBody(req: IncomingMessage, limitBytes = 64 * 1024): Promise<Rec
 }
 
 function parseArgs(argv: string[]): { host: string; port: number; dbPath: string; worldRoot: string } {
-  let host = '0.0.0.0'
+  let host = '127.0.0.1'
   let port = 48080
   let dbPath = DEFAULT_DB
   let worldRoot = DEFAULT_WORLD_ROOT
@@ -739,11 +739,11 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       // Live run control: list controllable runs (running/paused) read from per-run
       // state.json, and trigger pause/stop. Resume stays CLI-only (it must spawn a
       // long-lived `world resume` with the world config, which the dashboard lacks).
-      if (req.method === 'GET' && url.pathname === '/api/runs') {
+      if (req.method === 'GET' && url.pathname === '/api/backtest/runs') {
         sendJson(res, 200, { runs: listControllableRuns(worldRoot).map(runSummary) })
         return
       }
-      if (req.method === 'POST' && (url.pathname === '/api/runs/pause' || url.pathname === '/api/runs/stop')) {
+      if (req.method === 'POST' && (url.pathname === '/api/backtest/runs/pause' || url.pathname === '/api/backtest/runs/stop')) {
         let body: Record<string, unknown>
         try { body = await readJsonBody(req) }
         catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }

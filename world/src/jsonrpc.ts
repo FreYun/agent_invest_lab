@@ -86,7 +86,11 @@ export class JsonRpcStdioClient {
         ? setTimeout(() => { this.pending.delete(id); reject(new Error(`request timeout: ${method} (${opts.timeoutMs}ms)`)) }, opts.timeoutMs)
         : null
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer })
-      this.stdin.write(JSON.stringify({ id, method, params }) + '\n')
+      // 防御层：history-window 截断 / 上游 LLM 流式回复 → 历史里有可能残存孤立 UTF-16 代理（如 \uD83D 没有 \uDD34 配对）。
+      // JSON.stringify 会把孤立代理原样输出为 \uXXXX，rust 的 serde_json 严格解析器对此抛
+      // "unexpected end of hex escape" -32700，整条 chat 直接黑洞掉。一律先扫一遍替换为 �。
+      const payload = JSON.stringify({ id, method, params }).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�') + '\n'
+      this.stdin.write(payload)
     })
   }
 

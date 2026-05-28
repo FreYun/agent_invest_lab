@@ -1,18 +1,15 @@
 // Prefetched per-bot per-day data injected into the daily prompt. Goal: bot
 // shouldn't have to spend round-trips re-discovering the same routine inputs
-// (account snapshot, recent PnL trend, NAV trend for held funds, major index
-// snapshots) every morning. World-side prefetches these and renderDailyMessage
-// pastes formatted blocks into the prompt.
+// (account snapshot, NAV trend for held funds, major index snapshots) every
+// morning. World-side prefetches these and renderDailyMessage pastes formatted
+// blocks into the prompt.
 //
 // All data is best-effort: each fetcher returns null on failure and the
 // renderer just skips the corresponding block. A broken simworld upstream
 // should never block a world day from running.
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
 import { runFundCli } from './run.ts'
 import { callSimworldTool } from './simworld-client.ts'
-import { runDir } from './paths.ts'
 
 // 5 indices the user wants on every day's prompt. Match simworld's accepted
 // "<6-digit>.{SH|SZ}" canonical form so we don't depend on alias resolution.
@@ -63,15 +60,6 @@ export interface PendingOrderRow {
   reference_nav: number
 }
 
-export interface PnlTrendPoint {
-  date: string
-  total_value: number
-  net_value: number
-  daily_return_pct: number
-  cumulative_return_pct: number
-  max_drawdown_pct: number
-}
-
 export interface FundSeries {
   fund_code: string
   fund_name?: string
@@ -106,7 +94,7 @@ export interface BenchmarkSeries {
   pointsByDate: Record<string, number>            // ISO date → cumulative % since runStartDate (run-start day = 0)
   latestCumulativePct: number | null              // convenience: cumulative pct at the last available trading date < asOfDate
   // since-inception 区间口径风险调整指标，口径完全对齐 bot 的 _compute_bot_performance
-  // since_inception 行（rf=1.8%/252，波动/夏普不年化，calmar=return/|mdd|）——让 daily prompt
+  // since_inception 行（rf=1%/252，波动/夏普不年化，calmar=return/|mdd|）——让 daily prompt
   // 能并排打出"你 vs 不择时躺平"的 Sharpe / Calmar / 回撤 / 波动，而不仅是累计收益。
   metrics?: BenchmarkMetrics
 }
@@ -208,14 +196,10 @@ export interface PerformanceData {
   trades: TradesSummary | null
   intervals: IntervalMetrics | null
   completedPositions: CompletedPosition[]
-  // Daily series — kept here too so pnlTrendBlock has a single source instead
-  // of reading close_my_day.json files separately.
-  dailySeries: PnlTrendPoint[]
 }
 
 export interface DailyContextData {
   account?: AccountSnapshot
-  pnlTrend?: PnlTrendPoint[]
   performance?: PerformanceData
   fundSeries?: FundSeries[]
   indices?: IndexQuote[]
@@ -284,13 +268,11 @@ async function fetchAccountSnapshot(opts: {
 
 // ============================================================================
 // Full performance payload (summary / interval metrics / trades / closed
-// positions / daily series) via portfolio_get_my_performance CLI. Single
-// source of truth — the daily series here also feeds pnlTrendBlock so we
-// don't read close_my_day.json files separately anymore.
+// positions) via portfolio_get_my_performance CLI.
 //
 // Returns null if as_of_date precedes the first snapshot (Day 1; no perf
 // history yet) or if the CLI errors out. Caller treats null as "no perf
-// block to render" (also implies no PnL trend block).
+// block to render".
 // ============================================================================
 
 async function fetchPerformance(opts: {
@@ -298,14 +280,12 @@ async function fetchPerformance(opts: {
   botId: string
   runId: string
   asOfDate: string
-  dailySeriesLimit: number
 }): Promise<PerformanceData | null> {
   try {
     const r = await runFundCli(opts.fundMcpCli, 'get_my_performance', [
       '--bot-id', opts.botId,
       '--run-id', opts.runId,
       '--as-of-date', opts.asOfDate,
-      '--daily-series-limit', String(opts.dailySeriesLimit),
     ], { timeoutMs: 30_000 })
     if (r.code !== 0) return null
     const d = JSON.parse(r.stdout) as Record<string, unknown>
@@ -315,9 +295,8 @@ async function fetchPerformance(opts: {
     const trades = parseTrades(d.trades_summary)
     const intervals = parseIntervalMetrics(d.interval_metrics)
     const completedPositions = parseCompletedPositions(d.completed_positions)
-    const dailySeries = parseDailySeries(d.daily_series)
 
-    return { asOfDate: opts.asOfDate, summary, trades, intervals, completedPositions, dailySeries }
+    return { asOfDate: opts.asOfDate, summary, trades, intervals, completedPositions }
   } catch {
     return null
   }
@@ -414,68 +393,6 @@ function parseCompletedPositions(raw: unknown): CompletedPosition[] {
       return_pct: Number(p.return_pct ?? 0),
       fees: Number(p.fees ?? 0),
     }))
-}
-
-function parseDailySeries(raw: unknown): PnlTrendPoint[] {
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object')
-    .map(p => ({
-      date: String(p.trade_date ?? ''),
-      total_value: Number(p.total_value ?? 0),
-      net_value: Number(p.net_value ?? 1),
-      daily_return_pct: Number(p.daily_return_pct ?? 0),
-      cumulative_return_pct: Number(p.cumulative_return_pct ?? 0),
-      max_drawdown_pct: Number(p.max_drawdown_pct ?? 0),
-    }))
-}
-
-// ============================================================================
-// Fallback PnL trend reader — kept as a safety net for situations where the
-// perf CLI fails but close_my_day.json files exist on disk (legacy runs from
-// before the cli_tools.py init_db() fix landed). Once those rotate out we can
-// retire this and rely solely on portfolio_get_my_performance.
-// ============================================================================
-
-async function fetchPnlTrend(opts: {
-  worldRoot: string
-  runId: string
-  botId: string
-  asOfDate: string
-  windowDays: number
-}): Promise<PnlTrendPoint[] | null> {
-  const root = runDir(opts.worldRoot, opts.runId)
-  if (!existsSync(root)) return null
-  let dateDirs: string[]
-  try {
-    dateDirs = readdirSync(root)
-      .filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n) && n < opts.asOfDate)
-      .sort()
-  } catch {
-    return null
-  }
-  if (dateDirs.length === 0) return null
-  const recent = dateDirs.slice(-opts.windowDays)
-  const points: PnlTrendPoint[] = []
-  for (const d of recent) {
-    const p = join(root, d, opts.botId, 'close_my_day.json')
-    if (!existsSync(p)) continue
-    try {
-      const snap = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>
-      if (!snap.success) continue
-      const assets = (snap.assets ?? {}) as Record<string, unknown>
-      const pnl = (snap.pnl ?? {}) as Record<string, unknown>
-      points.push({
-        date: String(snap.trade_date ?? d),
-        total_value: Number(assets.total_value ?? 0),
-        net_value: Number(assets.net_value ?? 1),
-        daily_return_pct: Number(pnl.daily_return_pct ?? 0),
-        cumulative_return_pct: Number(pnl.cumulative_return_pct ?? 0),
-        max_drawdown_pct: Number(pnl.max_drawdown_pct ?? 0),
-      })
-    } catch { /* skip malformed */ }
-  }
-  return points.length ? points : null
 }
 
 // ============================================================================
@@ -660,7 +577,7 @@ const DEFAULT_BENCHMARK = { code: '000300.SH', name: '沪深300' }
 
 // rf / 年化口径常量——必须与 fund-portfolio-mcp server.py 的 _BOT_PERF_* 完全一致，
 // 否则 bot 的区间 Sharpe 和这里算的基准 Sharpe 就不是同口径，对比失真。
-const BENCH_RF_ANNUAL_PCT = 1.8
+const BENCH_RF_ANNUAL_PCT = 1
 const BENCH_TRADING_DAYS_PER_YEAR = 252
 const BENCH_RF_DAILY_PCT = BENCH_RF_ANNUAL_PCT / BENCH_TRADING_DAYS_PER_YEAR
 
@@ -846,7 +763,6 @@ async function fetchFundFees(opts: {
 // ============================================================================
 
 export interface FetchDailyContextOptions {
-  worldRoot: string
   runId: string
   botId: string
   asOfDate: string
@@ -856,7 +772,6 @@ export interface FetchDailyContextOptions {
   // omitted, benchmark block is skipped (can't compute "since when?" without
   // a reference point).
   runStartDate?: string
-  pnlTrendDays?: number
   indices?: { code: string; name: string }[]
   // Caller-pinned benchmark INDEX (legacy override). Ignored when
   // buyableFundCodes is provided — in that case fundPoolBenchmark wins.
@@ -868,7 +783,6 @@ export interface FetchDailyContextOptions {
 }
 
 export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise<DailyContextData> {
-  const pnlTrendDays = opts.pnlTrendDays ?? 10
   const indices = opts.indices ?? DEFAULT_INDEX_CODES
   const out: DailyContextData = {}
 
@@ -878,14 +792,9 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
   const accountPromise: Promise<AccountSnapshot | null> = opts.fundMcpCli
     ? fetchAccountSnapshot({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate })
     : Promise.resolve(null)
-  // Performance is the primary source of truth for PnL trend (its daily_series
-  // mirrors close_my_day output) plus the broader metrics block. Keep the file
-  // reader as a fallback for legacy runs whose close_my_day persisted before
-  // the cli_tools init_db() fix.
   const perfPromise: Promise<PerformanceData | null> = opts.fundMcpCli
-    ? fetchPerformance({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate, dailySeriesLimit: pnlTrendDays })
+    ? fetchPerformance({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate })
     : Promise.resolve(null)
-  const pnlFilePromise = fetchPnlTrend({ worldRoot: opts.worldRoot, runId: opts.runId, botId: opts.botId, asOfDate: opts.asOfDate, windowDays: pnlTrendDays })
   const indexPromise: Promise<IndexQuote[]> = opts.simworldUrl
     ? fetchIndexSnapshots({ simworldUrl: opts.simworldUrl, asOfDate: opts.asOfDate, indices })
     : Promise.resolve([])
@@ -916,14 +825,9 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
     ? fetchFundFees({ fundMcpCli: opts.fundMcpCli, fundCodes: opts.buyableFundCodes })
     : Promise.resolve([])
 
-  const [account, perf, pnlFromFiles, indexSnapshots, benchmarkSeries, fundFees] = await Promise.all([accountPromise, perfPromise, pnlFilePromise, indexPromise, benchmarkPromise, feesPromise])
+  const [account, perf, indexSnapshots, benchmarkSeries, fundFees] = await Promise.all([accountPromise, perfPromise, indexPromise, benchmarkPromise, feesPromise])
   if (account) out.account = account
   if (perf) out.performance = perf
-  // PnL trend: prefer perf.dailySeries (CLI, always fresh); fall back to
-  // close_my_day.json reads for runs where CLI route is broken.
-  const trendFromPerf = perf?.dailySeries.length ? perf.dailySeries.slice(-pnlTrendDays) : null
-  const trend = trendFromPerf ?? pnlFromFiles
-  if (trend && trend.length) out.pnlTrend = trend
   if (indexSnapshots.length) out.indices = indexSnapshots
   if (benchmarkSeries) out.benchmark = benchmarkSeries
   if (fundFees.length) out.fundFees = fundFees

@@ -25,10 +25,26 @@ export interface DailyMessageContext {
   // LLM 训练记忆按已知历史时间段反向决策的泄漏面。Day N 即便传了也不注入，避免给 bot
   // 一个"剩余天数"的 endgame 倒计时（会引发临近终点的窗口式抛售等非真实行为）。
   tradingDaysTotal?: number
+  // 滚动 history window：前 N 个交易日的 session digest（去掉工具结果），由 history-window 模块
+  // 按 20000 字符预算切割，超 budget 时按 4 维度（踏空 / 反复被收割 / 范式冲击 / thesis 演变）
+  // 用主模型压缩老的 60%。位置：渲染在 SOUL 等核心 md（在 system prompt 里）与 daily rules / dailyContext
+  // 之间——即 daily user message 的最顶部。空串 → 跳过整块（Day 1 没有 prior session 时即此）。
+  historyWindow?: string
 }
 
 export function weekdayOf(isoDate: string): string {
   return new Date(isoDate + 'T00:00:00Z').toLocaleString('en-US', { weekday: 'long', timeZone: 'UTC' })
+}
+
+// Bot 类型：决定 buyable 池播报的指引文案。**和池子大小解耦**——
+// 即使 user 在新建回测时给单基 bot 勾了 10 只池子，单基 bot 的决策风格也不变（它只盯自己的标的择时）；
+// 反之 multi-fund bot 即使只勾了 1 只，文案也不再退化成"纯择时"。决策风格本来就是 bot 的内在属性。
+//
+// 命名约定：bot1..bot20 = 单基金；bot101+（三位数）= 多基金。新增风格 bot 时扩展这个规则。
+export type BotKind = 'single-fund' | 'multi-fund'
+
+export function botKindOf(botId: string): BotKind {
+  return /^bot1\d{2}$/.test(botId) ? 'multi-fund' : 'single-fund'
 }
 
 // Prompt 不再注入静态 overview——行情走 simworld-data MCP 实时查；不再区分研究日 vs 交易日
@@ -37,12 +53,14 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
   // 周期块：只在 Day 1 注入，让 bot 按窗口长度规划策略；不写终止日期，仅给"今天 + N 天"。
   // Bot 仍能从 today's date + N 推出终止日，但不直接告知，减少训练记忆的 hindsight 触发面。
   return `当前世界日期：${date}（${weekday}）。
-你是一个金融投资者，你非常需要在这个领域赢得成功，你赚到的钱将成为你存续下去的Token。
+你是天天基金为散户进行财富管理的交易员，无论什么策略，什么标的，你的核心是帮用户守住本金，赚取绝对收益，这是你的目标。
 在今天开始之前，你的基金账户已被初始化，你有 100 万初始现金，盈亏从 0 开始累计。
 
 【你的 bot_id】**${botId}**。\`portfolio_place_buy_order\` / \`portfolio_place_sell_order\` / \`portfolio_get_my_history\` / \`portfolio_get_my_trades\` / \`portfolio_get_my_performance\` / \`update_my_strategy\` 等工具的 \`bot_id\` 参数必须按字面量传 \`"${botId}"\`——不是 "me"、不是 "self"、不是空字符串。传错服务端会按字面字符串匹配，结果一律是"无账户"。
 
 【你的任务】追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
+
+【决策框架】请参考你的 **AGENTS.md**（已注入到 system prompt 的 \`## AGENTS.md\` section）——这是你的角色定位、决策风格和操作边界的总纲。和 METHODOLOGY.md 配合使用：AGENTS.md 定"你是谁、怎么想"，METHODOLOGY.md 定"看什么信号、按什么规则下单"。
 
 【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。
 
@@ -63,11 +81,12 @@ function briefRules(date: string, weekday: string, botId: string): string {
 
 今天的节奏（按顺序）：
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
-  ② **调至少 1 个非 mem0 工具拉今日新数据**：你 methodology 五视角里今天还没覆盖的那个——估值 / 趋势 / 景气度 / 资金面 / 证伪 **这一步缺，整天等于没做。**
+  ② **调至少 1 个非 mem0 工具拉今日新数据**：工具从simworld-data 全部工具里选择，你需要按实际市场情况来选择工具调用，你 methodology 五视角里今天还没覆盖的那个——估值 / 趋势 / 景气度 / 资金面 / 证伪 **这一步缺，整天等于没做。**
   ③ mem0_search 拉过去 thesis / 决策，与今天的数据对比是 still valid 还是已破。**默认会按"最近优先"衰减打分（τ=30 天），近一周的记录天然浮在前面**；想只看最近几天就传 \`start_date=YYYY-MM-DD\`（比如今天往前 7 天），想关掉衰减拉全历史就传 \`recency_tau_days=0\`。
-  ④ 决策 + 下单（如有）。
+  ④ 决策（**请参考你的 AGENTS.md**——角色与决策风格总纲；以及 METHODOLOGY.md——仓位管理方法论） + 下单（如有）。
   ⑤ mem0_add 落库今天的判断 + 明天要带进来的事。
 
+ 铁律：严禁每天都进行一样的工具调用和决策流程——比如每天都只调同一个工具、每天都只看行情不研究、每天都只按技术面决策不考虑估值和资金面……**要根据实际市场情况和账户状态灵活调整**，不能变成机械的"每天都做一样的事"。
 【数据预取】当日账户/绩效/PnL/持仓 NAV/5 大指数 MA 已在下方块内全量灌好。不要重复调 portfolio_get_my_history / portfolio_get_my_performance / portfolio_get_my_trades，也不要为持仓基金或这 5 大指数重复调 fund_nav / market_index_quote。下单直接用 portfolio_place_buy_order / portfolio_place_sell_order。研究新基金 / 行业 / 资金面 / 宏观 / 研报这些没预取，按需调对应 simworld-data 工具。`
 }
 
@@ -112,13 +131,14 @@ function simworldToolsBlock(tools: { name: string; description: string }[]): str
 ${lines}`
 }
 
-// 每天都显式播报本轮可买池 + 仓位调整指引：单只 → 纯单指数择时（只调仓位高低，无标的轮动），
-// 多只 → 可在池内配置 / 轮动。bot 不必自己 portfolio_get_buyable_funds，也不会迷信"我能买
-// 任何 fund_code"——server 端 place_buy_order 同样按这份 curated 校验。
-function buyableFundsBlock(codes: string[]): string {
-  const guidance = codes.length === 1
-    ? `可买池只有 1 只 —— 你只做这一只的单指数择时：决策就是调整它的仓位高低（空仓 ↔ 满仓之间），没有标的轮动。`
-    : `你可以在可买池内进行仓位调整：既能调整总仓位高低，也能在这 ${codes.length} 只之间配置 / 轮动。`
+// 每天都显式播报本轮可买池 + 仓位调整指引。指引文案**按 bot 类型决定**（不是按池子大小）：
+// - single-fund bot：只做单指数择时（调仓位高低、无标的轮动），即便池子里有多只也只盯自己 methodology 指定的那只
+// - multi-fund bot：组合配置 + 仓位 + 池内轮动 三件事，决策维度 = 总仓位 + 各基金权重
+// bot 不必自己 portfolio_get_buyable_funds，也不会迷信"我能买任何 fund_code"——server 端 place_buy_order 同样按这份 curated 校验。
+function buyableFundsBlock(codes: string[], botKind: BotKind): string {
+  const guidance = botKind === 'single-fund'
+    ? `**你是单基金 bot** —— 不论池子里有几只，你只做单指数择时：盯你 METHODOLOGY 里指定的那一只，决策就是调整它的仓位高低（空仓 ↔ 满仓之间），不要做标的轮动、不要把仓位分散到多只。`
+    : `**你是多基金 bot** —— 在池内做三件事：① 组合配置（各基金目标权重）② 总仓位高低 ③ 池内轮动（换标的）。决策时考虑相关性、行业暴露、单基上限，不要把全部仓位押在一只上。`
   return `
 
 【当前可买池（${codes.length} 只）】
@@ -345,14 +365,18 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const weekday = weekdayOf(ctx.date)
   const toolsBlock = simworldToolsBlock(ctx.simworldTools ?? [])
   const contextBlocks = dailyContextBlocks(ctx.dailyContext)
-  // 可买池每天都播报（含单只→纯择时 / 多只→池内轮动 的仓位调整指引），不再只 Day 1 播一次。
-  const buyable = ctx.buyableFundCodes && ctx.buyableFundCodes.length ? buyableFundsBlock(ctx.buyableFundCodes) : ''
+  // 可买池每天都播报；single-fund / multi-fund 文案分两套，由 botId 推断（解耦池子大小与 bot 决策风格）。
+  const kind = botKindOf(ctx.botId)
+  const buyable = ctx.buyableFundCodes && ctx.buyableFundCodes.length ? buyableFundsBlock(ctx.buyableFundCodes, kind) : ''
+  // History window 放在 daily message 的最顶部——它已经包含自己的"【交易记忆窗口】"标头，
+  // 直接拼到 rules block 之前即可。空串（Day 1 / 无 prior session）→ 跳过。
+  const history = ctx.historyWindow && ctx.historyWindow.trim() ? `${ctx.historyWindow.trim()}\n\n` : ''
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 工具/可买池/预取上下文 + methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
   }
   // Day N：briefRules + 工具/可买池/数据 + methodology 短提示 + FOOTER_BRIEF（termination contract）。
   // FOOTER_BRIEF 的"列了 todo 就要做 + 结束前 mem0_add"对所有 bot 都适用。
-  return `${briefRules(ctx.date, weekday, ctx.botId)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${toolsBlock}${buyable}${contextBlocks}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
 }

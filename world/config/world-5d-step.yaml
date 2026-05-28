@@ -1,0 +1,43 @@
+research_loop: /home/rooot/.openclaw/research-loop/ts
+# 走 rust binary——它 hardcoded 读 /home/rooot/.openclaw/openclaw.json 里的 zai-coding-plan
+# 真 key（sk-hqlf...，跟 dd-ai-api 正配）。ts fallback 读 world/config/openclaw.json 副本
+# 里的 zai-coding-plan key 是另一家 endpoint 的 → dd-ai-api 401。
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
+
+bots: [bot101, bot102, bot103]
+
+replay:
+  from: "2024-03-14"
+  to: "2024-04-26"   # 30 trading days → 6 chat days when chat_step_days=5
+
+calendar: ../runtime/calendar.json
+
+concurrency: 1
+per_bot_timeout_seconds: 300
+# 5d 步长下每个 chat day 都是"周频"调仓——本身就比 1d 重要，给个更宽的预算。
+# 任何 chat day 都会得到 research_day_timeout_seconds（cursor 0, 5, 10... 全部命中 5 的倍数）。
+research_day_every: 5
+research_day_timeout_seconds: 600
+
+# bot chat 每 5 个交易日唤起一次（cursor 0, 5, 10, 15, 20, 25）；
+# 中间天系统侧 settle_pending_orders + close_my_day 仍按日推进，
+# simulated_datetime 同样每天更新，只是 bot 不被叫起 chat。
+chat_step_days: 5
+
+# 系统侧基金生命周期：world setup 调一次 init_fund_account（默认 reset+100w 现金），
+# 每天结束调一次 close_my_day。bot 在 BOT_ONLY 端口（28172）只有 place_buy/sell 可用。
+fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
+
+buyable_fund_codes:
+  - "000051"   # 华夏沪深300ETF联接A
+  - "000962"   # 天弘中证500ETF联接A
+  - "001592"   # 天弘创业板ETF联接A
+  - "161907"   # 红利ETF联接
+  - "001550"   # 天弘中证医药100A
+  - "001552"   # 天弘中证证券保险A
+  - "001617"   # 天弘中证电子ETF联接A
+  - "004854"   # 广发中证全指汽车指数A
+  - "005223"   # 广发中证基建工程ETF联接A
+  - "012543"   # 嘉实中证新能源汽车指数A
+
+simworld_upstream_url: http://127.0.0.1:18078/mcp

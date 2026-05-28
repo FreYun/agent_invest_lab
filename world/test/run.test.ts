@@ -61,7 +61,7 @@ function setupWorldDir(opts: { bots: string[]; dates: string[]; withSrcWorkspace
     // Tests don't exercise the actual research-day wall-clock; keep low so
     // first-day-extended-budget tests (cursor=0 → researchDayTimeoutSeconds)
     // don't drag a 1-day hanging-bot test out for 300s.
-    researchDayTimeoutSeconds: 5,
+    researchDayTimeoutSeconds: 5, chatStepDays: 1,
     rlConfigBase: cfgBase,
     shadowInclude: ['SOUL.md'],
     loop: 'research-loop',
@@ -84,7 +84,7 @@ function piBaseConfig(overrides: Partial<WorldConfig> = {}): WorldConfig {
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -125,12 +125,11 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   // Day 1 prompt 提示 bot 按 system prompt 里的 ## METHODOLOGY.md section 决策（methodology-only 模式）
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /你的 methodology 已就位/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /## METHODOLOGY\.md/)
-  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /规则同前/)
+  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /今天的节奏（按顺序）/)
   // Day N 不再有 AUTONOMY block
   assert.doesNotMatch(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /今天的节奏由你定/)
-  // 影子 workspace + journal
+  // 影子 workspace
   assert.match(readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'SOUL.md'), 'utf8'), /soul bot7/)
-  assert.ok(existsSync(join(P.shadowWorkspaceDir(worldRoot, 'r1', 'bot7'), 'memory', 'trading', 'journal.md')))
   // 生成的 rl-config 写入了 mem0 url；openclaw_dir 指向 run 专属目录且已创建；
   // extra_roots 指向 world 的共享 skills 库
   const genCfg = JSON.parse(readFileSync(P.runConfigFile(worldRoot, 'r1'), 'utf8'))
@@ -147,52 +146,55 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   cleanup()
 })
 
-test('runWorld: a hanging bot is recorded as timeout but does not block the other bot or the day advance', async () => {
-  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1', 'bot7'], dates: ['2024-03-14'] })
-  config.perBotTimeoutSeconds = 1 // 1s 超时
-  config.researchDayTimeoutSeconds = 1 // first day reuses research-day budget; keep it tight
+test('runWorld: a hanging bot with zero tool calls pauses the run (0s 垃圾日 path)', async () => {
+  // hang 模式下 bot 一个 tool 都没调就挂了——typical 网络挂掉的样子，pause 在当天。
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1', 'bot7'], dates: ['2024-03-14', '2024-03-15'] })
+  config.perBotTimeoutSeconds = 1
+  config.researchDayTimeoutSeconds = 1
   const start = (botId: string, _argv: string[]) => BotServer.start(botId, {
     argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
     readyTimeoutMs: 5000,
     env: botId === 'bot7' ? { STUB_CHAT_MODE: 'hang' } : {},
   })
   await runWorld({ worldRoot, config, runId: 'r2', startBotServer: start })
-  assert.equal(readState(worldRoot, 'r2').status, 'done')
+  const st = readState(worldRoot, 'r2')
+  assert.equal(st.status, 'paused')
+  assert.equal(st.cursor, 0)
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r2', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'r2', '2024-03-14', 'bot7'), 'utf8')).status, 'timeout')
+  assert.equal(existsSync(P.statusFile(worldRoot, 'r2', '2024-03-15', 'bot1')), false)
   cleanup()
 })
 
-test('runWorld: a bot that times out on day N recovers on day N+1 after server restart', async () => {
-  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1', 'bot7'], dates: ['2024-03-14', '2024-03-15'] })
+test('runWorld: a chat that times out AFTER making tool calls still advances (放松判定：bot14 1-06 擦边场景)', async () => {
+  // 真实案例：bot14 在 1-06 chat 跑了 200000ms 客户端 timeout，但 server 端已经做了 18 轮 tool 调用、
+  // 8ms 后就吐出 reply。修复前 → pause → resume 重跑同一天。修复后 → toolCalls>0 → 直接推进。
+  // bot 仍会被 restartBot 在下一天前换掉，避免老 chat 继续残留 tool 调用串味。
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
   config.perBotTimeoutSeconds = 1
   config.researchDayTimeoutSeconds = 1
-  // bot7 spawn #1 (setup) hangs; spawn #2 (after restart) replies normally.
-  // bot1 always replies normally.
-  let bot7Spawns = 0
+  let spawnCount = 0
   const start = (botId: string, _argv: string[]) => {
-    const env: Record<string, string> = {}
-    if (botId === 'bot7') {
-      bot7Spawns += 1
-      if (bot7Spawns === 1) env.STUB_CHAT_MODE = 'hang'
-    }
+    spawnCount += 1
+    // 第一次 spawn (1-06 那天) hang 但发 3 个 tool.call → timeout 但 toolCalls>0 → advance
+    // 第二次 spawn (restart 后跑 1-07) 正常回复
+    const env: Record<string, string> = spawnCount === 1 ? { STUB_CHAT_MODE: 'hang', STUB_NOTIFY_TOOL_CALLS: '3' } : {}
     return BotServer.start(botId, {
       argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
       readyTimeoutMs: 5000,
       env,
     })
   }
-  await runWorld({ worldRoot, config, runId: 'rrestart', startBotServer: start })
-  assert.equal(readState(worldRoot, 'rrestart').status, 'done')
-  // bot1: ok both days
-  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
-  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-15', 'bot1'), 'utf8')).status, 'ok')
-  // bot7: day1 timeout → server restarted before day2 → day2 ok
-  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-14', 'bot7'), 'utf8')).status, 'timeout')
-  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrestart', '2024-03-15', 'bot7'), 'utf8')).status, 'ok')
-  assert.equal(bot7Spawns, 2, 'bot7 should have been spawned twice (initial + restart)')
-  const runLog = readFileSync(P.runLogFile(worldRoot, 'rrestart'), 'utf8')
-  assert.match(runLog, /bot bot7: server restarted after prior timeout/)
+  await runWorld({ worldRoot, config, runId: 'rrelax', startBotServer: start })
+  const st = readState(worldRoot, 'rrelax')
+  assert.equal(st.status, 'done', 'timeout with tool calls should advance, not pause')
+  assert.equal(st.cursor, 2)
+  const day1 = JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrelax', '2024-03-14', 'bot1'), 'utf8'))
+  assert.equal(day1.status, 'timeout', 'day 1 still records timeout for audit')
+  const day2 = JSON.parse(readFileSync(P.statusFile(worldRoot, 'rrelax', '2024-03-15', 'bot1'), 'utf8'))
+  assert.equal(day2.status, 'ok', 'day 2 runs on the restarted server and succeeds')
+  assert.equal(spawnCount, 2, 'bot was restarted between days because day 1 timed out')
+  assert.match(readFileSync(P.runLogFile(worldRoot, 'rrelax'), 'utf8'), /chat timeout but 3 tool call\(s\) made before — will advance via 放松判定/)
   cleanup()
 })
 
@@ -223,7 +225,8 @@ test('runWorld no longer fails when a day has no quotes.json (deprecated: prompt
   cleanup()
 })
 
-test('runWorld: a bot whose process exits mid-chat is recorded dead and the run still finishes', async () => {
+test('runWorld: a bot whose process exits mid-chat is recorded dead and the run pauses on that day', async () => {
+  // 新策略：dead 也是失败 → pause 在当天，下一天不再发起 chat。
   const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1', 'bot7'], dates: ['2024-03-14', '2024-03-15'] })
   const start = (botId: string, _argv: string[]) => BotServer.start(botId, {
     argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
@@ -231,13 +234,74 @@ test('runWorld: a bot whose process exits mid-chat is recorded dead and the run 
     env: botId === 'bot7' ? { STUB_CHAT_MODE: 'exit' } : {},
   })
   await runWorld({ worldRoot, config, runId: 'rdead', startBotServer: start })
-  assert.equal(readState(worldRoot, 'rdead').status, 'done')
-  // bot1 ok on both days
+  const st = readState(worldRoot, 'rdead')
+  assert.equal(st.status, 'paused')
+  assert.equal(st.cursor, 0)
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-14', 'bot1'), 'utf8')).status, 'ok')
-  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-15', 'bot1'), 'utf8')).status, 'ok')
-  // bot7 dead on day1 (process exits during chat); day2 also dead (disabled)
   assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-14', 'bot7'), 'utf8')).status, 'dead')
-  assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rdead', '2024-03-15', 'bot7'), 'utf8')).status, 'dead')
+  assert.equal(existsSync(P.statusFile(worldRoot, 'rdead', '2024-03-15', 'bot1')), false, 'day 2 must not run after a dead-bot day 1')
+  cleanup()
+})
+
+test('runWorld: chat_error + zero tool calls (the 0s 垃圾日 pattern) pauses the run', async () => {
+  // 真实事故根因：connection refused 时 chat 1.5s 就 chat_error 返回、tool_trace 空——
+  // 当日完全没碰到 LLM。修复前 loop 会连刷一片这样的"0s 垃圾日"；现在第一次就 pause。
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15', '2024-03-18'] })
+  const start = (botId: string, _argv: string[]) => BotServer.start(botId, {
+    argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+    readyTimeoutMs: 5000,
+    env: { STUB_CHAT_MODE: 'chat_error', STUB_CHAT_ERROR_TEXT: 'fake upstream timeout', STUB_TOOL_TRACE_LEN: '0' },
+  })
+  await runWorld({ worldRoot, config, runId: 'rce', startBotServer: start })
+  const st = readState(worldRoot, 'rce')
+  assert.equal(st.status, 'paused')
+  assert.equal(st.cursor, 0)
+  const s = JSON.parse(readFileSync(P.statusFile(worldRoot, 'rce', '2024-03-14', 'bot1'), 'utf8'))
+  assert.equal(s.status, 'error')
+  assert.match(s.error, /no tool calls/)
+  assert.match(s.error, /fake upstream timeout/)
+  assert.equal(existsSync(P.statusFile(worldRoot, 'rce', '2024-03-15', 'bot1')), false)
+  assert.equal(existsSync(P.statusFile(worldRoot, 'rce', '2024-03-18', 'bot1')), false)
+  cleanup()
+})
+
+test('runWorld: chat_error WITH at least one tool call advances to next day (放松判定：tool 调过就算推进)', async () => {
+  // 与上一条对照——chat_error 同样被 server 报上来，但 tool_trace 里有真实调用。
+  // 说明 bot 已经走通了 LLM→tool 这一段，只是某次 LLM 调用挂了；明天可以接着跑。
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
+  const start = (botId: string, _argv: string[]) => BotServer.start(botId, {
+    argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+    readyTimeoutMs: 5000,
+    env: { STUB_CHAT_MODE: 'chat_error', STUB_CHAT_ERROR_TEXT: 'mid-flow LLM hiccup', STUB_TOOL_TRACE_LEN: '3' },
+  })
+  await runWorld({ worldRoot, config, runId: 'rce-ok', startBotServer: start })
+  const st = readState(worldRoot, 'rce-ok')
+  assert.equal(st.status, 'done', 'tool_trace 非空时不应 pause，应该跑完两天')
+  assert.equal(st.cursor, 2)
+  for (const d of ['2024-03-14', '2024-03-15']) {
+    assert.equal(JSON.parse(readFileSync(P.statusFile(worldRoot, 'rce-ok', d, 'bot1'), 'utf8')).status, 'ok')
+  }
+  // run.log 留下了 "advancing" 痕迹，便于事后审阅这天确实是 chat_error 但放过的
+  assert.match(readFileSync(P.runLogFile(worldRoot, 'rce-ok'), 'utf8'), /chat_error but 3 tool call\(s\) made — advancing/)
+  cleanup()
+})
+
+test('runWorld: empty reply + zero tool calls pauses the run', async () => {
+  // chat 正常返回但 reply 空 + tool_trace 空——bot 一步也没动，等同于失败。
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
+  const start = (botId: string, _argv: string[]) => BotServer.start(botId, {
+    argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+    readyTimeoutMs: 5000,
+    env: { STUB_REPLY_TEXT: '', STUB_TOOL_TRACE_LEN: '0' },
+  })
+  await runWorld({ worldRoot, config, runId: 'rempty', startBotServer: start })
+  const st = readState(worldRoot, 'rempty')
+  assert.equal(st.status, 'paused')
+  assert.equal(st.cursor, 0)
+  const s14 = JSON.parse(readFileSync(P.statusFile(worldRoot, 'rempty', '2024-03-14', 'bot1'), 'utf8'))
+  assert.equal(s14.status, 'error')
+  assert.match(s14.error, /no tool calls/)
+  assert.equal(existsSync(P.statusFile(worldRoot, 'rempty', '2024-03-15', 'bot1')), false)
   cleanup()
 })
 
@@ -378,7 +442,7 @@ test('botServerArgv: research-loop branch points at researchLoop/server.ts with 
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -407,7 +471,7 @@ test('botServerArgv: research-loop with researchLoopRustBin spawns rust binary "
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -438,7 +502,7 @@ test('botServerArgv: openclaw-pi branch points at piServerEntry with --openclaw-
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -467,7 +531,7 @@ test('botServerArgv: openclaw-pi does NOT append --sessions-dir (piSessionsDir f
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -511,7 +575,7 @@ test('botServerArgv: openclaw-pi without piServerEntry throws', () => {
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -535,7 +599,7 @@ test('botServerArgv: openclaw-pi without openclawRoot throws', () => {
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],

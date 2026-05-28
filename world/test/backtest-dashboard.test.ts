@@ -152,7 +152,7 @@ test('backtest dashboard serves data', async () => {
   }
 })
 
-test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', async () => {
+test('dashboard exposes live run control (GET /api/backtest/runs, POST pause/stop)', async () => {
   const worldRoot = mkdtempSync(join(tmpdir(), 'dash-runs-'))
   const baseState: WorldState = {
     run_id: 'x', status: 'running', current_date: '2024-03-15',
@@ -170,8 +170,8 @@ test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', asyn
     const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
     const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
 
-    // GET /api/runs → controllable runs (running + paused), newest first, done excluded
-    const listRes = await fetch(`${base}/api/runs`)
+    // GET /api/backtest/runs → controllable runs (running + paused), newest first, done excluded
+    const listRes = await fetch(`${base}/api/backtest/runs`)
     assert.equal(listRes.status, 200)
     const { runs } = await listRes.json() as { runs: Array<{ runId: string; status: string; cursor: number; total: number }> }
     assert.deepEqual(runs.map(r => r.runId), ['rpaused', 'rrun'])
@@ -181,21 +181,21 @@ test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', asyn
     assert.equal(rrun.total, 3)
 
     // POST pause without runId → 400
-    const noId = await fetch(`${base}/api/runs/pause`, { method: 'POST', body: '{}' })
+    const noId = await fetch(`${base}/api/backtest/runs/pause`, { method: 'POST', body: '{}' })
     assert.equal(noId.status, 400)
 
     // POST pause a running run → 200 ok, PAUSE sentinel written
-    const pauseRes = await fetch(`${base}/api/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rrun' }) })
+    const pauseRes = await fetch(`${base}/api/backtest/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rrun' }) })
     assert.equal(pauseRes.status, 200)
     assert.deepEqual(await pauseRes.json(), { ok: true })
     assert.ok(existsSync(pauseFile(worldRoot, 'rrun')), 'PAUSE sentinel written')
 
     // POST pause a non-running (done) run → 409 conflict
-    const pauseDone = await fetch(`${base}/api/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rdone' }) })
+    const pauseDone = await fetch(`${base}/api/backtest/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rdone' }) })
     assert.equal(pauseDone.status, 409)
 
     // POST stop a paused run → flips straight to aborted (terminal)
-    const stopRes = await fetch(`${base}/api/runs/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rpaused' }) })
+    const stopRes = await fetch(`${base}/api/backtest/runs/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rpaused' }) })
     assert.equal(stopRes.status, 200)
     assert.equal(readState(worldRoot, 'rpaused').status, 'aborted')
   } finally {
