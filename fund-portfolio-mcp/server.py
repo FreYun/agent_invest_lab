@@ -251,9 +251,9 @@ def _calc_max_drawdown(nav_list: list[float]) -> float:
 
 
 # fund_bot_performance 区间业绩计算的常量。
-# rf 1.8% 年化由用户指定；交易日按 252 天换算到日化 rf。
+# rf 1% 年化由用户指定；交易日按 252 天换算到日化 rf。
 # 所有指标都是区间口径（不年化），用户明确要求"区间波动率，不要年化"。
-_BOT_PERF_RF_ANNUAL_PCT = 1.8
+_BOT_PERF_RF_ANNUAL_PCT = 1
 _BOT_PERF_TRADING_DAYS_PER_YEAR = 252
 _BOT_PERF_RF_DAILY_PCT = _BOT_PERF_RF_ANNUAL_PCT / _BOT_PERF_TRADING_DAYS_PER_YEAR
 # 窗口口径（交易日，不是自然日）。since_inception 取全量序列。
@@ -376,7 +376,7 @@ def _compute_fund_nav_performance(conn, fund_code: str, trade_date: str) -> None
     """从 fund_nav 的 acc_nav/daily_return_pct 序列计算单基金的区间业绩，写
     fund_nav_performance 5 行（period = 1m/3m/6m/1y/since_inception）。
 
-    与 _compute_bot_performance 的口径完全对齐（区间，不年化，rf=1.8%/252）：
+    与 _compute_bot_performance 的口径完全对齐（区间，不年化，rf=1%/252）：
       - 用 acc_nav（累计净值）算 return_pct 和 max_drawdown_pct（含分红再投资）
       - 用 daily_return_pct 算 volatility_pct 和 sharpe_ratio（已含分红的口径）
       - 不满窗口 → fallback 到 since_inception 全量
@@ -1041,7 +1041,7 @@ async def get_fund_perf(fund_code: str) -> str:
       intervals          → 老 fund_performance 表的外部 upsert 业绩（含同类排名）；
                             按最新 as_of_date 取该日全部 period 行。
       nav_intervals      → fund_nav_performance 表的 NAV 派生业绩（与 bot 账户业绩同口径，
-                            区间不年化，rf=1.8%/252）；按最新 trade_date 取该日全部 period 行。
+                            区间不年化，rf=1%/252）；按最新 trade_date 取该日全部 period 行。
                             字段：return_pct / max_drawdown_pct / volatility_pct /
                             sharpe_ratio / calmar_ratio / data_points / window_target_days /
                             fallback（1=数据不足兜底到 since_inception）。
@@ -1947,7 +1947,7 @@ async def portfolio_get_my_performance(
                                                  perf_as_of_date, metrics: {1m, 3m, 6m, 1y, since_inception}}
                                                  日期对齐 as_of_perf_date；个别基金当日没 perf 时 perf_as_of_date
                                                  回退到 ≤ as_of_perf_date 的最近一日（不越过 as_of_date 偷看未来）
-                         所有指标都是**区间口径不年化**；rf=1.8% 年化按 252 个交易日折算到日化 rf。
+                         所有指标都是**区间口径不年化**；rf=1% 年化按 252 个交易日折算到日化 rf。
                          sharpe = (mean_daily_return - rf_daily) / stdev_daily_return；
                          calmar = return_pct / abs(max_drawdown_pct)。
                          账户业绩源 = fund_bot_daily_snapshots.net_value 序列；
@@ -2092,7 +2092,7 @@ async def portfolio_get_my_performance(
             "max_drawdown_pct": _r(float(s["max_drawdown_pct"] or 0.0), 4),
         } for s in series_rows]
 
-        # 区间业绩（fund_bot_performance；区间口径不年化；rf=1.8% 年化按 252 个交易日折算到日化）
+        # 区间业绩（fund_bot_performance；区间口径不年化；rf=1% 年化按 252 个交易日折算到日化）
         # 取本 run 最新一日的 5 个 period 行（trade_date < as_of_date，禁止偷看未来）。
         perf_date_row = conn.execute(
             "SELECT MAX(trade_date) AS d FROM fund_bot_performance "
@@ -4190,7 +4190,7 @@ async def upsert_fund_nav(navs_json: str) -> str:
     写完 fund_nav 后**自动级联刷新 fund_nav_performance**：对本批次出现的每个
     (fund_code, MAX(nav_date)) 组合调一次 _compute_fund_nav_performance。
     意味着 daily-refresh 每天灌 NAV 之后，区间业绩表（1m/3m/6m/1y/since_inception）
-    会随之刷新——区间口径不年化，rf=1.8%/252（与 fund_bot_performance 同口径）。
+    会随之刷新——区间口径不年化，rf=1%/252（与 fund_bot_performance 同口径）。
     """
     try:
         navs = json.loads(navs_json)
