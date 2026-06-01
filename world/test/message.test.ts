@@ -35,7 +35,7 @@ test('first-day message: full cold-start rules, mcp-only tool policy, points to 
   // 行情走 simworld-data；账户/绩效/PnL/持仓 NAV/指数 MA 全部预取注入下方，
   // prompt 必须明确告诉 bot "不要重复调 portfolio_get_my_*"。
   assert.match(m, /simworld-data/)
-  assert.match(m, /不要重复调用 portfolio_get_my_history/)
+  assert.match(m, /不要重复调用 mcp__fund_portfolio_mcp__portfolio_get_my_history/)
   assert.match(m, /portfolio_place_buy_order/)
   // 不再有"自己查 portfolio_get_my_*"这种鼓励重复 fetch 的句式
   assert.doesNotMatch(m, /portfolio_get_my_history \/ portfolio_get_my_performance \/ portfolio_get_my_trades 自己查/)
@@ -61,7 +61,7 @@ test('non-first-day message: concise rules only, no AUTONOMY / playbook / day-ty
   // Day N brief 也不能教 discover_tools——loop server 已经把所有 mcp__* 静态挂出。
   assert.doesNotMatch(brief, /discover_tools/)
   // Day N 也明确告诉 bot 不要重复 fetch 已注入的账户数据
-  assert.match(brief, /不要重复调 portfolio_get_my_history/)
+  assert.match(brief, /不要重复调 mcp__fund_portfolio_mcp__portfolio_get_my_history/)
   // AUTONOMY 已被删除（属于 embedded strategy：规定看什么、平静日默认 HOLD、大事多研究）；
   // 节奏由 bot 自己 Day 1 写下的策略决定，prompt 不再注入任何节奏指引。
   assert.doesNotMatch(brief, /今天的节奏由你定/)

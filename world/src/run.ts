@@ -15,6 +15,7 @@ import { createSimworldProxy, type SimworldProxyHandle } from './simworld-proxy/
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
 import { createStrategyServer, type StrategyServerHandle } from './strategy-server/server.ts'
 import { readState, writeState, type WorldState } from './state.ts'
+import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
 import * as P from './paths.ts'
 
 export type StartBotServer = (botId: string, argv: string[]) => Promise<BotServer>
@@ -304,7 +305,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
 
   // simworld-data MCP 代理（必选，进程内）。模板变量 ${SIMWORLD_PROXY_URL} 在
   // buildShadowWorkspace 拷贝 config/mcporter.json 时替换为下面的 url。
-  const simworldProxy = await createSimworldProxy({ upstreamUrl: config.simworldUpstreamUrl, getCurrentDate })
+  const simworldProxy = await createSimworldProxy({ upstreamUrl: config.simworldUpstreamUrl, getCurrentDate, clientId: `run-${runId}` })
   writeFileSync(P.simworldProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: simworldProxy.port, url: simworldProxy.url, upstream: config.simworldUpstreamUrl }, null, 2) + '\n')
   log(worldRoot, runId, `simworld-data proxy at ${simworldProxy.url} (upstream ${config.simworldUpstreamUrl}); ${simworldProxy.tools.length} tools captured for daily prompt`)
   if (config.simworldTools) {
@@ -459,6 +460,22 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
   try {
     const r = await b.server.chat({ message, session_key: SESSION_KEY(runId, b.botId, date), history: [] }, { timeoutMs: perBotTimeoutMs })
     writeFileSync(P.replyFile(worldRoot, runId, date, b.botId), JSON.stringify(r, null, 2) + '\n')
+    // belief MD 校验（非阻塞）：bot 在本回合可能更新了 memory/portfolio/fund/市场环境判断.md，
+    // 这里跑结构校验并把结果落到 belief_validation.json，便于审阅与下回合 buildBeliefContext。
+    // 任何异常都 swallow——绝不阻塞 chat 主流程；用 date 作 stamp 避免引入系统时间依赖。
+    try {
+      const mdPath = join(P.shadowWorkspaceDir(worldRoot, runId, b.botId), 'memory/portfolio/fund/市场环境判断.md')
+      const result = await validateBeliefMd(mdPath)
+      if (result !== null) {
+        const validationPath = join(P.botDayDir(worldRoot, runId, date, b.botId), 'belief_validation.json')
+        writeFileSync(validationPath, JSON.stringify({ checked_at_date: date, ...result }, null, 2))
+        if (!result.ok) {
+          log(worldRoot, runId, `[belief-validate] bot=${b.botId} date=${date} issues=${result.issues.join(';')}`)
+        }
+      }
+    } catch (e) {
+      log(worldRoot, runId, `[belief-validate] bot ${b.botId} ${date} failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
     // r.chat_error 由 rs server.rs 在 chat.send() 因 chat_llm 超时 / LLM 错误 mid-flow
     // 终止时填写。chat 本身 graceful return（带 lastReply），不带这字段就没法区分"正常
     // 完成"还是"被静默截断"。有则当天记 'error'，避免下一天还踩同一个 60s 坑。
@@ -728,6 +745,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         // Bot 的 methodology 由 research-loop 每次 chat splice 进 system prompt 的
         // ## METHODOLOGY.md section，daily message 只附短提示（METHODOLOGY_DAY1_HINT /
         // METHODOLOGY_DAYN_HINT），不重复注入正文。
+        // belief-context（市场环境判断的滚动摘要）：best-effort 注入到 daily message。
+        // build 失败不阻塞 chat 主流程——空串等于不渲染对应 section。
+        const beliefBlock = await buildBeliefContext(b.botId, runId, date).catch((e: unknown) => {
+          log(worldRoot, runId, `[belief-context] bot ${b.botId} ${date} build failed: ${e instanceof Error ? e.message : String(e)}`)
+          return ''
+        })
         const message = renderDailyMessage({
           worldRoot, date, isFirstDay,
           botId: b.botId,
@@ -736,6 +759,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           simworldTools: resolveSimworldTools(config.simworldTools, setupRes.simworldProxy.tools),
           dailyContext,
           historyWindow,
+          beliefBlock,
           // 仅 Day 1 fullRules 用到——message.ts 自己门控；这里无脑传即可，Day N 会丢弃。
           tradingDaysTotal: setupRes.tradingDates.length,
         })

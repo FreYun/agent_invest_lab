@@ -17,6 +17,9 @@ export interface SimworldProxyOptions {
   timeOfDay?: string
   host?: string
   port?: number
+  /** 调用方标识，作为 X-Client-Id 注入到 upstream 请求头，供 simworld-mcp 调用日志区分
+   *  是哪个 run 在打数据（回环短连接无法事后反查 pid，故由此自报）。如 `run-<runId>`。 */
+  clientId?: string
 }
 
 export interface SimworldProxyHandle {
@@ -175,6 +178,9 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     }
     if (!headers['accept']) headers['accept'] = 'application/json, text/event-stream'
     if (body !== null && !headers['content-type']) headers['content-type'] = 'application/json'
+    // 自报调用方身份（bot 无法覆写：bot 侧请求头里的 x-client-id 已在上面的安全转发
+    // 中被原样带过，这里强制以 proxy 配置值覆盖，确保日志里看到的是真实 run）。
+    if (opts.clientId) headers['x-client-id'] = opts.clientId
 
     const init: RequestInit = { method: req.method ?? 'GET', headers }
     if (body !== null) init.body = body

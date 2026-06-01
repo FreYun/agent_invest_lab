@@ -205,6 +205,30 @@ export interface DailyContextData {
   indices?: IndexQuote[]
   benchmark?: BenchmarkSeries
   fundFees?: FundFee[]
+  // multi-fund bot 的可买池主题+因子+1y业绩 meta（单基金 bot 这块不渲染——它只交易自己的一只）。
+  // 单条 SQL JOIN fund_info + fund_style(latest) + fund_performance(1y PIT) 拉的 lightweight 快照。
+  buyablePoolMeta?: BuyablePoolMeta
+}
+
+export interface BuyablePoolMeta {
+  rows: BuyablePoolMetaRow[]
+  // 数据 PIT 锚点（便于 prompt 给 bot 说明"看到的 style/perf 是哪天的口径"）
+  styleAsOf: string | null   // fund_style 的取数日；当前库内只有 2026-03-31 单截面，回测日 < 该日属未来信息（已知小漏）
+  perf1yAsOf: string | null  // fund_performance(1y) 的取数日；回测日 < 2026-04-27 时为 null（perf 数据从那天才有快照）
+}
+
+export interface BuyablePoolMetaRow {
+  fund_code: string
+  fund_name: string | null
+  theme: string | null          // "科技" / "新能源" / "全市场" / 多类共振如 "新能源,科技"
+  scale: number | null          // 规模（亿元）
+  size_style: string | null     // 大盘 / 中盘 / 小盘
+  invest_style: string | null   // 价值 / 平衡 / 成长
+  p1y_return_pct: number | null
+  p1y_rank_pct: number | null   // 同类百分位，低 = 排名靠前（更好）
+  p1y_rank_text: string | null  // "3274/3745" 格式
+  p1y_mdd_pct: number | null
+  p1y_sharpe: number | null
 }
 
 // ============================================================================
@@ -413,16 +437,22 @@ async function fetchFundSeries(opts: {
   const startDate = computeWindowStart(opts.asOfDate, 100)  // 100 calendar ≈ 70 trading
   const endDate = priorDay(opts.asOfDate)
   const out: FundSeries[] = []
-  for (const code of opts.fundCodes) {
+  let raw: { items?: { 基金代码?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number; 日收益率?: number }[] }[] } | null = null
+  try {
+    raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
+      fund_codes: opts.fundCodes,
+      simulated_datetime: simDt,
+      start_date: startDate,
+      end_date: endDate,
+    }, { timeoutMs: 60_000 }) as { items?: { 基金代码?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number; 日收益率?: number }[] }[] } | null
+  } catch {
+    return []
+  }
+  for (const item of raw?.items ?? []) {
     try {
-      const raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
-        fund_codes: [code],
-        simulated_datetime: simDt,
-        start_date: startDate,
-        end_date: endDate,
-      }) as { items?: { 基金代码?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number; 日收益率?: number }[] }[] } | null
-      const item = raw?.items?.[0]
       if (!item || !item['是否可用'] || !Array.isArray(item['净值记录'])) continue
+      const code = String(item['基金代码'] ?? '').trim()
+      if (!code) continue
       // Last 20 trading days for the prompt display.
       const allRecs = item['净值记录']
         .map(r => ({
@@ -682,6 +712,10 @@ async function fetchIndexBenchmark(opts: {
 // runStartDate 锚定 = 1，每天取算术平均（缺值的基金当天跳过该基金，不在分母里
 // 灌零——保证 sparse 日期表现真实）。这是"如果你完全不择时就这么躺平"的最直接
 // 对比，bot 看 alpha 列就知道每天的择时是赚还是亏。
+//
+// 系统层工具调用红线：全池 / 大池数据必须批量拉取。禁止在这里按 fund_code 循环
+// 打 MCP（865 只池子会放大成 865 个 session）；要么一次 fund_nav(fund_codes=[...])，
+// 要么走 fund-portfolio-mcp 的批量 CLI / 本地 SQL。少量持仓基金的展示逻辑不适用此限制。
 async function fetchFundPoolBenchmark(opts: {
   simworldUrl: string
   fundCodes: string[]
@@ -693,16 +727,22 @@ async function fetchFundPoolBenchmark(opts: {
   const perFundNorm: Record<string, Record<string, number>> = {}
   const perFundName: Record<string, string> = {}
   const allDates = new Set<string>()
-  for (const code of opts.fundCodes) {
+  let raw: { items?: { 基金代码?: string; 基金名称?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number }[] }[] } | null = null
+  try {
+    raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
+      fund_codes: opts.fundCodes,
+      simulated_datetime: simDt,
+      start_date: opts.runStartDate,
+      end_date: priorDay(opts.asOfDate),
+    }, { timeoutMs: 60_000 }) as { items?: { 基金代码?: string; 基金名称?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number }[] }[] } | null
+  } catch {
+    return null
+  }
+  for (const item of raw?.items ?? []) {
     try {
-      const raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
-        fund_codes: [code],
-        simulated_datetime: simDt,
-        start_date: opts.runStartDate,
-        end_date: priorDay(opts.asOfDate),
-      }) as { items?: { 基金代码?: string; 基金名称?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number }[] }[] } | null
-      const item = raw?.items?.[0]
       if (!item || !item['是否可用'] || !Array.isArray(item['净值记录'])) continue
+      const code = String(item['基金代码'] ?? '').trim()
+      if (!code) continue
       const series = item['净值记录']
         .map(r => ({ date: String(r['交易日期'] ?? '').slice(0, 10), nav: Number(r['复权单位净值'] ?? 0) }))
         .filter(r => r.date && r.nav > 0)
@@ -755,6 +795,36 @@ async function fetchFundFees(opts: {
     return Array.isArray(parsed?.fees) ? parsed.fees : []
   } catch {
     return []
+  }
+}
+
+// 多基金 bot 的可买池 meta：主题分类 + 市值/风格因子 + 1y 业绩（含同类排名）。
+// 单条 JOIN SQL，比让 bot 自己 N 次 get_fund_detail 高效得多。
+async function fetchBuyablePoolMeta(opts: {
+  fundMcpCli: string
+  fundCodes: string[]
+  asOfDate: string
+}): Promise<BuyablePoolMeta | null> {
+  if (opts.fundCodes.length === 0) return null
+  try {
+    const r = await runFundCli(opts.fundMcpCli, 'get_pool_meta',
+      ['--fund-codes', opts.fundCodes.join(','), '--as-of-date', opts.asOfDate],
+      { timeoutMs: 30_000 })
+    if (r.code !== 0) return null
+    const parsed = JSON.parse(r.stdout) as {
+      success?: boolean
+      pool?: BuyablePoolMetaRow[]
+      style_as_of?: string | null
+      perf_1y_as_of?: string | null
+    }
+    if (!parsed?.success || !Array.isArray(parsed.pool)) return null
+    return {
+      rows: parsed.pool,
+      styleAsOf: parsed.style_as_of ?? null,
+      perf1yAsOf: parsed.perf_1y_as_of ?? null,
+    }
+  } catch {
+    return null
   }
 }
 
@@ -824,13 +894,20 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
   const feesPromise: Promise<FundFee[]> = (opts.fundMcpCli && opts.buyableFundCodes && opts.buyableFundCodes.length > 0)
     ? fetchFundFees({ fundMcpCli: opts.fundMcpCli, fundCodes: opts.buyableFundCodes })
     : Promise.resolve([])
+  // 可买池 meta（主题/因子/1y业绩）——给 multi-fund bot 在 prompt 里渲染【可买池主题分布】。
+  // 单基金 bot 不渲染这块（message.ts 按 botKind 自决），但我们还是 fetch 一下，因为：
+  // (1) 池子小时 SQL ~10ms，几乎无开销；(2) 把"渲染策略"留给 message.ts，daily-context 不感知 bot 语义。
+  const poolMetaPromise: Promise<BuyablePoolMeta | null> = (opts.fundMcpCli && opts.buyableFundCodes && opts.buyableFundCodes.length > 0)
+    ? fetchBuyablePoolMeta({ fundMcpCli: opts.fundMcpCli, fundCodes: opts.buyableFundCodes, asOfDate: opts.asOfDate })
+    : Promise.resolve(null)
 
-  const [account, perf, indexSnapshots, benchmarkSeries, fundFees] = await Promise.all([accountPromise, perfPromise, indexPromise, benchmarkPromise, feesPromise])
+  const [account, perf, indexSnapshots, benchmarkSeries, fundFees, poolMeta] = await Promise.all([accountPromise, perfPromise, indexPromise, benchmarkPromise, feesPromise, poolMetaPromise])
   if (account) out.account = account
   if (perf) out.performance = perf
   if (indexSnapshots.length) out.indices = indexSnapshots
   if (benchmarkSeries) out.benchmark = benchmarkSeries
   if (fundFees.length) out.fundFees = fundFees
+  if (poolMeta && poolMeta.rows.length) out.buyablePoolMeta = poolMeta
 
   if (account && opts.simworldUrl) {
     const heldCodes = account.holdings.map(h => h.fund_code).filter(Boolean)

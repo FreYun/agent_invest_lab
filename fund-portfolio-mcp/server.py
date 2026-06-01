@@ -66,13 +66,18 @@ mcp = FastMCP(
         "巡检调仓记录、每日快照追踪、选品漏斗追踪等工具。"
         "所有 bot 共用同一个数据库，通过 bot_id 区分。"
         + ("【当前为 READONLY 模式：写工具未注册，bot 写库请走系统层 fund_md_to_db。】" if READONLY else "")
-        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance 暴露；其余隐藏。】" if BOT_ONLY else "")
+        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance / portfolio_get_buyable_funds / get_fund_detail 暴露；其余隐藏。】" if BOT_ONLY else "")
     ),
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 # BOT_ONLY: monkey-patch mcp.tool 让未列入白名单的函数装饰后变 no-op (函数原样返回，不注册)
 # 必须在 BOT_ONLY 真值时立刻 patch，因为下面的 @mcp.tool() 装饰器在 module load 时执行。
+#
+# get_fund_detail 在多基金 bot（bot101+）场景下必须暴露：bot 做组合配置/轮动时需要
+# 主题（theme）/ 市值/风格因子（size_style/invest_style）/ 全区间业绩（1m..5y+inception，含同类排名）——
+# simworld-data 的 fund_basic_info 上游接口给不了这些字段，只能走库内的 get_fund_detail。
+# 单基金 bot 调它也无害（只是读操作，run_id 不强制）。
 _BOT_ONLY_ALLOWED = {
     "portfolio_place_buy_order",
     "portfolio_place_sell_order",
@@ -80,6 +85,7 @@ _BOT_ONLY_ALLOWED = {
     "portfolio_get_my_trades",
     "portfolio_get_my_performance",
     "portfolio_get_buyable_funds",
+    "get_fund_detail",
 }
 if BOT_ONLY:
     _orig_mcp_tool = mcp.tool
@@ -971,7 +977,26 @@ async def get_fund_pool(fund_type: str = "", top_n: int = 500) -> str:
 
 @mcp.tool()
 async def get_fund_detail(fund_code: str) -> str:
-    """获取单只基金详情：基本信息 + 最新净值 + 最新业绩 + 风格 + 行业持仓 + 重仓股。"""
+    """获取单只基金详情。多基金 bot 做"主线→候选基金"映射、组合配置、池内选品都用这个。
+
+    返回的关键字段：
+      data.theme              主题分类（科技 / 新能源 / 医药 / 金融 / 周期 / 消费 / 制造 /
+                              基建地产 / 全市场，或组合标签如 "新能源,科技"）。判断主线后用
+                              这个字段从池子里收敛候选基金。
+      data.style.size_style   市值因子（大盘 / 中盘 / 小盘）。
+      data.style.invest_style 风格因子（平衡 / 成长 / 价值）。
+      data.performance        分区间业绩（按最新 as_of_date 取，含 1m / 3m / 6m / 1y / 2y /
+                              3y / 5y / since_inception 全档），每档含 return_pct /
+                              rank_pct（同类百分位）/ rank_text（"3274/3745"格式排名）/
+                              max_drawdown_pct / volatility_pct / sharpe_ratio / calmar_ratio。
+                              **不要只看 1y——做组合配置要看 3y/5y 才能判断长周期定性。**
+      data.latest_nav         最新净值
+      data.industry           行业持仓（如有）
+      data.top_stocks         前 10 重仓股（如有）
+
+    池内选品建议：同主题下，优先按 sharpe_ratio 高 / 跟踪误差小（fund_performance.return_pct
+    与跟踪指数对比）/ 规模合理（5亿~100亿）筛选。
+    """
     with get_conn() as conn:
         info = conn.execute("SELECT * FROM fund_info WHERE fund_code = ?", (fund_code,)).fetchone()
         if not info:

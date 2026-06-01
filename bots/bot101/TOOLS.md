@@ -113,61 +113,30 @@ mem0_search(query: "黄金ETF写过哪些角度", scope: "self")
 
 ---
 
-## 投顾组合管理: tougu-portfolio-mcp
+## 基金组合管理: fund-portfolio-mcp
 
-投顾产品池查询、持仓管理、巡检调仓记录、收益快照追踪。数据存储在本地 SQLite，所有 bot 共用。
-
-### V2 执行态（投顾主链路必读）
+当前配置加载的是 `fund-portfolio-mcp`，不是旧产品池工具。多指数权益组合执行时优先使用下面这些工具：
 
 | 工具 | 功能 |
 |------|------|
-| `save_system_run` | 记录一轮 cron / 手动执行的 run_id、trade_date、data_version |
-| `save_allocation_run` | 保存 Phase B0 市场状态和大类配置结果 |
-| `get_latest_allocation_run` | 读取最近一次 allocation_runs |
-| `save_portfolio_plan` | 保存 Phase B 目标组合 |
-| `get_latest_portfolio_plan` | 读取最近一次 portfolio_plans |
-| `apply_review_and_rebalance` | **Phase C 首选主入口**，单事务写 review + actions + holdings + cash |
+| `portfolio_get_buyable_funds` | 查询本轮 run 实际允许交易的基金代码池 |
+| `get_fund_detail` | 查询单只基金主题、风格因子、规模、长期业绩、回撤、Sharpe 和同类排名 |
+| `portfolio_get_my_history` | 查询当前账户、持仓、订单和历史动作 |
+| `portfolio_get_my_trades` | 查询交易记录 |
+| `portfolio_get_my_performance` | 查询账户绩效和回撤序列 |
+| `portfolio_place_buy_order` | 下买入订单，必须写清 `reason` |
+| `portfolio_place_sell_order` | 下卖出订单，必须写清 `reason` |
 
-### 产品查询
+## 数据与研究
 
-| 工具 | 功能 | 示例 |
-|------|------|------|
-| `get_product_pool` | 按档位筛选产品池 | `get_product_pool(risk_band=2)` → 第二档产品 |
-| `get_product_detail` | 单产品详情+绩效+主题 | `get_product_detail(product_id="AILVXKB")` |
-| `get_product_performance` | 产品多区间绩效 | `get_product_performance(product_id="AILVXKB")` |
+- `simworld-data`：市场状态、指数行情、股债性价比、估值、情绪、宏观、板块因子、资金流、研报搜索。
+- `strategy-mcp`：只作为策略辅助和复核，不替代 `METHODOLOGY.md` 的主流程。
 
-### 持仓管理
+## 执行原则
 
-| 工具 | 功能 |
-|------|------|
-| `get_bot_holdings` | 获取当前活跃持仓 |
-| `save_bot_holdings` | 更新持仓（关闭旧仓+写入新仓） |
-| `init_bot_holdings` | 首次初始化持仓 |
-
-### 巡检与调仓
-
-| 工具 | 功能 |
-|------|------|
-| `check_cooldown` | 检查冷静期 |
-| `apply_review_and_rebalance` | **正式执行优先使用**：事务性保存巡检结论、调仓动作和最新持仓 |
-| `save_review` | 保存巡检结论 (KEEP/REBALANCE/SWITCH) |
-| `save_rebalance_actions` | 保存调仓动作明细 |
-| `get_review_history` | 查询巡检历史 |
-
-### 收益快照
-
-| 工具 | 功能 |
-|------|------|
-| `record_daily_snapshot` | 记录当日收益快照（**只传 `bot_id` 和 `trade_date`**，系统自行读取持仓和净值计算） |
-| `rerun_snapshot` | 单独重跑某 bot 某交易日的快照，不重复执行调仓 |
-| `get_performance_curve` | 获取收益曲线 |
-
-### 数据更新
-
-| 工具 | 功能 |
-|------|------|
-| `update_products` | 批量刷新产品池数据 |
-| `update_product_metrics` | 批量刷新产品绩效指标 |
+- 每日先读 prompt 注入的可买池主题分布，再按方法论收敛候选。
+- 不用 `get_fund_detail` 扫全池，只对最终 1-3 只候选拉全量画像。
+- 每笔交易都必须留下可审计理由，理由要包含风险状态、主线判断、仓位结构变化。
 
 ---
 

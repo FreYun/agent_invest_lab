@@ -109,6 +109,18 @@ async def _amain() -> str:
     p_fees.add_argument("--fund-codes", required=True,
                         help="逗号分隔的 6 位基金代码，例如 '016729,510300'")
 
+    # World daily-prompt 注入用（multi-fund bot 专用）：批量取 buyable 池的"主题+因子+1y业绩"
+    # meta，给多基金 bot 在 prompt 里渲染【可买池主题分布 + 候选样本】。单条 SQL JOIN
+    # fund_info + fund_style(latest) + fund_performance(period=1y, as_of <= as_of_date)，
+    # 比 bot 自己 865 次 get_fund_detail 高效得多。
+    # PIT 说明：fund_style 当前只有 2026-03-31 单截面快照，回测日 < 该日时 style 字段会带
+    # 未来信息——属于已知的小漏，size/invest_style 是慢变标签，对策略影响很小。
+    p_meta = sub.add_parser("get_pool_meta")
+    p_meta.add_argument("--fund-codes", required=True,
+                        help="逗号分隔的 6 位基金代码")
+    p_meta.add_argument("--as-of-date", required=True,
+                        help="回测当日 YYYY-MM-DD；1y 业绩快照取 as_of_date <= 该日的最新一行")
+
     args = parser.parse_args()
     if args.cmd == "init_fund_account":
         return await portfolio_init_my_account(
@@ -130,6 +142,9 @@ async def _amain() -> str:
     if args.cmd == "get_fund_fees":
         codes = [c.strip() for c in args.fund_codes.split(",") if c.strip()]
         return _get_fund_fees(codes)
+    if args.cmd == "get_pool_meta":
+        codes = [c.strip() for c in args.fund_codes.split(",") if c.strip()]
+        return _get_pool_meta(codes, args.as_of_date)
     raise SystemExit(f"unknown cmd {args.cmd!r}")
 
 
@@ -165,6 +180,72 @@ def _get_fund_fees(fund_codes: list[str]) -> str:
                 "redeem_status": row["redeem_status"] or "",
             })
     return json.dumps({"success": True, "fees": out}, ensure_ascii=False)
+
+
+def _get_pool_meta(fund_codes: list[str], as_of_date: str) -> str:
+    """主题+因子+1y业绩 meta（multi-fund bot 的可买池注入）。
+
+    单条 SQL：fund_info LEFT JOIN fund_style(latest) LEFT JOIN fund_performance(1y, PIT)。
+    缺失的字段返回 None，渲染端按 None 跳过该列即可（不阻塞 bot）。
+    """
+    if not fund_codes:
+        return json.dumps({"success": True, "pool": []}, ensure_ascii=False)
+
+    out = []
+    # SQL 用参数化的 IN 列表（避免 ? 占位符上限和注入风险——code 是 6 位数字，但仍用参数化）
+    placeholders = ",".join("?" * len(fund_codes))
+    with get_conn() as conn:
+        # 1y perf 的 PIT 锚：as_of_date <= 回测当日的最新一行。
+        perf_anchor = conn.execute(
+            "SELECT MAX(as_of_date) AS d FROM fund_performance WHERE as_of_date <= ?",
+            (as_of_date,),
+        ).fetchone()
+        perf_date = perf_anchor["d"] if perf_anchor else None
+
+        # fund_style 当前只有单截面 2026-03-31，取 MAX(as_of_date)（无视回测日，已知 PIT 漏洞）
+        style_anchor = conn.execute(
+            "SELECT MAX(as_of_date) AS d FROM fund_style"
+        ).fetchone()
+        style_date = style_anchor["d"] if style_anchor else None
+
+        # 一条 JOIN 拉全部需要的列
+        rows = conn.execute(
+            f"""
+            SELECT
+                fi.fund_code,
+                fi.fund_name,
+                fi.theme,
+                fi.scale,
+                fs.size_style,
+                fs.invest_style,
+                fp.return_pct       AS p1y_return_pct,
+                fp.rank_pct         AS p1y_rank_pct,
+                fp.rank_text        AS p1y_rank_text,
+                fp.max_drawdown_pct AS p1y_mdd_pct,
+                fp.sharpe_ratio     AS p1y_sharpe
+            FROM fund_info fi
+            LEFT JOIN fund_style fs ON fs.fund_code = fi.fund_code AND fs.as_of_date = ?
+            LEFT JOIN fund_performance fp ON fp.fund_code = fi.fund_code
+                AND fp.period = '1y'
+                AND fp.as_of_date = ?
+            WHERE fi.fund_code IN ({placeholders})
+            """,
+            (style_date or "", perf_date or "", *fund_codes),
+        ).fetchall()
+
+        for r in rows:
+            d = dict(r)
+            # scale 是数值（亿元）；空字符串 / None 留作 None
+            if d.get("scale") in ("", None):
+                d["scale"] = None
+            out.append(d)
+
+    return json.dumps({
+        "success": True,
+        "pool": out,
+        "style_as_of": style_date,
+        "perf_1y_as_of": perf_date,
+    }, ensure_ascii=False)
 
 
 def main() -> None:
