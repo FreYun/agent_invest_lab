@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { WorldConfig } from './config.ts'
@@ -47,8 +47,22 @@ export function openclawJsonSource(config: WorldConfig): string {
  *  bot 看不见，只能由 world setup / 每日收盘自动触发。 */
 export async function runFundCli(cliPath: string, cmd: string, args: string[], opts: { timeoutMs?: number } = {}): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolveP, reject) => {
-    const venvPython = join(dirname(cliPath), '.venv', 'bin', 'python')
-    const python = existsSync(venvPython) ? venvPython : 'python3'
+    const localVenvPython = join(dirname(cliPath), '.venv', 'bin', 'python')
+    const sharedVenvPython = '/opt/MCP/.venv/bin/python'
+    const pythonCandidates = [
+      process.env.FUND_MCP_PYTHON?.trim(),
+      sharedVenvPython,
+      localVenvPython,
+      'python3',
+    ].filter((p): p is string => Boolean(p))
+
+    const python = (() => {
+      for (const candidate of pythonCandidates) {
+        const check = spawnSync(candidate, ['-c', 'import mcp'], { stdio: 'ignore' })
+        if (!check.error && check.status === 0) return candidate
+      }
+      return localVenvPython
+    })()
     const child = spawn(python, [cliPath, cmd, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {

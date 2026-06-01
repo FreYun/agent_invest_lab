@@ -1,4 +1,4 @@
-research_loop: /home/rooot/.openclaw/research-loop/ts
+research_loop: /opt/.openclaw/research-loop/ts
 
 bots: [bot1]
 
