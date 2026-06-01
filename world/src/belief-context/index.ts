@@ -31,7 +31,7 @@ export async function buildBeliefContext(
 ): Promise<string> {
   try {
     const records = await scanRecentBeliefs(botId, runId, currentDate, HISTORY_WINDOW_DAYS);
-    const stats = computeCalibration(records);
+    const stats = await computeCalibration(records);
     const block = formatCalibrationBlock(stats, botId);
     return `${SCHEMA_REQUIREMENT_BLOCK}\n\n${block}`;
   } catch (err) {

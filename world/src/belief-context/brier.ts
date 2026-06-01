@@ -42,10 +42,10 @@ function median(xs: number[]): number | null {
   return s.length % 2 === 0 ? (s[mid - 1]! + s[mid]!) / 2 : s[mid]!;
 }
 
-export function computeCalibration(
+export async function computeCalibration(
   records: BeliefRecord[],
   target?: IndexSymbol,
-): CalibrationStats {
+): Promise<CalibrationStats> {
   const emptyByHorizon: Record<Horizon, HorizonStats> = {
     "t+1": emptyHorizon(),
     "t+5": emptyHorizon(),
@@ -94,7 +94,7 @@ export function computeCalibration(
     for (const r of relevant) {
       const hb = r.belief.horizons[h];
       if (!hb || typeof hb.p_up !== "number") continue;
-      const actual = getActualUp(chosenTarget, r.date, hDays);
+      const actual = await getActualUp(chosenTarget, r.date, hDays);
       if (actual === null) continue;
       pairs.push({ p: hb.p_up, actual });
     }
