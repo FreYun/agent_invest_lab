@@ -115,6 +115,25 @@ interface BotBenchmark {
   series: BenchmarkPoint[]
 }
 
+interface UserTxnMark {
+  date: string
+  side: 'buy' | 'sell'
+  amount: number
+  count: number
+}
+
+interface RealUserSeries {
+  fundCode: string
+  fundName: string
+  cycleId: string
+  clearReturn2: number
+  bigLossRate: number | null
+  bigProfitRate: number | null
+  txnCount: number
+  series: { trade_date: string; net_value: number }[]
+  txns: UserTxnMark[]
+}
+
 interface BotDataset {
   botId: string
   firstTradeDate: string
@@ -142,6 +161,7 @@ interface BotDataset {
   holdingsByDate: Record<string, Omit<HoldingRow, 'trade_date'>[]>
   reviews: ReviewRow[]
   benchmark: BotBenchmark | null
+  realUsers: RealUserSeries[]
   runId: string
   availableRuns: BotRunRef[]
 }
@@ -157,7 +177,7 @@ interface BotRunRef {
 
 /** Summary variant used in /api/backtest/data (polled every 10 s).
  *  holdingsByDate is stripped — it is only needed on the per-bot detail view. */
-type BotDatasetSummary = Omit<BotDataset, 'holdingsByDate'>
+type BotDatasetSummary = Omit<BotDataset, 'holdingsByDate' | 'realUsers'>
 
 interface Dataset {
   generatedAt: string
@@ -180,7 +200,10 @@ function quoteSql(s: string): string {
 }
 
 async function queryRows<T>(dbPath: string, sql: string): Promise<T[]> {
-  const { stdout } = await execFileAsync('sqlite3', ['-json', dbPath, sql], { maxBuffer: 16 * 1024 * 1024 })
+  // fund.db is WAL-mode and written concurrently by live world runs; without a busy
+  // timeout the sqlite3 CLI fails instantly with SQLITE_BUSY ("database is locked")
+  // during a writer/checkpoint window, surfacing as flaky 500s. Wait it out instead.
+  const { stdout } = await execFileAsync('sqlite3', ['-json', '-cmd', '.timeout 5000', dbPath, sql], { maxBuffer: 16 * 1024 * 1024 })
   const text = stdout.trim()
   if (!text) return []
   const parsed = JSON.parse(text) as T[]
@@ -203,6 +226,83 @@ function classifyAction(actionType: string, finalDecision: string | null): 'buy'
   if (/(ADD|BUY|INCREASE)/.test(token)) return 'buy'
   if (/(REDUCE|SELL|TAKE_PROFIT|STOP_LOSS|DECREASE)/.test(token)) return 'sell'
   return 'hold'
+}
+
+/** 每个 bot 最多展示的真实用户数。 */
+const MAX_REAL_USERS = 10
+
+/** 真实用户交易类型 → 买/卖/跳过。
+ *  买入: 139 定时定额投资, 122 申购; 卖出: 124 赎回, 142 强行赎回。
+ *  其余(129 分红设置 / 136,137 转换 / 126,127 转托管 / 1T1,1T2 账户转入转出)为中性, 不打点。 */
+export function classifyBusinType(businType: string): 'buy' | 'sell' | null {
+  if (businType === '139' || businType === '122') return 'buy'
+  if (businType === '124' || businType === '142') return 'sell'
+  return null
+}
+
+/** 把逐笔交易按 (cycle, 日期, 方向) 合并: amount 求和、count 计数, 中性交易丢弃。
+ *  返回 cycle_id -> 按日期(再按方向)升序的标记数组。 */
+export function mergeUserTxns(
+  rows: { cycle_id: string; busin_type: string; amount: number | null; txn_date: string }[],
+): Map<string, UserTxnMark[]> {
+  const byCycle = new Map<string, Map<string, UserTxnMark>>()
+  for (const r of rows) {
+    const side = classifyBusinType(r.busin_type)
+    if (!side) continue
+    let marks = byCycle.get(r.cycle_id)
+    if (!marks) { marks = new Map(); byCycle.set(r.cycle_id, marks) }
+    const key = `${r.txn_date}|${side}`
+    const cur = marks.get(key)
+    if (cur) { cur.amount += num(r.amount); cur.count++ }
+    else marks.set(key, { date: r.txn_date, side, amount: num(r.amount), count: 1 })
+  }
+  const out = new Map<string, UserTxnMark[]>()
+  for (const [cid, marks] of byCycle) {
+    out.set(cid, [...marks.values()].sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : a.side < b.side ? -1 : 1))
+  }
+  return out
+}
+
+/** 在候选基金池间分配总配额：先 floor(total/n) 平均，余数按候选数从多到少补，
+ *  每池不超过其候选数。返回 fund_code -> 配额。 */
+export function allocateQuota(poolSizes: Map<string, number>, total: number): Map<string, number> {
+  const alloc = new Map<string, number>()
+  const pools = [...poolSizes.keys()]
+  for (const p of pools) alloc.set(p, 0)
+  if (!pools.length || total <= 0) return alloc
+  const base = Math.floor(total / pools.length)
+  for (const p of pools) alloc.set(p, Math.min(base, poolSizes.get(p) ?? 0))
+  let remaining = total - [...alloc.values()].reduce((s, v) => s + v, 0)
+  const order = [...pools].sort((a, b) => (poolSizes.get(b)! - poolSizes.get(a)!) || a.localeCompare(b))
+  while (remaining > 0) {
+    let progressed = false
+    for (const p of order) {
+      if (remaining <= 0) break
+      if (alloc.get(p)! < (poolSizes.get(p) ?? 0)) {
+        alloc.set(p, alloc.get(p)! + 1)
+        remaining--
+        progressed = true
+      }
+    }
+    if (!progressed) break  // 所有池已封顶,剩余配额无处可放
+  }
+  return alloc
+}
+
+/** 在按 clear_return2 升序的候选里挑 quota 个代表：先锚定 最差/最好/中位/p25/p75,
+ *  再按均匀分布补足,去重,返回保持升序的子集。 */
+export function selectRepresentative<T>(sortedAsc: T[], quota: number): T[] {
+  const n = sortedAsc.length
+  if (quota <= 0 || n === 0) return []
+  if (quota >= n) return [...sortedAsc]
+  const idxAt = (frac: number) => Math.round(frac * (n - 1))
+  const picks: number[] = []
+  const take = (i: number) => { if (picks.length < quota && !picks.includes(i)) picks.push(i) }
+  for (const a of [0, 1, 0.5, 0.25, 0.75]) take(idxAt(a))   // 代表性锚点
+  for (let s = 0; picks.length < quota && s < n * 2; s++) take(idxAt(s / Math.max(1, quota - 1)))
+  for (let i = 0; picks.length < quota && i < n; i++) take(i)  // 兜底填满
+  return picks.sort((a, b) => a - b).map(i => sortedAsc[i])
 }
 
 // 未建仓 bot 没有首买基金时,用沪深300(510300 沪深300ETF华泰柏瑞)作默认参照,
@@ -300,6 +400,85 @@ async function listRunsForBot(dbPath: string, worldRoot: string, botId: string):
   })
 }
 
+async function tableExists(dbPath: string, name: string): Promise<boolean> {
+  const rows = await queryRows<{ n: number }>(dbPath,
+    `SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=${quoteSql(name)}`)
+  return num(rows[0]?.n) > 0
+}
+
+/** 取 bot 触碰过的基金上的真实用户曲线：候选→按基金分配配额→池内代表性选取→拉曲线。
+ *  real_user_* 表不存在(未落库)时返回 []——保证功能可加性,不破坏看板。 */
+async function loadRealUsers(dbPath: string, fundCodes: string[]): Promise<RealUserSeries[]> {
+  const codes = [...new Set(fundCodes)].filter(Boolean)
+  if (!codes.length) return []
+  if (!(await tableExists(dbPath, 'real_user_cycles'))) return []
+  const inList = codes.map(quoteSql).join(',')
+  const cycles = await queryRows<{
+    cycle_id: string; fund_code: string; fund_name: string
+    clear_return2: number | null; big_loss_rate: number | null; big_profit_rate: number | null
+    txn_count: number
+  }>(dbPath, `
+    SELECT c.cycle_id, c.fund_code,
+           COALESCE(i.fund_name, c.fund_code) AS fund_name,
+           c.clear_return2, c.big_loss_rate, c.big_profit_rate,
+           (SELECT COUNT(*) FROM real_user_txns t WHERE t.cycle_id = c.cycle_id) AS txn_count
+    FROM real_user_cycles c
+    LEFT JOIN fund_info i ON i.fund_code = c.fund_code
+    WHERE c.fund_code IN (${inList})
+      AND EXISTS (SELECT 1 FROM real_user_curves v WHERE v.cycle_id = c.cycle_id)
+    ORDER BY c.fund_code ASC, c.clear_return2 ASC
+  `)
+  if (!cycles.length) return []
+
+  const byFund = new Map<string, typeof cycles>()
+  for (const c of cycles) {
+    const arr = byFund.get(c.fund_code) ?? []
+    arr.push(c)
+    byFund.set(c.fund_code, arr)
+  }
+  const poolSizes = new Map<string, number>()
+  for (const [code, arr] of byFund) poolSizes.set(code, arr.length)
+  const quota = allocateQuota(poolSizes, MAX_REAL_USERS)
+
+  const chosen: typeof cycles = []
+  for (const [code, arr] of byFund) {
+    chosen.push(...selectRepresentative(arr, quota.get(code) ?? 0))  // arr 已按 clear_return2 升序
+  }
+  if (!chosen.length) return []
+
+  const curveRows = await queryRows<{ cycle_id: string; trade_date: string; net_value: number }>(dbPath, `
+    SELECT cycle_id, trade_date, net_value
+    FROM real_user_curves
+    WHERE cycle_id IN (${chosen.map(c => quoteSql(c.cycle_id)).join(',')})
+    ORDER BY cycle_id ASC, trade_date ASC
+  `)
+  const curveByCycle = new Map<string, { trade_date: string; net_value: number }[]>()
+  for (const r of curveRows) {
+    const arr = curveByCycle.get(r.cycle_id) ?? []
+    arr.push({ trade_date: r.trade_date, net_value: num(r.net_value) })
+    curveByCycle.set(r.cycle_id, arr)
+  }
+
+  const txnRows = await queryRows<{ cycle_id: string; busin_type: string; amount: number | null; txn_date: string }>(dbPath, `
+    SELECT cycle_id, busin_type, amount, txn_date
+    FROM real_user_txns
+    WHERE cycle_id IN (${chosen.map(c => quoteSql(c.cycle_id)).join(',')})
+  `)
+  const txnsByCycle = mergeUserTxns(txnRows)
+
+  return chosen.map(c => ({
+    fundCode: c.fund_code,
+    fundName: c.fund_name,
+    cycleId: c.cycle_id,
+    clearReturn2: num(c.clear_return2),
+    bigLossRate: c.big_loss_rate,
+    bigProfitRate: c.big_profit_rate,
+    txnCount: num(c.txn_count),
+    series: curveByCycle.get(c.cycle_id) ?? [],
+    txns: txnsByCycle.get(c.cycle_id) ?? [],
+  })).filter(u => u.series.length > 0)
+}
+
 async function loadBotForRun(dbPath: string, botId: string, runId: string, availableRuns: BotRunRef[]): Promise<BotDataset | null> {
   const runIdSql = quoteSql(runId)
   const botIdSql = quoteSql(botId)
@@ -380,6 +559,12 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
     ? await loadBenchmark(dbPath, actions, holdings, firstDateForBench, lastDateForBench)
     : null
 
+  const touchedFunds = [...new Set([
+    ...allHoldings.map(h => h.fund_code),
+    ...actions.map(a => a.fund_code),
+  ])].filter(Boolean)
+  const realUsers = await loadRealUsers(dbPath, touchedFunds)
+
   return {
     botId,
     firstTradeDate: first?.trade_date ?? (actions[0]?.action_date ?? ''),
@@ -420,6 +605,7 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
     holdingsByDate,
     reviews,
     benchmark,
+    realUsers,
     runId,
     availableRuns,
   }
@@ -436,7 +622,7 @@ async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> 
       // /api/backtest/data is polled every 10s by the frontend, which reads
       // holdingsByDate only on the per-bot detail view (/api/backtest/bot).
       // Strip the per-day history here to keep poll payload small.
-      const { holdingsByDate: _drop, ...summary } = bot
+      const { holdingsByDate: _drop, realUsers: _dropUsers, ...summary } = bot
       bots.push(summary)
     }
   }
@@ -468,7 +654,7 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html)
 }
 
-/** Light per-run view for /api/runs — only what the control panel renders. */
+/** Light per-run view for /api/backtest/runs — only what the control panel renders. */
 function runSummary(s: WorldState): Record<string, unknown> {
   return {
     runId: s.run_id,
@@ -502,7 +688,7 @@ function readJsonBody(req: IncomingMessage, limitBytes = 64 * 1024): Promise<Rec
 }
 
 function parseArgs(argv: string[]): { host: string; port: number; dbPath: string; worldRoot: string } {
-  let host = '0.0.0.0'
+  let host = '127.0.0.1'
   let port = 48080
   let dbPath = DEFAULT_DB
   let worldRoot = DEFAULT_WORLD_ROOT
@@ -553,11 +739,11 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       // Live run control: list controllable runs (running/paused) read from per-run
       // state.json, and trigger pause/stop. Resume stays CLI-only (it must spawn a
       // long-lived `world resume` with the world config, which the dashboard lacks).
-      if (req.method === 'GET' && url.pathname === '/api/runs') {
+      if (req.method === 'GET' && url.pathname === '/api/backtest/runs') {
         sendJson(res, 200, { runs: listControllableRuns(worldRoot).map(runSummary) })
         return
       }
-      if (req.method === 'POST' && (url.pathname === '/api/runs/pause' || url.pathname === '/api/runs/stop')) {
+      if (req.method === 'POST' && (url.pathname === '/api/backtest/runs/pause' || url.pathname === '/api/backtest/runs/stop')) {
         let body: Record<string, unknown>
         try { body = await readJsonBody(req) }
         catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }

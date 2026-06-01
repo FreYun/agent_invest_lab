@@ -76,7 +76,7 @@ pi_sessions_dir: /home/rooot/agent_invest_lab/session
          "zai-coding-plan": {
            "baseUrl": "https://dd-ai-api.eastmoney.com/v1",
            "api": "openai-completions",
-           "apiKey": "sk-hqlf9tRAsnWJwgks5eB66e721aD84e489fC3A6D274Ad49C4",
+           "apiKey": "sk-REDACTED-ROTATE-ME",
            "models": [{ "id": "qwen3.5-plus", ... }, { "id": "qwen3.6-plus", ... }, ...]
          }
        }
@@ -93,7 +93,7 @@ pi_sessions_dir: /home/rooot/agent_invest_lab/session
        "glm:default":         { "type":"api_key","provider":"glm","key":"..." },
        "zai-coding-plan:default": {
          "type":"api_key","provider":"zai-coding-plan",
-         "key":"sk-hqlf9tRAsnWJwgks5eB66e721aD84e489fC3A6D274Ad49C4"
+         "key":"sk-REDACTED-ROTATE-ME"
        }
      },
      "lastGood": { ..., "zai-coding-plan":"zai-coding-plan:default" }
@@ -108,7 +108,7 @@ pi_sessions_dir: /home/rooot/agent_invest_lab/session
   ```
   curl -s -X POST 'https://dd-ai-api.eastmoney.com/v1/chat/completions' \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer sk-hqlf9tRAsnWJwgks5eB66e721aD84e489fC3A6D274Ad49C4' \
+    -H 'Authorization: Bearer sk-REDACTED-ROTATE-ME' \
     -d '{"model":"qwen3.5-plus","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
   # → {"choices":[{"message":{"content":"Hi there! How can I help you today?",...}}],...}
   ```

@@ -1,18 +1,15 @@
 // Prefetched per-bot per-day data injected into the daily prompt. Goal: bot
 // shouldn't have to spend round-trips re-discovering the same routine inputs
-// (account snapshot, recent PnL trend, NAV trend for held funds, major index
-// snapshots) every morning. World-side prefetches these and renderDailyMessage
-// pastes formatted blocks into the prompt.
+// (account snapshot, NAV trend for held funds, major index snapshots) every
+// morning. World-side prefetches these and renderDailyMessage pastes formatted
+// blocks into the prompt.
 //
 // All data is best-effort: each fetcher returns null on failure and the
 // renderer just skips the corresponding block. A broken simworld upstream
 // should never block a world day from running.
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
 import { runFundCli } from './run.ts'
 import { callSimworldTool } from './simworld-client.ts'
-import { runDir } from './paths.ts'
 
 // 5 indices the user wants on every day's prompt. Match simworld's accepted
 // "<6-digit>.{SH|SZ}" canonical form so we don't depend on alias resolution.
@@ -63,15 +60,6 @@ export interface PendingOrderRow {
   reference_nav: number
 }
 
-export interface PnlTrendPoint {
-  date: string
-  total_value: number
-  net_value: number
-  daily_return_pct: number
-  cumulative_return_pct: number
-  max_drawdown_pct: number
-}
-
 export interface FundSeries {
   fund_code: string
   fund_name?: string
@@ -89,6 +77,15 @@ export interface IndexQuote {
   ma20: number | null
   vs_ma5_pct: number | null
   vs_ma20_pct: number | null
+  // 长周期趋势锚——方法论要求趋势在 MA60/120/200 上判，而非 MA5/20。预喂这几条，
+  // 让 bot 不必每天自己再调 market_index_quote 取长窗口（否则它会偷懒拿 MA5 当扳机）。
+  ma60: number | null
+  ma120: number | null
+  ma200: number | null
+  vs_ma60_pct: number | null
+  vs_ma200_pct: number | null
+  // 由均线排列推出的粗趋势标签：多头排列 / 空头排列 / 纠缠（过渡）。null = 数据不足。
+  trend: '多头排列' | '空头排列' | '纠缠' | null
 }
 
 export interface BenchmarkSeries {
@@ -96,6 +93,19 @@ export interface BenchmarkSeries {
   name: string                                    // e.g. '沪深300'，or '买池 N 只等权 B&H' for multi-fund
   pointsByDate: Record<string, number>            // ISO date → cumulative % since runStartDate (run-start day = 0)
   latestCumulativePct: number | null              // convenience: cumulative pct at the last available trading date < asOfDate
+  // since-inception 区间口径风险调整指标，口径完全对齐 bot 的 _compute_bot_performance
+  // since_inception 行（rf=1%/252，波动/夏普不年化，calmar=return/|mdd|）——让 daily prompt
+  // 能并排打出"你 vs 不择时躺平"的 Sharpe / Calmar / 回撤 / 波动，而不仅是累计收益。
+  metrics?: BenchmarkMetrics
+}
+
+export interface BenchmarkMetrics {
+  return_pct: number                              // (last_nv / first_nv - 1) * 100
+  max_drawdown_pct: number                        // peak-to-trough on the B&H net-value series
+  volatility_pct: number | null                   // stdev(daily%) 不年化（样本 N-1），<2 个日收益 → null
+  sharpe_ratio: number | null                     // (mean_daily - rf_daily) / std_daily，不年化
+  calmar_ratio: number | null                     // return_pct / |mdd|；mdd≈0 → null
+  data_points: number                             // 参与计算的 NAV 点数（= 交易日数）
 }
 
 // 单基金交易费率（每天都注入 daily prompt）。purchase_fee/redeem_tiers 来自 fund_info，
@@ -186,19 +196,39 @@ export interface PerformanceData {
   trades: TradesSummary | null
   intervals: IntervalMetrics | null
   completedPositions: CompletedPosition[]
-  // Daily series — kept here too so pnlTrendBlock has a single source instead
-  // of reading close_my_day.json files separately.
-  dailySeries: PnlTrendPoint[]
 }
 
 export interface DailyContextData {
   account?: AccountSnapshot
-  pnlTrend?: PnlTrendPoint[]
   performance?: PerformanceData
   fundSeries?: FundSeries[]
   indices?: IndexQuote[]
   benchmark?: BenchmarkSeries
   fundFees?: FundFee[]
+  // multi-fund bot 的可买池主题+因子+1y业绩 meta（单基金 bot 这块不渲染——它只交易自己的一只）。
+  // 单条 SQL JOIN fund_info + fund_style(latest) + fund_performance(1y PIT) 拉的 lightweight 快照。
+  buyablePoolMeta?: BuyablePoolMeta
+}
+
+export interface BuyablePoolMeta {
+  rows: BuyablePoolMetaRow[]
+  // 数据 PIT 锚点（便于 prompt 给 bot 说明"看到的 style/perf 是哪天的口径"）
+  styleAsOf: string | null   // fund_style 的取数日；当前库内只有 2026-03-31 单截面，回测日 < 该日属未来信息（已知小漏）
+  perf1yAsOf: string | null  // fund_performance(1y) 的取数日；回测日 < 2026-04-27 时为 null（perf 数据从那天才有快照）
+}
+
+export interface BuyablePoolMetaRow {
+  fund_code: string
+  fund_name: string | null
+  theme: string | null          // "科技" / "新能源" / "全市场" / 多类共振如 "新能源,科技"
+  scale: number | null          // 规模（亿元）
+  size_style: string | null     // 大盘 / 中盘 / 小盘
+  invest_style: string | null   // 价值 / 平衡 / 成长
+  p1y_return_pct: number | null
+  p1y_rank_pct: number | null   // 同类百分位，低 = 排名靠前（更好）
+  p1y_rank_text: string | null  // "3274/3745" 格式
+  p1y_mdd_pct: number | null
+  p1y_sharpe: number | null
 }
 
 // ============================================================================
@@ -262,13 +292,11 @@ async function fetchAccountSnapshot(opts: {
 
 // ============================================================================
 // Full performance payload (summary / interval metrics / trades / closed
-// positions / daily series) via portfolio_get_my_performance CLI. Single
-// source of truth — the daily series here also feeds pnlTrendBlock so we
-// don't read close_my_day.json files separately anymore.
+// positions) via portfolio_get_my_performance CLI.
 //
 // Returns null if as_of_date precedes the first snapshot (Day 1; no perf
 // history yet) or if the CLI errors out. Caller treats null as "no perf
-// block to render" (also implies no PnL trend block).
+// block to render".
 // ============================================================================
 
 async function fetchPerformance(opts: {
@@ -276,14 +304,12 @@ async function fetchPerformance(opts: {
   botId: string
   runId: string
   asOfDate: string
-  dailySeriesLimit: number
 }): Promise<PerformanceData | null> {
   try {
     const r = await runFundCli(opts.fundMcpCli, 'get_my_performance', [
       '--bot-id', opts.botId,
       '--run-id', opts.runId,
       '--as-of-date', opts.asOfDate,
-      '--daily-series-limit', String(opts.dailySeriesLimit),
     ], { timeoutMs: 30_000 })
     if (r.code !== 0) return null
     const d = JSON.parse(r.stdout) as Record<string, unknown>
@@ -293,9 +319,8 @@ async function fetchPerformance(opts: {
     const trades = parseTrades(d.trades_summary)
     const intervals = parseIntervalMetrics(d.interval_metrics)
     const completedPositions = parseCompletedPositions(d.completed_positions)
-    const dailySeries = parseDailySeries(d.daily_series)
 
-    return { asOfDate: opts.asOfDate, summary, trades, intervals, completedPositions, dailySeries }
+    return { asOfDate: opts.asOfDate, summary, trades, intervals, completedPositions }
   } catch {
     return null
   }
@@ -394,68 +419,6 @@ function parseCompletedPositions(raw: unknown): CompletedPosition[] {
     }))
 }
 
-function parseDailySeries(raw: unknown): PnlTrendPoint[] {
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object')
-    .map(p => ({
-      date: String(p.trade_date ?? ''),
-      total_value: Number(p.total_value ?? 0),
-      net_value: Number(p.net_value ?? 1),
-      daily_return_pct: Number(p.daily_return_pct ?? 0),
-      cumulative_return_pct: Number(p.cumulative_return_pct ?? 0),
-      max_drawdown_pct: Number(p.max_drawdown_pct ?? 0),
-    }))
-}
-
-// ============================================================================
-// Fallback PnL trend reader — kept as a safety net for situations where the
-// perf CLI fails but close_my_day.json files exist on disk (legacy runs from
-// before the cli_tools.py init_db() fix landed). Once those rotate out we can
-// retire this and rely solely on portfolio_get_my_performance.
-// ============================================================================
-
-async function fetchPnlTrend(opts: {
-  worldRoot: string
-  runId: string
-  botId: string
-  asOfDate: string
-  windowDays: number
-}): Promise<PnlTrendPoint[] | null> {
-  const root = runDir(opts.worldRoot, opts.runId)
-  if (!existsSync(root)) return null
-  let dateDirs: string[]
-  try {
-    dateDirs = readdirSync(root)
-      .filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n) && n < opts.asOfDate)
-      .sort()
-  } catch {
-    return null
-  }
-  if (dateDirs.length === 0) return null
-  const recent = dateDirs.slice(-opts.windowDays)
-  const points: PnlTrendPoint[] = []
-  for (const d of recent) {
-    const p = join(root, d, opts.botId, 'close_my_day.json')
-    if (!existsSync(p)) continue
-    try {
-      const snap = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>
-      if (!snap.success) continue
-      const assets = (snap.assets ?? {}) as Record<string, unknown>
-      const pnl = (snap.pnl ?? {}) as Record<string, unknown>
-      points.push({
-        date: String(snap.trade_date ?? d),
-        total_value: Number(assets.total_value ?? 0),
-        net_value: Number(assets.net_value ?? 1),
-        daily_return_pct: Number(pnl.daily_return_pct ?? 0),
-        cumulative_return_pct: Number(pnl.cumulative_return_pct ?? 0),
-        max_drawdown_pct: Number(pnl.max_drawdown_pct ?? 0),
-      })
-    } catch { /* skip malformed */ }
-  }
-  return points.length ? points : null
-}
-
 // ============================================================================
 // Fund NAV series + computed 1m/3m returns. Skipping fund_performance because
 // it's marked 是否可用=false for the index ETFs the lab pins (510300 etc.) —
@@ -474,16 +437,22 @@ async function fetchFundSeries(opts: {
   const startDate = computeWindowStart(opts.asOfDate, 100)  // 100 calendar ≈ 70 trading
   const endDate = priorDay(opts.asOfDate)
   const out: FundSeries[] = []
-  for (const code of opts.fundCodes) {
+  let raw: { items?: { 基金代码?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number; 日收益率?: number }[] }[] } | null = null
+  try {
+    raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
+      fund_codes: opts.fundCodes,
+      simulated_datetime: simDt,
+      start_date: startDate,
+      end_date: endDate,
+    }, { timeoutMs: 60_000 }) as { items?: { 基金代码?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number; 日收益率?: number }[] }[] } | null
+  } catch {
+    return []
+  }
+  for (const item of raw?.items ?? []) {
     try {
-      const raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
-        fund_codes: [code],
-        simulated_datetime: simDt,
-        start_date: startDate,
-        end_date: endDate,
-      }) as { items?: { 基金代码?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number; 日收益率?: number }[] }[] } | null
-      const item = raw?.items?.[0]
       if (!item || !item['是否可用'] || !Array.isArray(item['净值记录'])) continue
+      const code = String(item['基金代码'] ?? '').trim()
+      if (!code) continue
       // Last 20 trading days for the prompt display.
       const allRecs = item['净值记录']
         .map(r => ({
@@ -535,9 +504,22 @@ function priorDay(asOfDate: string): string {
 }
 
 // ============================================================================
-// Index snapshots — latest close + MA5/MA20. simworld returns ~20 records by
-// default which is exactly enough for MA20.
+// Index snapshots — latest close + 短均线(MA5/MA20) + 长趋势锚(MA60/120/200) +
+// 趋势标签。方法论要求趋势在长均线上判，所以拉一个能算 MA200 的窗口（~320 自然日
+// ≈ 220 交易日），让 bot 直接拿到长趋势，不必为判方向再自己调 market_index_quote。
 // ============================================================================
+
+// 由收盘 vs MA60/120/200 的排列推趋势标签。需要至少 MA60；MA120/200 缺失时按
+// 已有的均线宽松判断（多头=价在所有可得长均线之上且短长依次递减；空头反之）。
+function classifyTrend(close: number, ma60: number | null, ma120: number | null, ma200: number | null): IndexQuote['trend'] {
+  if (ma60 === null) return null
+  const longMas = [ma60, ma120, ma200].filter((x): x is number => x !== null)
+  const bullStack = longMas.every((m, i) => i === 0 || longMas[i - 1] >= m)  // MA60>=MA120>=MA200
+  const bearStack = longMas.every((m, i) => i === 0 || longMas[i - 1] <= m)
+  if (close > ma60 && bullStack) return '多头排列'
+  if (close < ma60 && bearStack) return '空头排列'
+  return '纠缠'
+}
 
 async function fetchIndexSnapshots(opts: {
   simworldUrl: string
@@ -551,6 +533,9 @@ async function fetchIndexSnapshots(opts: {
       market: 'cn',
       symbols: opts.indices.map(i => i.code),
       simulated_datetime: simDt,
+      // ~220 交易日窗口，够算 MA200；end 收到 asOfDate（PIT 由 simulated_datetime 兜底）。
+      start_date: computeWindowStart(opts.asOfDate, 320),
+      end_date: opts.asOfDate,
     }) as { items?: { 指数标识?: string; 是否可用?: boolean; 行情记录?: { 日期?: string; 收盘?: number }[] }[] } | null
     if (!raw?.items) return []
     const byCode = new Map<string, IndexQuote>()
@@ -562,8 +547,12 @@ async function fetchIndexSnapshots(opts: {
         .filter(r => r.date && r.close > 0)
       if (closes.length === 0) continue
       const last = closes[closes.length - 1]
+      const maOf = (n: number) => closes.length >= n ? mean(closes.slice(-n).map(r => r.close)) : null
       const ma5 = mean(closes.slice(-5).map(r => r.close))
-      const ma20 = closes.length >= 20 ? mean(closes.slice(-20).map(r => r.close)) : null
+      const ma20 = maOf(20)
+      const ma60 = maOf(60)
+      const ma120 = maOf(120)
+      const ma200 = maOf(200)
       byCode.set(code, {
         code,
         name: opts.indices.find(i => i.code === code)?.name ?? code,
@@ -573,6 +562,12 @@ async function fetchIndexSnapshots(opts: {
         ma20,
         vs_ma5_pct: pctChange(ma5, last.close),
         vs_ma20_pct: pctChange(ma20, last.close),
+        ma60,
+        ma120,
+        ma200,
+        vs_ma60_pct: pctChange(ma60, last.close),
+        vs_ma200_pct: pctChange(ma200, last.close),
+        trend: classifyTrend(last.close, ma60, ma120, ma200),
       })
     }
     // Preserve requested order so the prompt is stable.
@@ -610,6 +605,64 @@ function mean(xs: number[]): number {
 
 const DEFAULT_BENCHMARK = { code: '000300.SH', name: '沪深300' }
 
+// rf / 年化口径常量——必须与 fund-portfolio-mcp server.py 的 _BOT_PERF_* 完全一致，
+// 否则 bot 的区间 Sharpe 和这里算的基准 Sharpe 就不是同口径，对比失真。
+const BENCH_RF_ANNUAL_PCT = 1
+const BENCH_TRADING_DAYS_PER_YEAR = 252
+const BENCH_RF_DAILY_PCT = BENCH_RF_ANNUAL_PCT / BENCH_TRADING_DAYS_PER_YEAR
+
+// 样本标准差（N-1 分母）——对齐 server.py:_stdev。<2 点返回 0。
+function sampleStdev(values: number[]): number {
+  const n = values.length
+  if (n < 2) return 0
+  const mean = values.reduce((a, b) => a + b, 0) / n
+  const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1)
+  return Math.sqrt(variance)
+}
+
+// peak-to-trough（%）——对齐 server.py:_calc_max_drawdown。
+function maxDrawdownPct(navList: number[]): number {
+  if (navList.length === 0) return 0
+  let peak = navList[0]
+  let maxDd = 0
+  for (const nav of navList) {
+    if (nav > peak) peak = nav
+    const dd = ((nav - peak) / peak) * 100
+    if (dd < maxDd) maxDd = dd
+  }
+  return maxDd
+}
+
+// 从 B&H 净值序列（norm = nav/base，runStartDate 起锚定 1.0）算 since-inception 区间指标。
+// 口径完全对齐 bot 的 _compute_bot_performance since_inception：
+//   - return_pct = (last/first - 1)*100
+//   - 日收益序列首日补 0（对齐 bot Day-1 snapshot 的 daily_return_pct=0：prev_total=initial→0），
+//     使日收益点数 = 交易日数 N，mean/std 与 bot 同口径
+//   - volatility = stdev(daily%) 不年化；sharpe = (mean - rf_daily)/std；calmar = return/|mdd|
+function computeBenchmarkMetrics(navSeries: number[]): BenchmarkMetrics | undefined {
+  if (navSeries.length < 2) return undefined
+  const first = navSeries[0]
+  const last = navSeries[navSeries.length - 1]
+  if (!(first > 0)) return undefined
+  const return_pct = (last / first - 1) * 100
+  const mdd = maxDrawdownPct(navSeries)
+  // 首日 0% + 后续逐日收益 → N 个点，与 bot since_inception 的 daily_return_pct 序列对齐。
+  const daily: number[] = [0]
+  for (let i = 1; i < navSeries.length; i++) {
+    if (navSeries[i - 1] > 0) daily.push((navSeries[i] / navSeries[i - 1] - 1) * 100)
+  }
+  let volatility_pct: number | null = null
+  let sharpe_ratio: number | null = null
+  if (daily.length >= 2) {
+    const mean = daily.reduce((a, b) => a + b, 0) / daily.length
+    const std = sampleStdev(daily)
+    volatility_pct = std
+    sharpe_ratio = std > 1e-9 ? (mean - BENCH_RF_DAILY_PCT) / std : null
+  }
+  const calmar_ratio = Math.abs(mdd) > 1e-9 ? return_pct / Math.abs(mdd) : null
+  return { return_pct, max_drawdown_pct: mdd, volatility_pct, sharpe_ratio, calmar_ratio, data_points: navSeries.length }
+}
+
 async function fetchIndexBenchmark(opts: {
   simworldUrl: string
   code: string
@@ -637,8 +690,10 @@ async function fetchIndexBenchmark(opts: {
     // trading day onwards, which is exactly what we want.
     const base = closes[0].close
     const pointsByDate: Record<string, number> = {}
+    const navSeries: number[] = []
     for (const r of closes) {
       pointsByDate[r.date] = ((r.close - base) / base) * 100
+      navSeries.push(r.close / base)
     }
     const lastDate = closes[closes.length - 1].date
     return {
@@ -646,6 +701,7 @@ async function fetchIndexBenchmark(opts: {
       name: opts.name,
       pointsByDate,
       latestCumulativePct: pointsByDate[lastDate] ?? null,
+      metrics: computeBenchmarkMetrics(navSeries),
     }
   } catch {
     return null
@@ -656,6 +712,10 @@ async function fetchIndexBenchmark(opts: {
 // runStartDate 锚定 = 1，每天取算术平均（缺值的基金当天跳过该基金，不在分母里
 // 灌零——保证 sparse 日期表现真实）。这是"如果你完全不择时就这么躺平"的最直接
 // 对比，bot 看 alpha 列就知道每天的择时是赚还是亏。
+//
+// 系统层工具调用红线：全池 / 大池数据必须批量拉取。禁止在这里按 fund_code 循环
+// 打 MCP（865 只池子会放大成 865 个 session）；要么一次 fund_nav(fund_codes=[...])，
+// 要么走 fund-portfolio-mcp 的批量 CLI / 本地 SQL。少量持仓基金的展示逻辑不适用此限制。
 async function fetchFundPoolBenchmark(opts: {
   simworldUrl: string
   fundCodes: string[]
@@ -667,16 +727,22 @@ async function fetchFundPoolBenchmark(opts: {
   const perFundNorm: Record<string, Record<string, number>> = {}
   const perFundName: Record<string, string> = {}
   const allDates = new Set<string>()
-  for (const code of opts.fundCodes) {
+  let raw: { items?: { 基金代码?: string; 基金名称?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number }[] }[] } | null = null
+  try {
+    raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
+      fund_codes: opts.fundCodes,
+      simulated_datetime: simDt,
+      start_date: opts.runStartDate,
+      end_date: priorDay(opts.asOfDate),
+    }, { timeoutMs: 60_000 }) as { items?: { 基金代码?: string; 基金名称?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number }[] }[] } | null
+  } catch {
+    return null
+  }
+  for (const item of raw?.items ?? []) {
     try {
-      const raw = await callSimworldTool(opts.simworldUrl, 'fund_nav', {
-        fund_codes: [code],
-        simulated_datetime: simDt,
-        start_date: opts.runStartDate,
-        end_date: priorDay(opts.asOfDate),
-      }) as { items?: { 基金代码?: string; 基金名称?: string; 是否可用?: boolean; 净值记录?: { 交易日期?: string; 复权单位净值?: number }[] }[] } | null
-      const item = raw?.items?.[0]
       if (!item || !item['是否可用'] || !Array.isArray(item['净值记录'])) continue
+      const code = String(item['基金代码'] ?? '').trim()
+      if (!code) continue
       const series = item['净值记录']
         .map(r => ({ date: String(r['交易日期'] ?? '').slice(0, 10), nav: Number(r['复权单位净值'] ?? 0) }))
         .filter(r => r.date && r.nav > 0)
@@ -695,6 +761,7 @@ async function fetchFundPoolBenchmark(opts: {
   if (present.length === 0) return null
   const sortedDates = Array.from(allDates).sort()
   const pointsByDate: Record<string, number> = {}
+  const navSeries: number[] = []  // 等权合成净值（单只 → 该基金 norm），喂给区间指标
   for (const d of sortedDates) {
     let sum = 0, n = 0
     for (const code of present) {
@@ -702,14 +769,16 @@ async function fetchFundPoolBenchmark(opts: {
       if (v !== undefined) { sum += v; n++ }
     }
     if (n === 0) continue
-    pointsByDate[d] = (sum / n - 1) * 100
+    const compositeNv = sum / n
+    pointsByDate[d] = (compositeNv - 1) * 100
+    navSeries.push(compositeNv)
   }
   const lastDate = sortedDates[sortedDates.length - 1]
   const name = present.length === 1
     ? `${perFundName[present[0]]} B&H`
     : `买池 ${present.length} 只等权 B&H`
   const code = present.length === 1 ? present[0] : 'buyable-pool'
-  return { code, name, pointsByDate, latestCumulativePct: pointsByDate[lastDate] ?? null }
+  return { code, name, pointsByDate, latestCumulativePct: pointsByDate[lastDate] ?? null, metrics: computeBenchmarkMetrics(navSeries) }
 }
 
 // 调 fund-portfolio-mcp 的 get_fund_fees CLI 子命令读 fund_info 费率字段。fee
@@ -729,12 +798,41 @@ async function fetchFundFees(opts: {
   }
 }
 
+// 多基金 bot 的可买池 meta：主题分类 + 市值/风格因子 + 1y 业绩（含同类排名）。
+// 单条 JOIN SQL，比让 bot 自己 N 次 get_fund_detail 高效得多。
+async function fetchBuyablePoolMeta(opts: {
+  fundMcpCli: string
+  fundCodes: string[]
+  asOfDate: string
+}): Promise<BuyablePoolMeta | null> {
+  if (opts.fundCodes.length === 0) return null
+  try {
+    const r = await runFundCli(opts.fundMcpCli, 'get_pool_meta',
+      ['--fund-codes', opts.fundCodes.join(','), '--as-of-date', opts.asOfDate],
+      { timeoutMs: 30_000 })
+    if (r.code !== 0) return null
+    const parsed = JSON.parse(r.stdout) as {
+      success?: boolean
+      pool?: BuyablePoolMetaRow[]
+      style_as_of?: string | null
+      perf_1y_as_of?: string | null
+    }
+    if (!parsed?.success || !Array.isArray(parsed.pool)) return null
+    return {
+      rows: parsed.pool,
+      styleAsOf: parsed.style_as_of ?? null,
+      perf1yAsOf: parsed.perf_1y_as_of ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
 // ============================================================================
 // Public entry point.
 // ============================================================================
 
 export interface FetchDailyContextOptions {
-  worldRoot: string
   runId: string
   botId: string
   asOfDate: string
@@ -744,7 +842,6 @@ export interface FetchDailyContextOptions {
   // omitted, benchmark block is skipped (can't compute "since when?" without
   // a reference point).
   runStartDate?: string
-  pnlTrendDays?: number
   indices?: { code: string; name: string }[]
   // Caller-pinned benchmark INDEX (legacy override). Ignored when
   // buyableFundCodes is provided — in that case fundPoolBenchmark wins.
@@ -756,7 +853,6 @@ export interface FetchDailyContextOptions {
 }
 
 export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise<DailyContextData> {
-  const pnlTrendDays = opts.pnlTrendDays ?? 10
   const indices = opts.indices ?? DEFAULT_INDEX_CODES
   const out: DailyContextData = {}
 
@@ -766,14 +862,9 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
   const accountPromise: Promise<AccountSnapshot | null> = opts.fundMcpCli
     ? fetchAccountSnapshot({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate })
     : Promise.resolve(null)
-  // Performance is the primary source of truth for PnL trend (its daily_series
-  // mirrors close_my_day output) plus the broader metrics block. Keep the file
-  // reader as a fallback for legacy runs whose close_my_day persisted before
-  // the cli_tools init_db() fix.
   const perfPromise: Promise<PerformanceData | null> = opts.fundMcpCli
-    ? fetchPerformance({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate, dailySeriesLimit: pnlTrendDays })
+    ? fetchPerformance({ fundMcpCli: opts.fundMcpCli, botId: opts.botId, runId: opts.runId, asOfDate: opts.asOfDate })
     : Promise.resolve(null)
-  const pnlFilePromise = fetchPnlTrend({ worldRoot: opts.worldRoot, runId: opts.runId, botId: opts.botId, asOfDate: opts.asOfDate, windowDays: pnlTrendDays })
   const indexPromise: Promise<IndexQuote[]> = opts.simworldUrl
     ? fetchIndexSnapshots({ simworldUrl: opts.simworldUrl, asOfDate: opts.asOfDate, indices })
     : Promise.resolve([])
@@ -803,18 +894,20 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
   const feesPromise: Promise<FundFee[]> = (opts.fundMcpCli && opts.buyableFundCodes && opts.buyableFundCodes.length > 0)
     ? fetchFundFees({ fundMcpCli: opts.fundMcpCli, fundCodes: opts.buyableFundCodes })
     : Promise.resolve([])
+  // 可买池 meta（主题/因子/1y业绩）——给 multi-fund bot 在 prompt 里渲染【可买池主题分布】。
+  // 单基金 bot 不渲染这块（message.ts 按 botKind 自决），但我们还是 fetch 一下，因为：
+  // (1) 池子小时 SQL ~10ms，几乎无开销；(2) 把"渲染策略"留给 message.ts，daily-context 不感知 bot 语义。
+  const poolMetaPromise: Promise<BuyablePoolMeta | null> = (opts.fundMcpCli && opts.buyableFundCodes && opts.buyableFundCodes.length > 0)
+    ? fetchBuyablePoolMeta({ fundMcpCli: opts.fundMcpCli, fundCodes: opts.buyableFundCodes, asOfDate: opts.asOfDate })
+    : Promise.resolve(null)
 
-  const [account, perf, pnlFromFiles, indexSnapshots, benchmarkSeries, fundFees] = await Promise.all([accountPromise, perfPromise, pnlFilePromise, indexPromise, benchmarkPromise, feesPromise])
+  const [account, perf, indexSnapshots, benchmarkSeries, fundFees, poolMeta] = await Promise.all([accountPromise, perfPromise, indexPromise, benchmarkPromise, feesPromise, poolMetaPromise])
   if (account) out.account = account
   if (perf) out.performance = perf
-  // PnL trend: prefer perf.dailySeries (CLI, always fresh); fall back to
-  // close_my_day.json reads for runs where CLI route is broken.
-  const trendFromPerf = perf?.dailySeries.length ? perf.dailySeries.slice(-pnlTrendDays) : null
-  const trend = trendFromPerf ?? pnlFromFiles
-  if (trend && trend.length) out.pnlTrend = trend
   if (indexSnapshots.length) out.indices = indexSnapshots
   if (benchmarkSeries) out.benchmark = benchmarkSeries
   if (fundFees.length) out.fundFees = fundFees
+  if (poolMeta && poolMeta.rows.length) out.buyablePoolMeta = poolMeta
 
   if (account && opts.simworldUrl) {
     const heldCodes = account.holdings.map(h => h.fund_code).filter(Boolean)

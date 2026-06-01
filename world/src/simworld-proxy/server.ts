@@ -17,13 +17,19 @@ export interface SimworldProxyOptions {
   timeOfDay?: string
   host?: string
   port?: number
+  /** 调用方标识，作为 X-Client-Id 注入到 upstream 请求头，供 simworld-mcp 调用日志区分
+   *  是哪个 run 在打数据（回环短连接无法事后反查 pid，故由此自报）。如 `run-<runId>`。 */
+  clientId?: string
 }
 
 export interface SimworldProxyHandle {
   port: number
   url: string
-  /** Upstream-advertised tools (name + one-line description). Empty if probe
-   *  failed at startup — daily prompt renders without the tool list block. */
+  /** Upstream-advertised tools (name + one-line description). Filled by the
+   *  startup probe; on first-attempt failure it may populate asynchronously as
+   *  background retries succeed. Stays empty if every attempt fails — daily
+   *  prompt then renders without the tool list block. Same array reference
+   *  throughout, so late reads see the latest probe result. */
   tools: SimworldToolSummary[]
   close(): Promise<void>
 }
@@ -172,6 +178,9 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     }
     if (!headers['accept']) headers['accept'] = 'application/json, text/event-stream'
     if (body !== null && !headers['content-type']) headers['content-type'] = 'application/json'
+    // 自报调用方身份（bot 无法覆写：bot 侧请求头里的 x-client-id 已在上面的安全转发
+    // 中被原样带过，这里强制以 proxy 配置值覆盖，确保日志里看到的是真实 run）。
+    if (opts.clientId) headers['x-client-id'] = opts.clientId
 
     const init: RequestInit = { method: req.method ?? 'GET', headers }
     if (body !== null) init.body = body
@@ -230,14 +239,40 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
   })
   const port = (server.address() as AddressInfo).port
 
-  // One-shot upstream tools/list probe at startup so daily prompts can list
-  // every simworld-data tool. Best-effort: on failure bot still has the
-  // discover_tools fallback hint in the prompt.
-  const tools = await probeUpstreamTools(opts.upstreamUrl).catch(err => {
+  // Upstream tools/list probe so daily prompts can list every simworld-data
+  // tool. The FIRST attempt is awaited — a healthy upstream answers instantly,
+  // so the prompt has the full list with zero added latency. On failure we do
+  // NOT block run setup: when several runs boot at once the upstream can
+  // transiently drop the probe ("fetch failed"), and the backoff window
+  // (1+2+3s) would otherwise stall bot dispatch / status.json by that long.
+  // Instead the retries run in the background and fill `tools` in place, so a
+  // later day's prompt picks them up once the transient failure clears.
+  // Best-effort: if every attempt fails the bot still has the discover_tools hint.
+  const tools: SimworldToolSummary[] = []
+  let probeAborted = false
+  const probeOnce = async (): Promise<void> => {
+    const got = await probeUpstreamTools(opts.upstreamUrl)
+    if (got.length === 0) throw new Error('tools/list returned empty')
+    tools.splice(0, tools.length, ...got)
+  }
+  try {
+    await probeOnce()
+  } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`simworld-proxy: tools/list probe failed (${msg}); daily prompt will omit tool list\n`)
-    return [] as SimworldToolSummary[]
-  })
+    process.stderr.write(`simworld-proxy: tools/list probe attempt 1 failed (${msg}); retrying in background\n`)
+    void (async () => {
+      for (let attempt = 2; attempt <= 4 && !probeAborted; attempt++) {
+        // unref so a pending retry never keeps the process (or a test runner) alive.
+        await new Promise<void>(r => { const t = setTimeout(r, (attempt - 1) * 1000); t.unref?.() })
+        if (probeAborted) return
+        try { await probeOnce(); return } catch (e) {
+          const m = e instanceof Error ? e.message : String(e)
+          if (attempt === 4) process.stderr.write(`simworld-proxy: tools/list probe failed after ${attempt} attempts (${m}); daily prompt will omit tool list\n`)
+          else process.stderr.write(`simworld-proxy: tools/list probe attempt ${attempt} failed (${m}); retrying\n`)
+        }
+      }
+    })()
+  }
 
   return {
     port,
@@ -247,6 +282,7 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     // streamable-http long session 不主动断 → close() callback 永远不 fire → teardown 卡死。
     // closeAllConnections() 强制 reset 所有 socket，再 close()。3s 硬顶兜底（极端情况）。
     close: () => new Promise<void>((resolve) => {
+      probeAborted = true
       const done = () => resolve()
       const timer = setTimeout(done, 3000)
       try { (server as { closeAllConnections?: () => void }).closeAllConnections?.() } catch { /* not available pre-Node 18.2 */ }

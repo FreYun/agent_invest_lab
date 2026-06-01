@@ -5,7 +5,7 @@
 research_loop: /home/rooot/.openclaw/research-loop/ts
 
 # 参与本世界的 bot 列表
-bots: [bot1, bot7, bot9]
+bots: [bot101, bot102, bot103]
 
 # 回放区间（含端点；非交易日会被交易日历过滤掉）
 replay:

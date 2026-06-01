@@ -40,6 +40,9 @@ export class BotServer {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly client: JsonRpcStdioClient
   private _alive = true
+  // 累计 tool.call 通知数。run.ts:chatOneBot 在 chat 前后取差值，用于"放松"判定——
+  // chat 超时时如果当次至少有过一个 tool call，认为当日有推进，不再 pause。
+  private _toolCallCount = 0
 
   private constructor(botId: string, child: ChildProcessWithoutNullStreams, client: JsonRpcStdioClient, onLog?: (l: string) => void) {
     this.botId = botId
@@ -58,7 +61,11 @@ export class BotServer {
     const child = spawn(cmd, rest, { stdio: ['pipe', 'pipe', 'pipe'], cwd: opts.cwd, env: { ...process.env, ...opts.env } }) as ChildProcessWithoutNullStreams
     const client = new JsonRpcStdioClient(child.stdin, child.stdout)
     const bs = new BotServer(botId, child, client, opts.onLog)
-    if (opts.onNotification) client.onNotification(n => opts.onNotification!(n.method, n.params))
+    // 单 listener 通道：内部计 tool.call 数，再转发给 opts.onNotification（run.ts log 路径）。
+    client.onNotification(n => {
+      if (n.method === 'tool.call') bs._toolCallCount++
+      opts.onNotification?.(n.method, n.params)
+    })
     try {
       await client.waitFor(n => n.method === 'server.ready', opts.readyTimeoutMs ?? 30_000)
     } catch (err) {
@@ -69,6 +76,7 @@ export class BotServer {
   }
 
   get alive(): boolean { return this._alive }
+  get toolCallCount(): number { return this._toolCallCount }
 
   async ping(): Promise<{ pong: boolean; bot_id: string; workspace: string; model: string }> {
     return this.client.request('ping', {})

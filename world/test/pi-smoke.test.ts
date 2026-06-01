@@ -44,7 +44,7 @@ test('runWorld with loop=openclaw-pi: stub pi-server drives 1 trading day end-to
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1,
     rlConfigBase: cfgBase,
     rlOpenclawDir: undefined,
     shadowInclude: ['SOUL.md'],

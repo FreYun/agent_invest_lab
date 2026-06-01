@@ -25,7 +25,7 @@ function setupWorldDir(bots: string[], dates: string[]) {
   const skillsRoot = join(root, 'skills'); mkdirSync(skillsRoot, { recursive: true })
   const openclawJson = join(root, 'openclaw.json'); writeFileSync(openclawJson, '{}\n')
   const cfgBase = join(root, 'base.json'); writeFileSync(cfgBase, JSON.stringify({ mcp: { servers: {} } }))
-  const config: WorldConfig = { researchLoop: '/no', botsRoot, openclawJson, skillsRoot, bots, replay: { from: dates[0], to: dates[dates.length - 1] }, calendar: P.calendarFile(worldRoot), concurrency: 4, perBotTimeoutSeconds: 30, researchDayEvery: 0, researchDayTimeoutSeconds: 300, rlConfigBase: cfgBase, rlOpenclawDir: join(root, 'oc'), shadowInclude: ['SOUL.md'], loop: 'research-loop', simworldUpstreamUrl: 'http://127.0.0.1:1/mcp' }
+  const config: WorldConfig = { researchLoop: '/no', botsRoot, openclawJson, skillsRoot, bots, replay: { from: dates[0], to: dates[dates.length - 1] }, calendar: P.calendarFile(worldRoot), concurrency: 4, perBotTimeoutSeconds: 30, researchDayEvery: 0, researchDayTimeoutSeconds: 300, chatStepDays: 1, rlConfigBase: cfgBase, rlOpenclawDir: join(root, 'oc'), shadowInclude: ['SOUL.md'], loop: 'research-loop', simworldUpstreamUrl: 'http://127.0.0.1:1/mcp' }
   return { worldRoot, config, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 

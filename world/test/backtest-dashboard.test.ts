@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { writeState, readState, type WorldState } from '../src/state.ts'
 import { pauseFile } from '../src/paths.ts'
-import { pickBenchmarkFund } from '../src/backtest-dashboard/server.ts'
+import { pickBenchmarkFund, allocateQuota, selectRepresentative, classifyBusinType, mergeUserTxns } from '../src/backtest-dashboard/server.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DB = join(HERE, '../../data/fund.db')
@@ -69,6 +69,7 @@ test('backtest dashboard serves data', async () => {
     for (const b of def.bots) {
       assert.ok(b.botId, 'each bot has a botId')
       assert.ok(typeof b.runId === 'string' && b.runId.length > 0, `bot ${b.botId} has a runId`)
+      assert.equal((b as { realUsers?: unknown }).realUsers, undefined, `summary 不含 realUsers (${b.botId})`)
       assert.ok(Array.isArray(b.availableRuns) && b.availableRuns.length > 0, `bot ${b.botId} has availableRuns`)
       assert.ok(b.availableRuns.some(r => r.runId === b.runId), `bot ${b.botId} runId is in its availableRuns`)
       // sorted newest-first by runId (timestamps are lexicographically chronological)
@@ -88,6 +89,17 @@ test('backtest dashboard serves data', async () => {
     const one = await oneRes.json() as Bot
     assert.equal(one.botId, target.botId)
     assert.equal(one.runId, target.runId)
+
+    // realUsers: 仅 per-bot 详情返回；数组,数量受 MAX_REAL_USERS(10) 约束
+    const oneRU = one as Bot & {
+      realUsers?: Array<{ fundCode: string; cycleId: string; clearReturn2: number; series: Array<{ trade_date: string; net_value: number }> }>
+    }
+    assert.ok(Array.isArray(oneRU.realUsers), 'per-bot 响应含 realUsers 数组')
+    assert.ok(oneRU.realUsers!.length <= 10, 'realUsers ≤ 10')
+    for (const u of oneRU.realUsers!) {
+      assert.ok(typeof u.fundCode === 'string' && u.fundCode.length > 0, '用户有 fundCode')
+      assert.ok(Array.isArray(u.series), '用户有 series 数组')
+    }
 
     type HoldingByDateRow = { fund_code: string; fund_name: string; weight: number; market_value: number }
     type BotWithExt = Bot & {
@@ -140,7 +152,7 @@ test('backtest dashboard serves data', async () => {
   }
 })
 
-test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', async () => {
+test('dashboard exposes live run control (GET /api/backtest/runs, POST pause/stop)', async () => {
   const worldRoot = mkdtempSync(join(tmpdir(), 'dash-runs-'))
   const baseState: WorldState = {
     run_id: 'x', status: 'running', current_date: '2024-03-15',
@@ -158,8 +170,8 @@ test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', asyn
     const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
     const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
 
-    // GET /api/runs → controllable runs (running + paused), newest first, done excluded
-    const listRes = await fetch(`${base}/api/runs`)
+    // GET /api/backtest/runs → controllable runs (running + paused), newest first, done excluded
+    const listRes = await fetch(`${base}/api/backtest/runs`)
     assert.equal(listRes.status, 200)
     const { runs } = await listRes.json() as { runs: Array<{ runId: string; status: string; cursor: number; total: number }> }
     assert.deepEqual(runs.map(r => r.runId), ['rpaused', 'rrun'])
@@ -169,21 +181,21 @@ test('dashboard exposes live run control (GET /api/runs, POST pause/stop)', asyn
     assert.equal(rrun.total, 3)
 
     // POST pause without runId → 400
-    const noId = await fetch(`${base}/api/runs/pause`, { method: 'POST', body: '{}' })
+    const noId = await fetch(`${base}/api/backtest/runs/pause`, { method: 'POST', body: '{}' })
     assert.equal(noId.status, 400)
 
     // POST pause a running run → 200 ok, PAUSE sentinel written
-    const pauseRes = await fetch(`${base}/api/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rrun' }) })
+    const pauseRes = await fetch(`${base}/api/backtest/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rrun' }) })
     assert.equal(pauseRes.status, 200)
     assert.deepEqual(await pauseRes.json(), { ok: true })
     assert.ok(existsSync(pauseFile(worldRoot, 'rrun')), 'PAUSE sentinel written')
 
     // POST pause a non-running (done) run → 409 conflict
-    const pauseDone = await fetch(`${base}/api/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rdone' }) })
+    const pauseDone = await fetch(`${base}/api/backtest/runs/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rdone' }) })
     assert.equal(pauseDone.status, 409)
 
     // POST stop a paused run → flips straight to aborted (terminal)
-    const stopRes = await fetch(`${base}/api/runs/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rpaused' }) })
+    const stopRes = await fetch(`${base}/api/backtest/runs/stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId: 'rpaused' }) })
     assert.equal(stopRes.status, 200)
     assert.equal(readState(worldRoot, 'rpaused').status, 'aborted')
   } finally {
@@ -209,4 +221,98 @@ test('pickBenchmarkFund: 无 buy 时退到首个持仓', () => {
 
 test('pickBenchmarkFund: 未建仓退到默认指数沪深300', () => {
   assert.equal(pickBenchmarkFund([] as never[], [] as never[]), '510300')
+})
+
+test('allocateQuota: 单池上限封顶到候选数', () => {
+  const q = allocateQuota(new Map([['A', 12]]), 10)
+  assert.equal(q.get('A'), 10)
+})
+
+test('allocateQuota: 双池平均分', () => {
+  const q = allocateQuota(new Map([['A', 20], ['B', 20]]), 10)
+  assert.equal(q.get('A'), 5)
+  assert.equal(q.get('B'), 5)
+})
+
+test('allocateQuota: 余数给候选更多的池,且不超可用', () => {
+  const q = allocateQuota(new Map([['A', 3], ['B', 20]]), 10)
+  assert.equal(q.get('A'), 3)            // capped by availability
+  assert.equal(q.get('B'), 7)            // base 5 + remainder 2
+  assert.equal(q.get('A')! + q.get('B')!, 10)
+})
+
+test('allocateQuota: 候选总量不足时不超总可用', () => {
+  const q = allocateQuota(new Map([['A', 4], ['B', 4]]), 10)
+  assert.equal(q.get('A'), 4)
+  assert.equal(q.get('B'), 4)
+})
+
+test('selectRepresentative: quota>=n 全取', () => {
+  const arr = [1, 2, 3]
+  assert.deepEqual(selectRepresentative(arr, 5), [1, 2, 3])
+})
+
+test('selectRepresentative: 覆盖最差/最好/中位,去重,且为输入子集', () => {
+  const arr = Array.from({ length: 20 }, (_, i) => i)  // 升序 0..19
+  const picked = selectRepresentative(arr, 10)
+  assert.equal(picked.length, 10)
+  assert.ok(picked.includes(0), '含最差(0)')
+  assert.ok(picked.includes(19), '含最好(19)')
+  assert.ok(picked.includes(10), '含中位(round(0.5*19))')
+  assert.equal(new Set(picked).size, picked.length, '无重复')
+  for (const v of picked) assert.ok(arr.includes(v), '是输入子集')
+  for (let i = 1; i < picked.length; i++) assert.ok(picked[i] > picked[i - 1])
+})
+
+test('selectRepresentative: quota<=0 或空输入 → 空', () => {
+  assert.deepEqual(selectRepresentative([1, 2, 3], 0), [])
+  assert.deepEqual(selectRepresentative([], 5), [])
+})
+
+test('classifyBusinType: 定投/申购=买, 赎回/强赎=卖, 其余=null', () => {
+  assert.equal(classifyBusinType('139'), 'buy')   // 定时定额投资
+  assert.equal(classifyBusinType('122'), 'buy')   // 申购
+  assert.equal(classifyBusinType('124'), 'sell')  // 赎回
+  assert.equal(classifyBusinType('142'), 'sell')  // 强行赎回
+  assert.equal(classifyBusinType('129'), null)    // 设置分红方式
+  assert.equal(classifyBusinType('136'), null)    // 转换
+  assert.equal(classifyBusinType('1T1'), null)    // 转出投资账户
+  assert.equal(classifyBusinType(''), null)
+})
+
+test('mergeUserTxns: 同日同方向合并 amount/count, 丢弃中性, 按日期再方向升序', () => {
+  const rows = [
+    { cycle_id: 'A', busin_type: '139', amount: 100, txn_date: '2025-03-20' },
+    { cycle_id: 'A', busin_type: '122', amount: 50, txn_date: '2025-03-20' },   // 同日同向(买) → 合并
+    { cycle_id: 'A', busin_type: '124', amount: 30, txn_date: '2025-03-20' },   // 同日卖 → 单独
+    { cycle_id: 'A', busin_type: '129', amount: 0, txn_date: '2025-03-20' },    // 中性 → 丢弃
+    { cycle_id: 'A', busin_type: '139', amount: 100, txn_date: '2025-01-10' },  // 更早的买
+    { cycle_id: 'B', busin_type: '124', amount: 999, txn_date: '2025-06-01' },  // 另一个 cycle
+  ]
+  const out = mergeUserTxns(rows)
+  assert.deepEqual(out.get('A'), [
+    { date: '2025-01-10', side: 'buy', amount: 100, count: 1 },
+    { date: '2025-03-20', side: 'buy', amount: 150, count: 2 },
+    { date: '2025-03-20', side: 'sell', amount: 30, count: 1 },
+  ])
+  assert.deepEqual(out.get('B'), [
+    { date: '2025-06-01', side: 'sell', amount: 999, count: 1 },
+  ])
+})
+
+test('mergeUserTxns: 全中性或空 → 该 cycle 不出现', () => {
+  const out = mergeUserTxns([
+    { cycle_id: 'A', busin_type: '129', amount: 0, txn_date: '2025-03-20' },
+    { cycle_id: 'A', busin_type: '136', amount: 5, txn_date: '2025-03-21' },
+  ])
+  assert.equal(out.has('A'), false)
+  assert.equal(out.size, 0)
+})
+
+test('mergeUserTxns: amount 为 null 当 0 处理', () => {
+  const out = mergeUserTxns([
+    { cycle_id: 'A', busin_type: '139', amount: null, txn_date: '2025-03-20' },
+    { cycle_id: 'A', busin_type: '139', amount: 100, txn_date: '2025-03-20' },
+  ])
+  assert.deepEqual(out.get('A'), [{ date: '2025-03-20', side: 'buy', amount: 100, count: 2 }])
 })

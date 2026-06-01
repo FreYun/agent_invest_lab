@@ -292,7 +292,7 @@ def test_get_fund_perf_returns_nav_intervals(reload_server, tmp_db):
             assert k in r, f"{r['period']} missing {k}"
         assert isinstance(r["fallback"], bool)
     # meta
-    assert obj["nav_perf_meta"]["rf_annual_pct"] == 1.8
+    assert obj["nav_perf_meta"]["rf_annual_pct"] == 1
     assert obj["nav_perf_meta"]["trading_days_per_year"] == 252
     assert obj["nav_perf_meta"]["windows_trading_days"]["1m"] == 21
 

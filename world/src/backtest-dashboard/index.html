@@ -26,9 +26,25 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .bot-row-name{font-size:14px;font-weight:600}
 .bot-row-return{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
 .bot-row-return.gain{color:var(--gain)}.bot-row-return.loss{color:var(--loss)}.bot-row-return.flat{color:var(--text)}
+.bot-row-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex-shrink:0}
+.bot-row-stamp{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bot-row-fund{flex:1 1 auto;min-width:0;text-align:center;font-size:11px;color:#9fb4d6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
+.bot-row-fund.fund-empty{color:var(--dim)}
+.bot-filter{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+.bot-quick{display:flex;gap:6px;flex-wrap:wrap}
+.bot-quick-btn{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.bot-quick-btn:hover{background:rgba(255,255,255,.08)}
+.bot-quick-btn.active{background:#122034;border-color:var(--accent);color:var(--accent)}
+.bot-filter-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bot-filter-label{font-size:11px;color:var(--dim)}
+.bot-filter input[type=date]{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;font-family:inherit;color-scheme:dark}
+.bot-filter input[type=date]:focus{outline:none;border-color:var(--accent)}
+.bot-filter-clear{background:rgba(255,255,255,.03);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,color .12s}
+.bot-filter-clear:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.bot-hidden-note{font-size:11px;color:var(--dim);text-align:center;padding:6px 0 2px}
 .detail-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px 15px;margin-bottom:14px}.detail-title{font-size:22px;font-weight:800}.detail-sub{margin-top:4px;color:var(--dim);font-size:12px}.detail-pillrow{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.pill{border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:12px;background:rgba(255,255,255,.03)}.pill strong{font-weight:700}.pill.buy{color:var(--gain)}.pill.sell{color:var(--loss)}
 .panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:14px}.panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.grid-2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,.9fr);gap:14px}.chart-wrap{padding-top:2px}.chart{width:100%;height:auto;display:block;border-radius:6px;background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)}
-.axis{font-size:10px;fill:var(--dim)}.line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.bench-line{fill:none;stroke:var(--accent2);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.9}.area{fill:url(#areaGrad);opacity:.9}.gridline{stroke:rgba(255,255,255,.06);stroke-width:1}.baseline{stroke:rgba(255,184,107,.35);stroke-width:1.4;stroke-dasharray:4 4}.marker-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1.5}.marker-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1.5}.marker-text{font-size:10px;font-weight:700;fill:var(--text)}.chart-legend{display:flex;gap:14px;align-items:center;font-size:11px;color:var(--dim);margin-bottom:6px}.lg-item{display:inline-flex;align-items:center;gap:6px}.lg-swatch{display:inline-block;width:18px;height:3px;border-radius:2px}.lg-swatch.lg-bot{background:var(--accent)}.lg-swatch.lg-bench{background:var(--accent2)}
+.axis{font-size:10px;fill:var(--dim)}.line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.bench-line{fill:none;stroke:var(--accent2);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.9;pointer-events:none}.area{fill:url(#areaGrad);opacity:.9;pointer-events:none}.gridline{stroke:rgba(255,255,255,.06);stroke-width:1}.baseline{stroke:rgba(255,184,107,.35);stroke-width:1.4;stroke-dasharray:4 4}.marker-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1.5}.marker-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1.5}.marker-text{font-size:10px;font-weight:700;fill:var(--text)}.chart-legend{display:flex;gap:14px;align-items:center;font-size:11px;color:var(--dim);margin-bottom:6px}.lg-item{display:inline-flex;align-items:center;gap:6px}.lg-swatch{display:inline-block;width:18px;height:3px;border-radius:2px}.lg-swatch.lg-bot{background:var(--accent)}.lg-swatch.lg-bench{background:var(--accent2)}.user-line{fill:none;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;opacity:.32;pointer-events:none}.lg-swatch.lg-user{height:2px;opacity:.6}.user-hit{fill:none;stroke-width:9;opacity:0;stroke-linecap:round;cursor:pointer}.user-mk{opacity:0;pointer-events:none;transition:opacity .08s;stroke:rgba(0,0,0,.5);stroke-width:.8}.user-grp:hover .user-mk,.user-grp.pinned .user-mk{opacity:.95;pointer-events:auto}.user-grp:hover .user-line{opacity:.92;stroke-width:1.8}.user-grp.pinned .user-line{opacity:.98;stroke-width:2.4}.user-grp.pinned .user-mk{stroke:#fff;stroke-width:1.1}.lg-pin-hint{color:var(--dim);font-size:10px;font-style:italic}
 .table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px 8px;border-bottom:1px solid rgba(255,255,255,.04);text-align:left;font-size:12px}.table th{color:var(--dim);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em}.table td.num,.table th.num{text-align:right;font-variant-numeric:tabular-nums}.table tr:last-child td{border-bottom:none}.row-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:11px;border:1px solid var(--border)}.row-badge.buy{color:var(--gain)}.row-badge.sell{color:var(--loss)}.row-badge.hold{color:var(--dim)}.row-badge.active{color:var(--loss)}.row-badge.contaminated{color:var(--accent2);border-color:rgba(255,184,107,.4);background:rgba(255,184,107,.06)}
 .panel-holdings{display:flex;flex-direction:column}.panel-holdings .holdings{flex:1;align-content:center}.holdings{display:grid;grid-template-columns:1fr;gap:10px}.holding{border:1px solid rgba(255,255,255,.05);border-radius:6px;background:rgba(255,255,255,.02);padding:12px 12px 10px}.holding-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.holding-name{font-size:13px;font-weight:700;line-height:1.35}.holding-code{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace;margin-top:2px}.holding-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;color:var(--dim);font-size:11px}.holding strong{color:var(--text)}.reason{margin-top:8px;font-size:12px;line-height:1.55;color:var(--dim);white-space:pre-wrap}.empty{border:1px dashed var(--border);border-radius:var(--radius);padding:24px;color:var(--dim);text-align:center}
 .action-row{cursor:pointer;transition:background .12s}.action-row:hover{background:rgba(255,255,255,.025)}.action-row.expanded{background:rgba(102,217,232,.04)}.action-chevron{display:inline-block;color:var(--dim);font-size:10px;transition:transform .15s ease}.action-row.expanded .action-chevron{transform:rotate(90deg);color:var(--accent)}.reason-row td{padding:0;border-bottom:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.22);border-left:3px solid var(--accent)}.reason-section{padding:10px 14px}.reason-section + .reason-section{border-top:1px solid rgba(255,255,255,.04)}.reason-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:4px;font-weight:600}.reason-body{font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap}.reason-body.reason-settle{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}.reason-body.reason-empty{padding:10px 14px;color:rgba(255,255,255,.25);font-style:italic;font-size:12px}
@@ -78,6 +94,18 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
   <div class="layout">
     <aside class="sidebar">
       <div class="section-head"><span>Bot 列表</span><span id="botCount"></span></div>
+      <div class="bot-filter">
+        <div class="bot-quick">
+          <button type="button" class="bot-quick-btn" data-since-days="1">昨天</button>
+          <button type="button" class="bot-quick-btn" data-since-days="2">近3天</button>
+          <button type="button" class="bot-quick-btn" data-since-days="6">近7天</button>
+        </div>
+        <div class="bot-filter-row">
+          <span class="bot-filter-label">只看此日期之后跑的</span>
+          <input type="date" id="botSinceIn" class="bot-filter-date" aria-label="只看此日期之后跑的回测">
+          <button type="button" id="botSinceClear" class="bot-filter-clear" hidden>清除</button>
+        </div>
+      </div>
       <div class="bot-list" id="botList"></div>
     </aside>
     <section class="content"><div id="detailRoot"></div></section>
@@ -89,12 +117,15 @@ const fmtNav = v => v == null ? '--' : Number(v).toFixed(4)
 const fmtPct = v => { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v); return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%` }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
 const REFRESH_MS = 10_000  // dashboard polls /api/backtest/data this often
+const SHOW_REAL_USER_LINES = false  // 暂时关闭真实用户收益曲线的展示
 const state = {
   data: null,
   selected: null,
   rangePreset: 'all', rangeFrom: null, rangeTo: null,
   selectedRuns: {},          // bot_id -> runId (preserves per-bot run picks across auto-refresh)
+  botSince: null,            // 'YYYY-MM-DD'(上海时区): 只显示该日期当天及之后跑的 bot; null=全部
   expandedActions: new Set(),// "botId|action_id" keys to re-expand after re-render
+  pinnedUsers: new Set(),    // cycleId keys: 钉住的真实用户曲线,跨自动刷新保持高亮
   lastRefreshAt: null,
   refreshError: null,
 }
@@ -132,19 +163,29 @@ function computeMetrics(series){
   // Sharpe = mean(daily_return) / stddev(daily_return)  — per-day risk-adjusted return
   // Calmar = cumReturn / |maxDD|                        — interval return per unit of worst drawdown
   if (!series || series.length < 2) {
-    return { days: series?.length ?? 0, cumReturn: null, maxDD: null, sharpe: null, calmar: null }
+    return { days: series?.length ?? 0, cumReturn: null, maxDD: null, maxLoss: null, sharpe: null, sortino: null, calmar: null }
   }
   const first = Number(series[0].net_value)
   const last = Number(series[series.length - 1].net_value)
   const cumReturn = first > 0 ? last / first - 1 : null
+  // 区间最大浮亏：相对建仓初始净值的最深亏损 = min(净值)/首值 - 1（从未低于起点则为 0）
+  let minNV = Infinity
+  for (const p of series){ const v = Number(p.net_value); if (Number.isFinite(v) && v < minNV) minNV = v }
+  const maxLoss = (first > 0 && Number.isFinite(minNV)) ? Math.min(0, minNV / first - 1) : null
   const rets = dailyReturns(series)
   const mean = rets.length ? rets.reduce((s, x) => s + x, 0) / rets.length : 0
   const variance = rets.length > 1 ? rets.reduce((s, x) => s + (x - mean) ** 2, 0) / (rets.length - 1) : 0
   const stddev = Math.sqrt(variance)
-  const sharpe = stddev > 0 ? mean / stddev : null
+  // 下行波动（目标收益=0）：只对负收益求方差，sqrt(mean(min(0,r)^2))
+  const downsideVar = rets.length ? rets.reduce((s, x) => s + Math.min(0, x) ** 2, 0) / rets.length : 0
+  const downsideDev = Math.sqrt(downsideVar)
   const maxDD = maxDrawdown(series)
-  const calmar = (maxDD != null && maxDD < 0 && cumReturn != null) ? cumReturn / Math.abs(maxDD) : null
-  return { days: series.length, cumReturn, maxDD, sharpe, calmar }
+  // 收益率为负时，夏普/索提诺/卡玛没有经济含义，不计算（显示 --）
+  const negative = cumReturn != null && cumReturn < 0
+  const sharpe = (!negative && stddev > 0) ? mean / stddev : null
+  const sortino = (!negative && downsideDev > 0) ? mean / downsideDev : null
+  const calmar = (!negative && maxDD != null && maxDD < 0 && cumReturn != null) ? cumReturn / Math.abs(maxDD) : null
+  return { days: series.length, cumReturn, maxDD, maxLoss, sharpe, sortino, calmar }
 }
 function rangeForPreset(preset, series){
   if (!series?.length || preset === 'all') return { from: null, to: null }
@@ -185,6 +226,30 @@ function linePathByDate(points, dateToIdx, axisLen, yMin, yMax, width, height, p
   const area = xs.length ? `${d} L ${xs[xs.length - 1].toFixed(2)} ${height - padding.b} L ${xs[0].toFixed(2)} ${height - padding.b} Z` : ''
   return { d, area, xs, ys }
 }
+// 把已合并的用户交易(date/side/amount/count)定位到该用户曲线上的点。
+// 交易日恰好是曲线上的某天 → 用该点;否则贴最近的曲线日期。曲线区间外的交易丢弃。
+function userTxnMarks(txns, pts, xs, ys){
+  if (!pts.length || !txns || !txns.length) return []
+  const lo = pts[0].trade_date, hi = pts[pts.length - 1].trade_date
+  const dateXY = new Map()
+  for (let i = 0; i < pts.length; i++) dateXY.set(pts[i].trade_date, { x: xs[i], y: ys[i] })
+  const marks = []
+  for (const t of txns){
+    if (t.date < lo || t.date > hi) continue
+    let xy = dateXY.get(t.date)
+    if (!xy){
+      const td = Date.parse(t.date)
+      let best = 0, bestDiff = Infinity
+      for (let i = 0; i < pts.length; i++){
+        const diff = Math.abs(Date.parse(pts[i].trade_date) - td)
+        if (diff < bestDiff){ bestDiff = diff; best = i }
+      }
+      xy = { x: xs[best], y: ys[best] }
+    }
+    marks.push({ side: t.side, amount: t.amount, count: t.count, date: t.date, x: xy.x, y: xy.y })
+  }
+  return marks
+}
 function actionLabel(action){ return action.side === 'buy' ? '买' : action.side === 'sell' ? '卖' : '观' }
 function markerClass(side){ return side === 'sell' ? 'marker-sell' : 'marker-buy' }
 function renderSparkline(series, width, height){
@@ -213,12 +278,32 @@ function renderSummary(data){
 }
 function renderBotList(data){
   const root = byId('botList')
-  root.innerHTML = data.bots.map(bot => {
+  const since = state.botSince
+  let hidden = 0
+  const rows = data.bots.map(bot => {
+    const stamp = runStamp(bot.runId)
+    // 无法解析时间戳的 run 视为“跑测时间未知”,筛选时一律保留(不隐藏),避免误丢数据。
+    if (since && stamp && stamp.date < since) { hidden++; return '' }
     const retCls = bot.cumulativeReturnPct > 0 ? 'gain' : bot.cumulativeReturnPct < 0 ? 'loss' : 'flat'
     const selected = bot.botId === state.selected ? ' active' : ''
-    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
+    const stampText = stamp ? `跑于 ${stamp.short}` : '跑测时间未知'
+    const fi = botFundInfo(bot)
+    const fundHtml = `<span class="bot-row-fund${fi.empty ? ' fund-empty' : ''}" title="${esc(fi.title)}">${esc(fi.label)}</span>`
+    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><div class="bot-row-main"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-stamp">${esc(stampText)}</span></div>${fundHtml}<span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
   }).join('')
+  root.innerHTML = rows + (hidden > 0 ? `<div class="bot-hidden-note">更早的 ${hidden} 个 bot 已隐藏</div>` : '')
   root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => { void selectBot(el.dataset.bot) }))
+  syncFilterControls()
+}
+// 把筛选控件同步到 state.botSince: 清除按钮显隐、日期框回填、快捷按钮高亮当前命中的那个。
+function syncFilterControls(){
+  const since = state.botSince
+  const clearBtn = byId('botSinceClear')
+  if (clearBtn) clearBtn.hidden = !since
+  const inp = byId('botSinceIn')
+  if (inp && inp.value !== (since || '')) inp.value = since || ''
+  document.querySelectorAll('.bot-quick-btn').forEach(b =>
+    b.classList.toggle('active', !!since && shDateDaysAgo(Number(b.dataset.sinceDays)) === since))
 }
 const STACK_PALETTE = [
   '#6cd0ea', '#c084fc', '#f59e0b', '#22c55e',
@@ -263,14 +348,25 @@ function renderChart(bot){
   const benchmark = bot.benchmark
   const bSeries = filterByRange(benchmark?.series ?? [], state.rangeFrom, state.rangeTo)
 
+  // x 轴 = 回测周期(bot + 基准),不并入真实用户的真实日历日期。
   const dateSet = new Set(series.map(p => p.trade_date))
   for (const p of bSeries) dateSet.add(p.trade_date)
   const xAxisDates = [...dateSet].sort()
   const dateToIdx = new Map(xAxisDates.map((d, i) => [d, i]))
 
+  // 真实用户曲线按真实日历裁剪:只保留落在回测窗口内的交易日,窗口外整段丢弃。
+  // 故曲线从其在窗口起点当日的实际净值起画,而非重基到 1.0。
+  const users = SHOW_REAL_USER_LINES
+    ? (bot.realUsers || []).map(u => ({
+        ...u,
+        pts: (u.series || []).filter(p => dateToIdx.has(p.trade_date)),
+      })).filter(u => u.pts.length)
+    : []
+
   const allVals = [
     ...series.map(p => Number(p.net_value || 1)),
     ...bSeries.map(p => Number(p.net_value || 1)),
+    ...users.flatMap(u => u.pts.map(p => Number(p.net_value || 1))),
     1,
   ]
   const yMin = Math.min(...allVals)
@@ -279,6 +375,17 @@ function renderChart(bot){
 
   const botCoords = linePathByDate(series, dateToIdx, xAxisDates.length, yMin, yMax, width, height, pad)
   const benchCoords = bSeries.length ? linePathByDate(bSeries, dateToIdx, xAxisDates.length, yMin, yMax, width, height, pad) : null
+  const userPaths = users.map(u => {
+    const coords = linePathByDate(u.pts, dateToIdx, xAxisDates.length, yMin, yMax, width, height, pad)
+    return {
+      u,
+      color: fundColor(u.fundCode),
+      d: coords.d,
+      marks: userTxnMarks(u.txns || [], u.pts, coords.xs, coords.ys),
+      win: u.series.length ? `${u.series[0].trade_date}→${u.series[u.series.length - 1].trade_date}` : '',
+    }
+  })
+  const userFunds = [...new Map(users.map(u => [u.fundCode, u.fundName])).entries()]
 
   const ticks = 5
   const yTicks = Array.from({ length: ticks }, (_, i) => yMin + (yMax - yMin) * (i / (ticks - 1)))
@@ -323,9 +430,11 @@ function renderChart(bot){
   const baselineNear = Math.abs(1 - yMin) < 0.2 || Math.abs(1 - yMax) < 0.2
   const baselineY = height - pad.b - (height - pad.t - pad.b) * ((1 - yMin) / ySpan)
 
-  const legend = benchmark
-    ? `<div class="chart-legend"><span class="lg-item"><span class="lg-swatch lg-bot"></span>${esc(bot.botId)} 净值</span><span class="lg-item"><span class="lg-swatch lg-bench"></span>基准 ${esc(benchmark.fundCode)} ${esc(benchmark.fundName)}</span></div>`
-    : ''
+  const legendItems = [`<span class="lg-item"><span class="lg-swatch lg-bot"></span>${esc(bot.botId)} 净值</span>`]
+  if (benchmark) legendItems.push(`<span class="lg-item"><span class="lg-swatch lg-bench"></span>基准 ${esc(benchmark.fundCode)} ${esc(benchmark.fundName)}</span>`)
+  for (const [code, name] of userFunds) legendItems.push(`<span class="lg-item"><span class="lg-swatch lg-user" style="background:${fundColor(code)}"></span>真实用户 ${esc(code)}${userFunds.length > 1 ? ' ' + esc(name) : ''}</span>`)
+  if (userFunds.length) legendItems.push(`<span class="lg-item"><span style="color:var(--gain)">▲买</span>&nbsp;<span style="color:var(--loss)">▼卖</span>&nbsp;<span class="lg-pin-hint">悬停查看·点击钉住</span></span>`)
+  const legend = (benchmark || userFunds.length) ? `<div class="chart-legend">${legendItems.join('')}</div>` : ''
 
   return {
     html: `${legend}<svg class="chart nav-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">`
@@ -336,6 +445,23 @@ function renderChart(bot){
         }).join('')
       + `<line x1="${pad.l}" y1="${height - pad.b}" x2="${width - pad.r}" y2="${height - pad.b}" class="gridline"></line>`
       + (baselineNear ? `<line x1="${pad.l}" y1="${baselineY}" x2="${width - pad.r}" y2="${baselineY}" class="baseline"></line>` : '')
+      + userPaths.map(p => {
+          const lineTitle = esc(`真实用户 ${p.u.fundCode} ${p.u.fundName} · ${p.win} · 收益 ${(p.u.clearReturn2 * 100).toFixed(1)}% · ${p.u.txnCount}笔`)
+          const r = 4
+          const marks = p.marks.map(m => {
+            const pts = m.side === 'buy'
+              ? `${m.x.toFixed(2)},${(m.y - r).toFixed(2)} ${(m.x - r).toFixed(2)},${(m.y + r).toFixed(2)} ${(m.x + r).toFixed(2)},${(m.y + r).toFixed(2)}`
+              : `${m.x.toFixed(2)},${(m.y + r).toFixed(2)} ${(m.x - r).toFixed(2)},${(m.y - r).toFixed(2)} ${(m.x + r).toFixed(2)},${(m.y - r).toFixed(2)}`
+            const sideText = m.side === 'buy' ? '买入' : '卖出'
+            const countText = m.count > 1 ? ` ${m.count}笔` : ''
+            const title = `${m.date} ${sideText}${countText} ¥${fmtMoney(m.amount)}`
+            const mkColor = m.side === 'buy' ? 'var(--gain)' : 'var(--loss)'
+            return `<polygon points="${pts}" class="user-mk" fill="${mkColor}"><title>${esc(title)}</title></polygon>`
+          }).join('')
+          return `<g class="user-grp" data-cycle="${esc(p.u.cycleId)}"><path d="${p.d}" class="user-hit" stroke="${p.color}"></path>`
+            + `<path d="${p.d}" class="user-line" stroke="${p.color}"><title>${lineTitle}</title></path>`
+            + marks + `</g>`
+        }).join('')
       + `<path d="${botCoords.area}" class="area"></path>`
       + `<path d="${botCoords.d}" class="line"></path>`
       + (benchCoords ? `<path d="${benchCoords.d}" class="bench-line"></path>` : '')
@@ -413,6 +539,19 @@ function attachCursor(detailRoot, bot, chartCtx){
   const navSvg = detailRoot.querySelector('svg.nav-chart')
   const posSvg = detailRoot.querySelector('svg.position-chart')
   if (!navSvg) return
+
+  // 真实用户曲线:重渲染后(每 10s 轮询)重新套用钉住状态,并绑定点击切换钉住。
+  navSvg.querySelectorAll('.user-grp').forEach(g => g.classList.toggle('pinned', state.pinnedUsers.has(g.dataset.cycle)))
+  navSvg.addEventListener('click', e => {
+    const grp = e.target.closest('.user-grp')
+    if (!grp) return
+    const cyc = grp.dataset.cycle
+    if (!cyc) return
+    const on = !state.pinnedUsers.has(cyc)
+    grp.classList.toggle('pinned', on)
+    if (on) state.pinnedUsers.add(cyc); else state.pinnedUsers.delete(cyc)
+  })
+
   const chartWrap = navSvg.closest('.chart-wrap')
   if (!chartWrap) return
 
@@ -606,7 +745,9 @@ function renderMetricsPanel(bot){
   return `<table class="metrics-table"><thead><tr><th>指标</th><th>${esc(bot.botId)}</th><th>${benchLabel}</th><th>与基准对比</th></tr></thead><tbody>`
     + row('累计收益', bm.cumReturn, km.cumReturn, true)
     + row('最大回撤', bm.maxDD, km.maxDD, true)
+    + row('最大亏损', bm.maxLoss, km.maxLoss, true)
     + row('夏普比率', bm.sharpe, km.sharpe, false)
+    + row('索提诺比率', bm.sortino, km.sortino, false)
     + row('卡玛比率', bm.calmar, km.calmar, false)
     + `<tr><td>样本天数</td><td>${bm.days}</td><td>${km.days}</td><td></td></tr>`
     + `</tbody></table>`
@@ -637,6 +778,9 @@ function renderActions(bot){
 }
 function renderDetail(bot){
   const reg = bot.reviews[bot.reviews.length - 1]
+  // 最大亏损：全区间相对建仓初值的最深浮亏（区别于从峰值起算的最大回撤）
+  const _maxLoss = computeMetrics(bot.series || []).maxLoss
+  const maxLossPct = _maxLoss == null ? null : _maxLoss * 100
   let alphaPill = ''
   if (bot.benchmark && bot.benchmark.series.length){
     const benchEndPct = (bot.benchmark.series[bot.benchmark.series.length - 1].net_value - 1) * 100
@@ -648,7 +792,7 @@ function renderDetail(bot){
   const chartHtml = typeof chartData === 'string'
     ? chartData
     : chartData.html + renderPositionChart(bot, chartData.dateToIdx, chartData.xAxisDates)
-  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
+  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
   if (typeof chartData !== 'string') attachCursor(byId('detailRoot'), bot, chartData)
 }
 async function hydrateBotByIndex(idx){
@@ -673,6 +817,40 @@ async function selectBot(botId){
   const idx = state.data.bots.findIndex(b => b.botId === state.selected)
   const bot = await hydrateBotByIndex(idx) || state.data.bots[0]
   if (bot) renderDetail(bot)
+}
+// run_id (dash-<UTC时间戳>) → 上海时区的 {date:'YYYY-MM-DD', short:'MM-DD HH:mm'};
+// 供 bot 列表的“跑测时间”展示与日期筛选共用。非该格式(罕见,如手工命名的 run)返回 null,
+// 列表按“跑测时间未知”处理且筛选时不隐藏。+8 时区换算与 formatRunLabel 保持一致。
+// 上海时区“今天往前推 daysAgo 天”的日期 YYYY-MM-DD(daysAgo=0 即今天)。口径与 runStamp
+// 的 +8 换算一致,保证快捷按钮算出的阈值能和列表里每个 run 的“跑测日期”正确比较。
+// 取 bot 当前实仓(weight>0)的基金,按仓位降序。label=主仓基金名(多只时 “X 等N只”),
+// title=hover 看全(每只基金名+主题+仓位%)。空仓返回 empty=true,列表显示“空仓”。
+function botFundInfo(bot){
+  const holds = (bot.holdings || []).filter(h => Number(h.weight || 0) > 0)
+    .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))
+  if (!holds.length) return { label: '空仓', empty: true, title: '当前空仓' }
+  const label = holds.length === 1 ? holds[0].fund_name : `${holds[0].fund_name} 等${holds.length}只`
+  const title = holds.map(h => {
+    const th = String(h.theme || '').trim()
+    return `${h.fund_name}${th ? '（' + th + '）' : ''} ${(Number(h.weight || 0) * 100).toFixed(0)}%`
+  }).join('；')
+  return { label, empty: false, title }
+}
+function shDateDaysAgo(daysAgo){
+  const sh = new Date(Date.now() + 8 * 3600 * 1000)
+  const d = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate()) - daysAgo * 86400000)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+}
+function runStamp(runId){
+  const m = String(runId || '').match(/^dash-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const sh = new Date(new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`).getTime() + 8 * 3600 * 1000)
+  const pad = (n) => String(n).padStart(2, '0')
+  return {
+    date: `${sh.getUTCFullYear()}-${pad(sh.getUTCMonth() + 1)}-${pad(sh.getUTCDate())}`,
+    short: `${pad(sh.getUTCMonth() + 1)}-${pad(sh.getUTCDate())} ${pad(sh.getUTCHours())}:${pad(sh.getUTCMinutes())}`,
+  }
 }
 function formatRunLabel(run){
   // run_id 里的时间分量是 UTC（toISOString 来源），上海客户视角要 +8 显示。
@@ -790,7 +968,7 @@ function renderRuns(runs){
 }
 async function refreshRuns(){
   try {
-    const res = await fetch('/api/runs', { cache: 'no-store' })
+    const res = await fetch('/api/backtest/runs', { cache: 'no-store' })
     if (!res.ok) return
     const { runs } = await res.json()
     renderRuns(runs)
@@ -801,7 +979,7 @@ async function runControl(act, runId, btn){
   if (act === 'stop' && !confirm(`确定停止 run「${runId}」？这是终态，不可 resume。`)) return
   if (btn) btn.disabled = true
   try {
-    const res = await fetch(`/api/runs/${act}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId }) })
+    const res = await fetch(`/api/backtest/runs/${act}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runId }) })
     const body = await res.json().catch(() => ({}))
     if (!res.ok || !body.ok) alert(`${act === 'pause' ? '暂停' : '停止'}失败：${body.reason || body.error || ('HTTP ' + res.status)}`)
   } catch (err) {
@@ -825,6 +1003,11 @@ document.addEventListener('change', (e) => {
     switchBotRun(botId, runId).catch(err => { byId('detailRoot').innerHTML = `<div class="empty">${esc(err.message || String(err))}</div>` })
     return
   }
+  if (e.target.id === 'botSinceIn') {
+    state.botSince = e.target.value || null
+    if (state.data) renderBotList(state.data)
+    return
+  }
   if (e.target.id === 'rangeFromIn' || e.target.id === 'rangeToIn') {
     state.rangePreset = 'custom'
     state.rangeFrom = byId('rangeFromIn').value || null
@@ -837,6 +1020,18 @@ document.addEventListener('click', (e) => {
   const runBtn = e.target.closest?.('.run-btn[data-run-act]')
   if (runBtn) {
     void runControl(runBtn.dataset.runAct, runBtn.dataset.runId, runBtn)
+    return
+  }
+  const quick = e.target.closest?.('.bot-quick-btn')
+  if (quick) {
+    const since = shDateDaysAgo(Number(quick.dataset.sinceDays))
+    state.botSince = state.botSince === since ? null : since  // 再点已选中的按钮 → 取消筛选
+    if (state.data) renderBotList(state.data)
+    return
+  }
+  if (e.target.id === 'botSinceClear') {
+    state.botSince = null
+    if (state.data) renderBotList(state.data)
     return
   }
   const btn = e.target.closest?.('.range-presets button[data-range]')

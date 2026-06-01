@@ -309,9 +309,9 @@ def test_portfolio_get_my_performance_includes_interval_metrics(reload_server, t
     assert obj["success"] is True
     assert "interval_metrics" in obj
     im = obj["interval_metrics"]
-    assert im["rf_annual_pct"] == 1.8
+    assert im["rf_annual_pct"] == 1
     assert im["trading_days_per_year"] == 252
-    assert abs(im["rf_daily_pct"] - 1.8 / 252) < 1e-6
+    assert abs(im["rf_daily_pct"] - 1 / 252) < 1e-6
     assert set(im["metrics"].keys()) == {"1m", "3m", "6m", "1y", "since_inception"}
     for p, m in im["metrics"].items():
         assert "return_pct" in m

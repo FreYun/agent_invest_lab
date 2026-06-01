@@ -20,7 +20,7 @@ test('weekdayOf returns English weekday for a UTC date', () => {
 
 test('first-day message: full cold-start rules, mcp-only tool policy, points to simworld-data + portfolio_*; no inline overview', () => {
   const w = tmpWorldWithOverview('2024-03-15', '上证 +1.2%，半导体领涨。')
-  const m = renderDailyMessage({ worldRoot: w, date: '2024-03-15', isFirstDay: true, quotesPath: '/abs/world/days/2024-03-15/quotes.json', journalRelPath: 'memory/trading/journal.md' })
+  const m = renderDailyMessage({ worldRoot: w, date: '2024-03-15', isFirstDay: true, botId: 'bot-test', quotesPath: '/abs/world/days/2024-03-15/quotes.json' })
   assert.match(m, /当前世界日期：2024-03-15（Friday）/)
   // mcp__* 工具池现在静态全部可见（loop server chat_auto_activate_deferred=true）；
   // prompt 不再教 discover_tools 激活流程。任何把这套话术加回来的改动都要让这条挂。
@@ -35,7 +35,7 @@ test('first-day message: full cold-start rules, mcp-only tool policy, points to 
   // 行情走 simworld-data；账户/绩效/PnL/持仓 NAV/指数 MA 全部预取注入下方，
   // prompt 必须明确告诉 bot "不要重复调 portfolio_get_my_*"。
   assert.match(m, /simworld-data/)
-  assert.match(m, /不要重复调用 portfolio_get_my_history/)
+  assert.match(m, /不要重复调用 mcp__fund_portfolio_mcp__portfolio_get_my_history/)
   assert.match(m, /portfolio_place_buy_order/)
   // 不再有"自己查 portfolio_get_my_*"这种鼓励重复 fetch 的句式
   assert.doesNotMatch(m, /portfolio_get_my_history \/ portfolio_get_my_performance \/ portfolio_get_my_trades 自己查/)
@@ -48,21 +48,20 @@ test('first-day message: full cold-start rules, mcp-only tool policy, points to 
 
 test('non-first-day message: concise rules only, no AUTONOMY / playbook / day-type banner', () => {
   const w = tmpWorldWithOverview('2024-03-18', '上证 -0.4%。')
-  const full = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
-  const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: false, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
+  const full = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot-test', quotesPath: '/q.json' })
+  const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot-test', quotesPath: '/q.json' })
   // 注意：Day N 不再"比 Day 1 短"——dash-2026-05-19T08-52-36 bot7 从 Day 6 起塌成 mem0_search × 2 + mem0_add
   // 的 reward hack，60 天没碰新数据。briefRules 现在显式给 5 步节奏 + FOOTER_BRIEF 加"纯 mem0 不算"硬契约，
   // Day N 总长可能反超 Day 1，但用 token 换 thesis 验证是值得的。
   void full
   assert.match(brief, /当前世界日期：2024-03-18（Monday）/)
-  assert.match(brief, /规则同前/)
   assert.match(brief, /mem0_search/)
   assert.match(brief, /mem0_add/)
   assert.match(brief, /simworld-data/)
   // Day N brief 也不能教 discover_tools——loop server 已经把所有 mcp__* 静态挂出。
   assert.doesNotMatch(brief, /discover_tools/)
   // Day N 也明确告诉 bot 不要重复 fetch 已注入的账户数据
-  assert.match(brief, /不要重复调 portfolio_get_my_history/)
+  assert.match(brief, /不要重复调 mcp__fund_portfolio_mcp__portfolio_get_my_history/)
   // AUTONOMY 已被删除（属于 embedded strategy：规定看什么、平静日默认 HOLD、大事多研究）；
   // 节奏由 bot 自己 Day 1 写下的策略决定，prompt 不再注入任何节奏指引。
   assert.doesNotMatch(brief, /今天的节奏由你定/)
@@ -74,26 +73,52 @@ test('non-first-day message: concise rules only, no AUTONOMY / playbook / day-ty
   rmSync(w, { recursive: true, force: true })
 })
 
-test('first-day broadcasts the per-run curated buyable funds list; later days do not (bot self-queries via portfolio_get_buyable_funds)', () => {
+test('every day broadcasts the per-run curated buyable pool; guidance is keyed on bot KIND (bot101+ multi, bot1..20 single), NOT on pool size', () => {
   const w = tmpWorldWithOverview('2024-03-18', 'overview')
   const codes = ['510300', '159915', '002611']
-  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md', buyableFundCodes: codes })
-  const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md', buyableFundCodes: codes })
-  // Day 1: explicit list of codes appears
-  for (const c of codes) assert.match(first, new RegExp(c))
-  assert.match(first, /本次指定投资标的/)
-  // Day 2+: not re-broadcast
-  assert.doesNotMatch(brief, /本次指定投资标的/)
-  for (const c of codes) assert.doesNotMatch(brief, new RegExp(c))
-  // Day 1 without list (e.g., world.yaml didn't set buyable_fund_codes): block omitted
-  const firstNoList = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
-  assert.doesNotMatch(firstNoList, /本次指定投资标的/)
+
+  // single-fund bot (bot1..20) — even with a multi-code pool, guidance must stay "单指数择时"
+  // and NOT promote rotation. The pool/bot-kind decoupling is the whole point — the dashboard
+  // user can prefill any pool, but the bot's decision style is fixed by its identity.
+  const singleFirst = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot1', quotesPath: '/q.json', buyableFundCodes: codes })
+  const singleBrief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot1', quotesPath: '/q.json', buyableFundCodes: codes })
+  for (const msg of [singleFirst, singleBrief]) {
+    assert.match(msg, /当前可买池/)
+    for (const c of codes) assert.match(msg, new RegExp(c))
+    assert.match(msg, /你是单基金 bot/)
+    assert.match(msg, /单指数择时/)
+    // single-fund guidance explicitly forbids rotation — the word 轮动 must appear here as a "不要做" instruction
+    assert.match(msg, /不要做标的轮动/)
+    // Must NOT promote the multi-fund 三件事 framing
+    assert.doesNotMatch(msg, /组合配置（各基金目标权重）/)
+  }
+
+  // multi-fund bot (bot101+) — even with a 1-code pool, guidance must stay 组合配置 / 轮动 framing
+  const multiFirst = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot101', quotesPath: '/q.json', buyableFundCodes: codes })
+  const multiBrief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json', buyableFundCodes: codes })
+  for (const msg of [multiFirst, multiBrief]) {
+    assert.match(msg, /当前可买池/)
+    assert.match(msg, /你是多基金 bot/)
+    assert.match(msg, /组合配置（各基金目标权重）/)
+    assert.match(msg, /池内轮动/)
+    // Must NOT promote the single-fund 单指数择时 framing
+    assert.doesNotMatch(msg, /单指数择时/)
+  }
+
+  // Multi-fund bot with a 1-only pool — guidance still multi-fund (decoupled from pool size)
+  const multiOneCode = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot102', quotesPath: '/q.json', buyableFundCodes: ['510300'] })
+  assert.match(multiOneCode, /你是多基金 bot/)
+  assert.doesNotMatch(multiOneCode, /单指数择时/)
+
+  // No list provided (world.yaml didn't set buyable_fund_codes): block omitted
+  const firstNoList = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot1', quotesPath: '/q.json' })
+  assert.doesNotMatch(firstNoList, /当前可买池/)
   rmSync(w, { recursive: true, force: true })
 })
 
 test('first-day has no AUTONOMY block (cold start needs explicit handholding, not self-pacing)', () => {
   const w = tmpWorldWithOverview('2024-03-18', 'overview')
-  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
+  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot-test', quotesPath: '/q.json' })
   assert.doesNotMatch(first, /今天的节奏由你定/)
   assert.doesNotMatch(first, /今天是普通交易日/)
   assert.doesNotMatch(first, /今天是研究日/)
@@ -104,7 +129,7 @@ test('first-day prompt does NOT embed any strategy framework (regime / timing_st
   // Guard test: 我们决定让 bot 完全自由发挥，不预设择时框架。任何把 prompt 拉回
   // "Step 1 市场观点 / 盈亏档动能档 / 强制 mem0 key" 这套硬约束的改动应该让这个 test 立刻挂。
   const w = tmpWorldWithOverview('2024-03-15', 'overview')
-  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-15', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
+  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-15', isFirstDay: true, botId: 'bot-test', quotesPath: '/q.json' })
   // Step 1 / regime / timing_stance 类标签
   assert.doesNotMatch(first, /Step 1：市场观点/)
   assert.doesNotMatch(first, /Step 2：单基金择时/)
@@ -138,7 +163,7 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   // but the rendered block itself (【...】) must not appear when no data is
   // injected. Same for "区间业绩" — appears in directive text but never as a
   // block when intervals is empty.
-  const noCtx = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
+  const noCtx = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot-test', quotesPath: '/q.json' })
   assert.doesNotMatch(noCtx, /【账户快照（今日 settle 后）】/)
   assert.doesNotMatch(noCtx, /【近 \d+ 个交易日 PnL 走势/)
   assert.doesNotMatch(noCtx, /【持仓基金近 20 交易日 NAV/)
@@ -148,7 +173,7 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
 
   // With all four blocks populated.
   const withCtx = renderDailyMessage({
-    worldRoot: w, date: '2024-03-18', isFirstDay: false, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md',
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot-test', quotesPath: '/q.json',
     dailyContext: {
       account: {
         asOfDate: '2024-03-18',
@@ -160,10 +185,6 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
           { order_id: 42, fund_code: '510300', order_type: 'buy', order_date: '2024-03-18', order_amount: 100_000, reference_nav: 2.24 },
         ],
       },
-      pnlTrend: [
-        { date: '2024-03-15', total_value: 999_500, net_value: 0.9995, daily_return_pct: -0.05, cumulative_return_pct: -0.05, max_drawdown_pct: -0.05 },
-        { date: '2024-03-16', total_value: 1_000_200, net_value: 1.0002, daily_return_pct: 0.07, cumulative_return_pct: 0.02, max_drawdown_pct: -0.05 },
-      ],
       performance: {
         asOfDate: '2024-03-18',
         summary: {
@@ -186,12 +207,12 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
         completedPositions: [
           { fund_code: '510880', fund_name: '红利ETF', entry_date: '2024-02-01', exit_date: '2024-03-05', holding_days: 33, total_invested: 100_000, total_proceeds: 105_500, net_pl: 5_500, return_pct: 5.5, fees: 25 },
         ],
-        dailySeries: [],
       },
       benchmark: {
         code: '000300.SH', name: '沪深300',
         pointsByDate: { '2024-03-15': -0.30, '2024-03-16': 0.10 },
         latestCumulativePct: 0.10,
+        metrics: { return_pct: 0.10, max_drawdown_pct: -0.30, volatility_pct: 0.21, sharpe_ratio: 0.0050, calmar_ratio: 0.33, data_points: 2 },
       },
       fundSeries: [
         {
@@ -204,7 +225,7 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
         },
       ],
       indices: [
-        { code: '000300.SH', name: '沪深300', latest_date: '2024-03-15', latest_close: 3500.12, ma5: 3490.00, ma20: 3470.00, vs_ma5_pct: 0.29, vs_ma20_pct: 0.87 },
+        { code: '000300.SH', name: '沪深300', latest_date: '2024-03-15', latest_close: 3500.12, ma5: 3490.00, ma20: 3470.00, vs_ma5_pct: 0.29, vs_ma20_pct: 0.87, ma60: 3450.00, ma120: 3400.00, ma200: 3350.00, vs_ma60_pct: 1.45, vs_ma200_pct: 4.48, trend: '多头排列' },
       ],
     },
   })
@@ -219,26 +240,19 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   assert.match(withCtx, /账户累计盈亏 0\.00%（¥0）= 持仓浮盈 ¥250 \+ 已实现盈亏 ¥-250/)
   assert.match(withCtx, /单基浮盈 \+0\.12%/)
   assert.doesNotMatch(withCtx, /，浮盈 /)
-  // PnL trend block — header mentions benchmark, summary line states alpha
-  assert.match(withCtx, /近 2 个交易日 PnL 走势/)
-  assert.match(withCtx, /基准 = 沪深300（000300\.SH）/)
-  assert.match(withCtx, /2024-03-15/)
-  assert.match(withCtx, /2024-03-16/)
-  // Summary anchored on last trend point (2024-03-16): you +0.02% vs benchmark +0.10% → 跑输 -0.08 pp
-  assert.match(withCtx, /截至 2024-03-16/)
-  assert.match(withCtx, /你累计 \+0\.02%/)
-  assert.match(withCtx, /沪深300 累计 \+0\.10%/)
-  assert.match(withCtx, /跑输 -0\.08% pp/)
-  // Per-row 超额 column present
-  assert.match(withCtx, /超额\(pp\)/)
-  // Performance summary block — every metric we have should be in there
+  // PnL trend / benchmark / 你 vs 基准 blocks have been trimmed from message.ts
+  // (see commit cdc5913 — "trim PnL/benchmark blocks"). Guard against re-introduction:
+  assert.doesNotMatch(withCtx, /近 \d+ 个交易日 PnL 走势/)
+  assert.doesNotMatch(withCtx, /你 vs 基准（since inception/)
+  // Performance summary block — only the metrics that the renderer actually emits
   assert.match(withCtx, /整体绩效/)
   assert.match(withCtx, /累计收益 \+0\.02%/)
-  assert.match(withCtx, /年化 \+2\.50%/)
   assert.match(withCtx, /Sharpe \(rf=0\) 0\.45/)
   assert.match(withCtx, /最大回撤 -0\.05%/)
-  assert.match(withCtx, /日级胜负：1 胜 \/ 1 负 \/ 0 平/)
-  assert.match(withCtx, /最佳单日：2024-03-16 \+0\.07%/)
+  // 年化收益 / 日级胜负 / 最佳单日 also dropped from performanceBlock — guard against regression
+  assert.doesNotMatch(withCtx, /年化 \+/)
+  assert.doesNotMatch(withCtx, /日级胜负/)
+  assert.doesNotMatch(withCtx, /最佳单日/)
   // Trades summary
   assert.match(withCtx, /交易统计/)
   assert.match(withCtx, /买入 1 笔.*总金额 ¥200,?000/)
@@ -255,18 +269,22 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   assert.match(withCtx, /持仓基金近 20 交易日 NAV/)
   assert.match(withCtx, /近 1m \+1\.20%/)
   assert.match(withCtx, /近 3m \+3\.40%/)
-  // Index block
+  // Index block — 趋势标签 + 长均线锚先行，短均线退为情绪、只给 vs%
   assert.match(withCtx, /主要指数（5 个/)
   assert.match(withCtx, /000300\.SH/)
-  assert.match(withCtx, /MA5 3490/)
-  assert.match(withCtx, /MA20 3470/)
+  assert.match(withCtx, /【多头排列】/)
+  assert.match(withCtx, /趋势锚（判方向看这个）/)
+  assert.match(withCtx, /MA60 3450/)
+  assert.match(withCtx, /MA200 3350/)
+  assert.match(withCtx, /短期情绪（非趋势扳机）/)
+  assert.match(withCtx, /vs MA5 \+0\.29%/)
   rmSync(w, { recursive: true, force: true })
 })
 
 test('Day N brief contains no playbook / no AUTONOMY / no embedded pacing (length parity with Day 1 acceptable since v2 rhythm)', () => {
   const w = tmpWorldWithOverview('2024-03-18', 'overview')
-  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
-  const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: false, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
+  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot-test', quotesPath: '/q.json' })
+  const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot-test', quotesPath: '/q.json' })
   // Day N 不再要求"比 Day 1 短"——见上面 non-first-day 测试的注释。
   void first
   // AUTONOMY 已被删除——"先看市场 / 平静日 HOLD / 大事多研究" 都是 embedded strategy
@@ -282,37 +300,27 @@ test('Day N brief contains no playbook / no AUTONOMY / no embedded pacing (lengt
   rmSync(w, { recursive: true, force: true })
 })
 
-test('Day 1 injects the backtest horizon (N trading days) but no end date; Day N never injects horizon even if passed', () => {
+test('backtest horizon is never injected on either Day 1 or Day N (avoid endgame countdown leak — bot 应按市场决策，不按倒计时决策)', () => {
+  // 历史曾经在 Day 1 注入 "N 个交易日 / 约 X 个月 / 今天是第 1 天" —— 现在 fullRules 已不渲染。
+  // 即便 caller 仍然传 tradingDaysTotal（向后兼容），prompt 里也不应出现 horizon 字样。
+  // 这个 test 作为防回归的 guard：把 horizon 重新加回来会立刻挂。
   const w = tmpWorldWithOverview('2024-03-18', 'overview')
-  // Day 1 with horizon
+
+  // Day 1 + 传 horizon: 不出现
   const first = renderDailyMessage({
-    worldRoot: w, date: '2024-03-18', isFirstDay: true,
-    quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md',
+    worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot-test',
+    quotesPath: '/q.json',
     tradingDaysTotal: 60,
   })
-  // 数字 + "交易日"
-  assert.match(first, /60 个交易日/)
-  // 给了约月 / 年的换算辅助但不暴露起止
-  assert.match(first, /约 2\.9 个月/)
-  assert.match(first, /0\.24 年/)
-  // "第 1 天" 提示
-  assert.match(first, /今天是第 1 天/)
-  // 不会写一个具体的 end date — only today's date should appear among ISO dates
-  const isoDates = first.match(/\d{4}-\d{2}-\d{2}/g) ?? []
-  for (const d of isoDates) assert.equal(d, '2024-03-18', `Day 1 prompt should only mention today's date as YYYY-MM-DD; saw ${d}`)
+  assert.doesNotMatch(first, /60 个交易日/)
+  assert.doesNotMatch(first, /今天是第 1 天/)
+  assert.doesNotMatch(first, /个交易日（约/)
+  assert.doesNotMatch(first, /约 \d+(\.\d+)? 个月/)
 
-  // Day 1 without horizon → 不注入这块
-  const noHorizon = renderDailyMessage({
-    worldRoot: w, date: '2024-03-18', isFirstDay: true,
-    quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md',
-  })
-  assert.doesNotMatch(noHorizon, /个交易日（约/)
-  assert.doesNotMatch(noHorizon, /今天是第 1 天/)
-
-  // Day N — 即便传了也不注入（防 endgame 倒计时）
+  // Day N + 传 horizon: 同样不出现（防 endgame 倒计时）
   const brief = renderDailyMessage({
-    worldRoot: w, date: '2024-03-19', isFirstDay: false,
-    quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md',
+    worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot-test',
+    quotesPath: '/q.json',
     tradingDaysTotal: 60,
   })
   assert.doesNotMatch(brief, /60 个交易日/)
@@ -330,7 +338,7 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
   const w = tmpWorldWithOverview('2024-03-19', 'overview')
 
   // Day N 必须带上 footer 的三条规则
-  const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
+  const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot-test', quotesPath: '/q.json' })
   assert.match(brief, /结束之前必做/)
   // 规则 1：决策必须当日执行——含执行工具名 + "决策从未发生" 反例
   assert.match(brief, /今天的决策今天就发生/)
@@ -358,7 +366,7 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
   assert.match(brief, /这一步缺，整天等于没做/)
 
   // Day 1 走的是 FOOTER_FULL 路径，不应被 FOOTER_BRIEF 替换或追加双 footer
-  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: true, quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md' })
+  const first = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: true, botId: 'bot-test', quotesPath: '/q.json' })
   // FOOTER_FULL 的两个 header 还在
   assert.match(first, /记忆与连续性/)
   assert.match(first, /边界】这是一次交易回合/)
@@ -373,8 +381,8 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
 test('Day 1 always injects methodology hint (system prompt has the actual content)', () => {
   const w = tmpWorldWithOverview('2024-03-15', 'overview')
   const first = renderDailyMessage({
-    worldRoot: w, date: '2024-03-15', isFirstDay: true,
-    quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md',
+    worldRoot: w, date: '2024-03-15', isFirstDay: true, botId: 'bot-test',
+    quotesPath: '/q.json',
   })
   // hint 指向 system prompt 的 ## METHODOLOGY.md section
   assert.match(first, /## METHODOLOGY\.md/)
@@ -394,8 +402,8 @@ test('Day 1 always injects methodology hint (system prompt has the actual conten
 test('Day N always injects methodology hint (no strategy block, system prompt has the actual content)', () => {
   const w = tmpWorldWithOverview('2024-03-19', 'overview')
   const brief = renderDailyMessage({
-    worldRoot: w, date: '2024-03-19', isFirstDay: false,
-    quotesPath: '/q.json', journalRelPath: 'memory/trading/journal.md',
+    worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot-test',
+    quotesPath: '/q.json',
   })
   // hint 指向 system prompt 的 ## METHODOLOGY.md section
   assert.match(brief, /## METHODOLOGY\.md/)
@@ -403,7 +411,7 @@ test('Day N always injects methodology hint (no strategy block, system prompt ha
   // 不再有"Day 1 写下的策略"块或 # MY_STRATEGY 前缀
   assert.doesNotMatch(brief, /你 Day 1 写下的策略/)
   assert.doesNotMatch(brief, /# MY_STRATEGY/)
-  // briefRules 仍然完整存在
-  assert.match(brief, /规则同前/)
+  // briefRules 头部仍然在
+  assert.match(brief, /当前世界日期：2024-03-19/)
   rmSync(w, { recursive: true, force: true })
 })

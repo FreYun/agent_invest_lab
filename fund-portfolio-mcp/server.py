@@ -66,13 +66,18 @@ mcp = FastMCP(
         "巡检调仓记录、每日快照追踪、选品漏斗追踪等工具。"
         "所有 bot 共用同一个数据库，通过 bot_id 区分。"
         + ("【当前为 READONLY 模式：写工具未注册，bot 写库请走系统层 fund_md_to_db。】" if READONLY else "")
-        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance 暴露；其余隐藏。】" if BOT_ONLY else "")
+        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance / portfolio_get_buyable_funds / get_fund_detail 暴露；其余隐藏。】" if BOT_ONLY else "")
     ),
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 # BOT_ONLY: monkey-patch mcp.tool 让未列入白名单的函数装饰后变 no-op (函数原样返回，不注册)
 # 必须在 BOT_ONLY 真值时立刻 patch，因为下面的 @mcp.tool() 装饰器在 module load 时执行。
+#
+# get_fund_detail 在多基金 bot（bot101+）场景下必须暴露：bot 做组合配置/轮动时需要
+# 主题（theme）/ 市值/风格因子（size_style/invest_style）/ 全区间业绩（1m..5y+inception，含同类排名）——
+# simworld-data 的 fund_basic_info 上游接口给不了这些字段，只能走库内的 get_fund_detail。
+# 单基金 bot 调它也无害（只是读操作，run_id 不强制）。
 _BOT_ONLY_ALLOWED = {
     "portfolio_place_buy_order",
     "portfolio_place_sell_order",
@@ -80,6 +85,7 @@ _BOT_ONLY_ALLOWED = {
     "portfolio_get_my_trades",
     "portfolio_get_my_performance",
     "portfolio_get_buyable_funds",
+    "get_fund_detail",
 }
 if BOT_ONLY:
     _orig_mcp_tool = mcp.tool
@@ -111,6 +117,19 @@ def _require_run_id(run_id: str) -> str | None:
         return json.dumps({
             "success": False,
             "message": "run_id 缺失：写入工具必须带 run_id（由 fund-portfolio-proxy 注入或调用方显式传）",
+        }, ensure_ascii=False)
+    return None
+
+
+def _require_reason(reason: str, action: str) -> str | None:
+    """买/卖单必须带 reason——每笔交易要留下决策理由（进审计日志，供日后复盘）。
+    bot 偶尔忘传，这里硬拦：缺失直接报错让它补写。返回错误 JSON 串，None 表示通过。
+    action 是动作词（"买入"/"卖出"），拼进提示让 bot 知道该补什么。"""
+    if not reason or not isinstance(reason, str) or not reason.strip():
+        return json.dumps({
+            "success": False,
+            "message": f"reason 缺失：{action}必须写明理由（为什么现在{action}这只基金），"
+                       f"再带上 reason 重新下单。每笔交易的 reason 会进审计日志供复盘。",
         }, ensure_ascii=False)
     return None
 
@@ -238,9 +257,9 @@ def _calc_max_drawdown(nav_list: list[float]) -> float:
 
 
 # fund_bot_performance 区间业绩计算的常量。
-# rf 1.8% 年化由用户指定；交易日按 252 天换算到日化 rf。
+# rf 1% 年化由用户指定；交易日按 252 天换算到日化 rf。
 # 所有指标都是区间口径（不年化），用户明确要求"区间波动率，不要年化"。
-_BOT_PERF_RF_ANNUAL_PCT = 1.8
+_BOT_PERF_RF_ANNUAL_PCT = 1
 _BOT_PERF_TRADING_DAYS_PER_YEAR = 252
 _BOT_PERF_RF_DAILY_PCT = _BOT_PERF_RF_ANNUAL_PCT / _BOT_PERF_TRADING_DAYS_PER_YEAR
 # 窗口口径（交易日，不是自然日）。since_inception 取全量序列。
@@ -363,7 +382,7 @@ def _compute_fund_nav_performance(conn, fund_code: str, trade_date: str) -> None
     """从 fund_nav 的 acc_nav/daily_return_pct 序列计算单基金的区间业绩，写
     fund_nav_performance 5 行（period = 1m/3m/6m/1y/since_inception）。
 
-    与 _compute_bot_performance 的口径完全对齐（区间，不年化，rf=1.8%/252）：
+    与 _compute_bot_performance 的口径完全对齐（区间，不年化，rf=1%/252）：
       - 用 acc_nav（累计净值）算 return_pct 和 max_drawdown_pct（含分红再投资）
       - 用 daily_return_pct 算 volatility_pct 和 sharpe_ratio（已含分红的口径）
       - 不满窗口 → fallback 到 since_inception 全量
@@ -958,7 +977,26 @@ async def get_fund_pool(fund_type: str = "", top_n: int = 500) -> str:
 
 @mcp.tool()
 async def get_fund_detail(fund_code: str) -> str:
-    """获取单只基金详情：基本信息 + 最新净值 + 最新业绩 + 风格 + 行业持仓 + 重仓股。"""
+    """获取单只基金详情。多基金 bot 做"主线→候选基金"映射、组合配置、池内选品都用这个。
+
+    返回的关键字段：
+      data.theme              主题分类（科技 / 新能源 / 医药 / 金融 / 周期 / 消费 / 制造 /
+                              基建地产 / 全市场，或组合标签如 "新能源,科技"）。判断主线后用
+                              这个字段从池子里收敛候选基金。
+      data.style.size_style   市值因子（大盘 / 中盘 / 小盘）。
+      data.style.invest_style 风格因子（平衡 / 成长 / 价值）。
+      data.performance        分区间业绩（按最新 as_of_date 取，含 1m / 3m / 6m / 1y / 2y /
+                              3y / 5y / since_inception 全档），每档含 return_pct /
+                              rank_pct（同类百分位）/ rank_text（"3274/3745"格式排名）/
+                              max_drawdown_pct / volatility_pct / sharpe_ratio / calmar_ratio。
+                              **不要只看 1y——做组合配置要看 3y/5y 才能判断长周期定性。**
+      data.latest_nav         最新净值
+      data.industry           行业持仓（如有）
+      data.top_stocks         前 10 重仓股（如有）
+
+    池内选品建议：同主题下，优先按 sharpe_ratio 高 / 跟踪误差小（fund_performance.return_pct
+    与跟踪指数对比）/ 规模合理（5亿~100亿）筛选。
+    """
     with get_conn() as conn:
         info = conn.execute("SELECT * FROM fund_info WHERE fund_code = ?", (fund_code,)).fetchone()
         if not info:
@@ -1028,7 +1066,7 @@ async def get_fund_perf(fund_code: str) -> str:
       intervals          → 老 fund_performance 表的外部 upsert 业绩（含同类排名）；
                             按最新 as_of_date 取该日全部 period 行。
       nav_intervals      → fund_nav_performance 表的 NAV 派生业绩（与 bot 账户业绩同口径，
-                            区间不年化，rf=1.8%/252）；按最新 trade_date 取该日全部 period 行。
+                            区间不年化，rf=1%/252）；按最新 trade_date 取该日全部 period 行。
                             字段：return_pct / max_drawdown_pct / volatility_pct /
                             sharpe_ratio / calmar_ratio / data_points / window_target_days /
                             fallback（1=数据不足兜底到 since_inception）。
@@ -1465,10 +1503,14 @@ async def portfolio_place_buy_order(
       - fund_code 必须在 fund_info
       - trade_date 必须在 fund_nav 有 nav 行（缺失直接报错，外部 loop 自己保数据齐）
       - amount > 0 且 ≤ accounts.cash（available，不含 in_transit）
+      - reason 必填：写明为什么现在买这只基金（缺失直接报错让你补写，进审计日志）
 
     返回 JSON 带 order_id / reference_nav / estimated_fee / estimated_shares / cash_after。
     """
     err = _require_run_id(run_id)
+    if err:
+        return err
+    err = _require_reason(reason, "买入")
     if err:
         return err
     if amount <= 0:
@@ -1562,10 +1604,14 @@ async def portfolio_place_sell_order(
       - 账户存在；持仓存在且 active
       - shares > 0 且 ≤ holding.shares（新机制 shares 实时反映可卖额，pending_sell_shares 保持 0）
       - trade_date 在 fund_nav 有 nav
+      - reason 必填：写明为什么现在卖这只基金（缺失直接报错让你补写，进审计日志）
 
     pending_sell_shares 字段保留只是兼容存量旧路径订单，新订单不再用份额冻结。
     """
     err = _require_run_id(run_id)
+    if err:
+        return err
+    err = _require_reason(reason, "卖出")
     if err:
         return err
     if shares <= 0:
@@ -1926,7 +1972,7 @@ async def portfolio_get_my_performance(
                                                  perf_as_of_date, metrics: {1m, 3m, 6m, 1y, since_inception}}
                                                  日期对齐 as_of_perf_date；个别基金当日没 perf 时 perf_as_of_date
                                                  回退到 ≤ as_of_perf_date 的最近一日（不越过 as_of_date 偷看未来）
-                         所有指标都是**区间口径不年化**；rf=1.8% 年化按 252 个交易日折算到日化 rf。
+                         所有指标都是**区间口径不年化**；rf=1% 年化按 252 个交易日折算到日化 rf。
                          sharpe = (mean_daily_return - rf_daily) / stdev_daily_return；
                          calmar = return_pct / abs(max_drawdown_pct)。
                          账户业绩源 = fund_bot_daily_snapshots.net_value 序列；
@@ -2071,7 +2117,7 @@ async def portfolio_get_my_performance(
             "max_drawdown_pct": _r(float(s["max_drawdown_pct"] or 0.0), 4),
         } for s in series_rows]
 
-        # 区间业绩（fund_bot_performance；区间口径不年化；rf=1.8% 年化按 252 个交易日折算到日化）
+        # 区间业绩（fund_bot_performance；区间口径不年化；rf=1% 年化按 252 个交易日折算到日化）
         # 取本 run 最新一日的 5 个 period 行（trade_date < as_of_date，禁止偷看未来）。
         perf_date_row = conn.execute(
             "SELECT MAX(trade_date) AS d FROM fund_bot_performance "
@@ -4169,7 +4215,7 @@ async def upsert_fund_nav(navs_json: str) -> str:
     写完 fund_nav 后**自动级联刷新 fund_nav_performance**：对本批次出现的每个
     (fund_code, MAX(nav_date)) 组合调一次 _compute_fund_nav_performance。
     意味着 daily-refresh 每天灌 NAV 之后，区间业绩表（1m/3m/6m/1y/since_inception）
-    会随之刷新——区间口径不年化，rf=1.8%/252（与 fund_bot_performance 同口径）。
+    会随之刷新——区间口径不年化，rf=1%/252（与 fund_bot_performance 同口径）。
     """
     try:
         navs = json.loads(navs_json)

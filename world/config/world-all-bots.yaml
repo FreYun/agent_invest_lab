@@ -1,0 +1,33 @@
+research_loop: /home/rooot/.openclaw/research-loop/ts
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
+
+# 全量 bot 配置：用于同一回测系统下同时跑单基金旧 bot 与多基金新 bot。
+bots: [bot101, bot102, bot103, bot1, bot2, bot3, bot4, bot5, bot6, bot7, bot8, bot9, bot10, bot11, bot12, bot13, bot14, bot15, bot16, bot17, bot18, bot19, bot20]
+
+replay:
+  from: "2024-03-14"
+  to: "2024-03-27"
+
+calendar: ../runtime/calendar.json
+
+concurrency: 3
+per_bot_timeout_seconds: 300
+research_day_every: 5
+research_day_timeout_seconds: 600
+
+fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
+
+# 默认多指数权益基金池。单基金回测时可在 dashboard 新建 run 或复制本配置后改成单只基金。
+buyable_fund_codes:
+  - "000051"   # 华夏沪深300ETF联接A
+  - "000962"   # 天弘中证500ETF联接A
+  - "001592"   # 天弘创业板ETF联接A
+  - "161907"   # 红利ETF联接
+  - "001550"   # 天弘中证医药100A
+  - "001552"   # 天弘中证证券保险A
+  - "001617"   # 天弘中证电子ETF联接A
+  - "004854"   # 广发中证全指汽车指数A
+  - "005223"   # 广发中证基建工程ETF联接A
+  - "012543"   # 嘉实中证新能源汽车指数A
+
+simworld_upstream_url: http://127.0.0.1:18078/mcp

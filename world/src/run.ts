@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { WorldConfig } from './config.ts'
@@ -8,12 +8,14 @@ import { BotServer } from './botServer.ts'
 import { buildShadowWorkspace } from './shadowWorkspace.ts'
 import { renderDailyMessage } from './message.ts'
 import { fetchDailyContext } from './daily-context.ts'
+import { buildHistoryWindow } from './history-window/index.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
 import { createSimworldProxy, type SimworldProxyHandle } from './simworld-proxy/server.ts'
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
 import { createStrategyServer, type StrategyServerHandle } from './strategy-server/server.ts'
 import { readState, writeState, type WorldState } from './state.ts'
+import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
 import * as P from './paths.ts'
 
 export type StartBotServer = (botId: string, argv: string[]) => Promise<BotServer>
@@ -35,7 +37,6 @@ export interface RunWorldOptions {
 // 一个超大文件、dashboard 也能按日查阅。run.ts:chatOneBot 调用这个函数时传当天 date。
 const SESSION_KEY = (runId: string, botId: string, date: string): string =>
   `agent:${botId}:trading-${runId}-${date}`
-const JOURNAL_REL = 'memory/trading/journal.md'
 
 /** 选 openclaw.json 源路径。当前两种 loop 都用同一个 credentials 文件。 */
 export function openclawJsonSource(config: WorldConfig): string {
@@ -47,31 +48,7 @@ export function openclawJsonSource(config: WorldConfig): string {
  *  bot 看不见，只能由 world setup / 每日收盘自动触发。 */
 export async function runFundCli(cliPath: string, cmd: string, args: string[], opts: { timeoutMs?: number } = {}): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolveP, reject) => {
-    const localVenvPython = join(dirname(cliPath), '.venv', 'bin', 'python')
-    const sharedVenvPython = '/opt/MCP/.venv/bin/python'
-    const pythonCandidates = [
-      process.env.FUND_MCP_PYTHON?.trim(),
-      sharedVenvPython,
-      localVenvPython,
-      'python3',
-    ].filter((p): p is string => Boolean(p))
-
-    const python = (() => {
-      for (const candidate of pythonCandidates) {
-        const check = spawnSync(candidate, ['-c', 'import mcp'], { stdio: 'ignore' })
-        if (!check.error && check.status === 0) return candidate
-      }
-      return localVenvPython
-    })()
-    const child = spawn(python, [cliPath, cmd, ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        OPENCLAW_ROOT: process.env.OPENCLAW_ROOT ?? join(dirname(cliPath), '..'),
-        FUND_DB_PATH: process.env.FUND_DB_PATH ?? join(dirname(cliPath), '..', 'data', 'fund.db'),
-        FUND_BUYABLE_CODES_DIR: process.env.FUND_BUYABLE_CODES_DIR ?? join(dirname(cliPath), '..', 'data', 'buyable'),
-      },
-    })
+    const child = spawn('python3', [cliPath, cmd, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     const timer = opts.timeoutMs ? setTimeout(() => { try { child.kill('SIGKILL') } catch { /* ignore */ } reject(new Error(`fund cli ${cmd} timeout (${opts.timeoutMs}ms)`)) }, opts.timeoutMs) : null
@@ -328,9 +305,14 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
 
   // simworld-data MCP 代理（必选，进程内）。模板变量 ${SIMWORLD_PROXY_URL} 在
   // buildShadowWorkspace 拷贝 config/mcporter.json 时替换为下面的 url。
-  const simworldProxy = await createSimworldProxy({ upstreamUrl: config.simworldUpstreamUrl, getCurrentDate })
+  const simworldProxy = await createSimworldProxy({ upstreamUrl: config.simworldUpstreamUrl, getCurrentDate, clientId: `run-${runId}` })
   writeFileSync(P.simworldProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: simworldProxy.port, url: simworldProxy.url, upstream: config.simworldUpstreamUrl }, null, 2) + '\n')
   log(worldRoot, runId, `simworld-data proxy at ${simworldProxy.url} (upstream ${config.simworldUpstreamUrl}); ${simworldProxy.tools.length} tools captured for daily prompt`)
+  if (config.simworldTools) {
+    const probedNames = new Set(simworldProxy.tools.map(t => t.name))
+    const missing = config.simworldTools.filter(t => !probedNames.has(t.name) && t.description === undefined).map(t => t.name)
+    log(worldRoot, runId, `simworld_tools whitelist active (${config.simworldTools.length} entries); daily prompt will list only these${missing.length ? ` — bare-name (no probe desc, no config desc): ${missing.join(', ')}` : ''}`)
+  }
   const templateVars: Record<string, string> = { SIMWORLD_PROXY_URL: simworldProxy.url }
 
   // fund-portfolio-mcp 代理（仅当 fundMcpCli 配置时启用——基金 run 才需要）：
@@ -446,7 +428,7 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
   return p
 }
 
-interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string }
+interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number }
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -471,26 +453,59 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
   }
   writeStatus('running')
   log(worldRoot, runId, `bot ${b.botId}: chat request sent for ${date} (timeout=${Math.floor(perBotTimeoutMs / 1000)}s)`)
+  // 记录 chat 开始前 server 端累计 tool call 数，结束后取差。catch 分支（timeout/dead/RPC error）
+  // 也要拿这个值——chat 没正常 return，没法看 result.tool_trace，但 server 端的 tool.call 通知
+  // 已经流过 BotServer 的 listener。用这个 delta 实现"放松"判定。
+  const toolCallStart = b.server.toolCallCount
   try {
     const r = await b.server.chat({ message, session_key: SESSION_KEY(runId, b.botId, date), history: [] }, { timeoutMs: perBotTimeoutMs })
     writeFileSync(P.replyFile(worldRoot, runId, date, b.botId), JSON.stringify(r, null, 2) + '\n')
+    // belief 校验（非阻塞）：两路源——多基金 bot 在 MD frontmatter, 单基金 bot 在 reply.json fence。
+    // 结果落 belief_validation.json，便于审阅与下回合 buildBeliefContext。
+    // 任何异常都 swallow——绝不阻塞 chat 主流程；用 date 作 stamp 避免引入系统时间依赖。
+    try {
+      const mdPath = join(P.shadowWorkspaceDir(worldRoot, runId, b.botId), 'memory/portfolio/fund/市场环境判断.md')
+      const replyPath = P.replyFile(worldRoot, runId, date, b.botId)
+      const result = await validateBeliefMd(mdPath, replyPath)
+      if (result !== null) {
+        const validationPath = join(P.botDayDir(worldRoot, runId, date, b.botId), 'belief_validation.json')
+        writeFileSync(validationPath, JSON.stringify({ checked_at_date: date, ...result }, null, 2))
+        if (!result.ok) {
+          log(worldRoot, runId, `[belief-validate] bot=${b.botId} date=${date} issues=${result.issues.join(';')}`)
+        }
+      }
+    } catch (e) {
+      log(worldRoot, runId, `[belief-validate] bot ${b.botId} ${date} failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
     // r.chat_error 由 rs server.rs 在 chat.send() 因 chat_llm 超时 / LLM 错误 mid-flow
     // 终止时填写。chat 本身 graceful return（带 lastReply），不带这字段就没法区分"正常
     // 完成"还是"被静默截断"。有则当天记 'error'，避免下一天还踩同一个 60s 坑。
-    if (r.chat_error) {
-      const s: DayBotStatus = { bot: b.botId, status: 'error', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, error: `chat_error: ${r.chat_error}` }
+    // "放松"判定：当日做了至少一个 tool call 就算推进——chat_error 中途挂掉、reply 为空都不要紧，
+    // bot 已经走通了 LLM→tool 那一段，明天可以继续。真正要拦的是「LLM 连一次都没接通」造成的
+    // 0s 垃圾日：connection refused 时 chat 1.5s 就 chat_error 返回，tool_trace 空——这种当天 pause。
+    // 优先用 result.tool_trace 长度（rs/ts server 都填）；server 端通知计数器作为兜底交叉验证。
+    const toolCalls = Math.max(
+      Array.isArray(r.tool_trace) ? r.tool_trace.length : 0,
+      b.server.toolCallCount - toolCallStart,
+    )
+    if (toolCalls === 0) {
+      const reason = r.chat_error ? `no tool calls; chat_error: ${r.chat_error}` : 'no tool calls (chat returned without invoking any tool)'
+      const s: DayBotStatus = { bot: b.botId, status: 'error', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, error: reason, toolCalls }
       writeStatus(s.status, { iterations: s.iterations, usage: s.usage, error: s.error, finishedAt: new Date().toISOString() })
-      log(worldRoot, runId, `bot ${b.botId}: chat ended with chat_error (${r.chat_error})`)
+      log(worldRoot, runId, `bot ${b.botId}: chat made no tool calls — failing the day${r.chat_error ? ` (chat_error: ${r.chat_error})` : ''}`)
       return s
     }
-    const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt }
+    if (r.chat_error) log(worldRoot, runId, `bot ${b.botId}: chat ended with chat_error but ${toolCalls} tool call(s) made — advancing (${r.chat_error})`)
+    const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, toolCalls }
     writeStatus(s.status, { iterations: s.iterations, usage: s.usage, finishedAt: new Date().toISOString() })
     return s
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const status: DayBotStatus['status'] = /timeout/i.test(msg) ? 'timeout' : !b.server.alive ? 'dead' : 'error'
-    const s: DayBotStatus = { bot: b.botId, status, ms: Date.now() - startedAt, error: msg }
+    const toolCalls = b.server.toolCallCount - toolCallStart
+    const s: DayBotStatus = { bot: b.botId, status, ms: Date.now() - startedAt, error: msg, toolCalls }
     writeStatus(s.status, { error: s.error, finishedAt: new Date().toISOString() })
+    if (toolCalls > 0) log(worldRoot, runId, `bot ${b.botId}: chat ${status} but ${toolCalls} tool call(s) made before — will advance via 放松判定`)
     return s
   }
 }
@@ -563,6 +578,21 @@ export function isResearchDay(cursor: number, researchDayEvery: number): boolean
   return researchDayEvery > 0 && ((cursor + 1) % researchDayEvery === 0)
 }
 
+// 决定 daily prompt 里 simworld 工具清单走 manual 白名单还是 probe 全集。
+// manual 优先；description 没填则按 name 从 probe 结果回查，再缺就给空串
+// （simworldToolsBlock 会跳过 ` — ` 分隔符，只渲染裸 name）。
+export function resolveSimworldTools(
+  manual: { name: string; description?: string }[] | undefined,
+  probed: { name: string; description: string }[],
+): { name: string; description: string }[] {
+  if (!manual) return probed
+  const probedMap = new Map(probed.map(t => [t.name, t.description]))
+  return manual.map(t => ({
+    name: t.name,
+    description: t.description ?? probedMap.get(t.name) ?? '',
+  }))
+}
+
 export async function runLoop(args: RunLoopArgs): Promise<void> {
   const { worldRoot, runId, config, setupRes, fromCursor } = args
   const dates = setupRes.tradingDates
@@ -580,24 +610,40 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   let aborted = false
   const onSigint = (): void => { aborted = true; log(worldRoot, runId, 'SIGINT received — will abort after current day') }
   process.on('SIGINT', onSigint)
-  // Immediate pause: `world pause` writes a PAUSE sentinel. Unlike STOP (which waits for
-  // the day boundary → aborted, terminal), pause kills the *current* day right now and
-  // leaves the run resumable. We poll the sentinel so an in-flight chat doesn't have to
-  // run to completion: on detection we shut the bot servers down, which makes their
-  // pending chat requests reject (stdout closes) → mapWithConcurrency resolves → the loop
-  // bails BEFORE advancing the cursor, so resume re-runs this whole day from scratch
-  // (each world day is an isolated session, so a fresh re-run is safe).
+  // Immediate stop / pause: `world stop` / `world pause` write a STOP / PAUSE sentinel. Both kill
+  // the *current* day right now via the same mechanism — shut bot servers down, which makes
+  // their pending chat requests reject (stdout closes) → mapWithConcurrency resolves → the loop
+  // bails BEFORE close_my_day and BEFORE advancing the cursor. The only difference is teardown
+  // status: stop → 'aborted' (terminal, non-resumable, cursor abandoned); pause → 'paused'
+  // (resumable, cursor untouched so resume re-runs this whole day from scratch — each world day
+  // is an isolated session, so a fresh re-run is safe).
+  //
+  // Previously STOP was only checked at the day-boundary (top of the for-loop), forcing the user
+  // to wait for all bots' chats to drain — with 18+ bots × multi-minute budgets that meant 5-15+
+  // minutes from click to actual stop, and the dashboard's "正在跑 12/291" indicator hid the wait.
+  // The mid-day kill brings STOP in line with PAUSE's responsiveness.
+  let stopRequested = false
   let pauseRequested = false
-  const pausePoll = setInterval(() => {
+  const killBotsOnce = (label: string): void => {
+    log(worldRoot, runId, `${label} requested — killing current day`)
+    for (const b of setupRes.bots) { void b.server.shutdown({ timeoutMs: 2000 }).catch(() => { /* ignore — we're tearing down */ }) }
+  }
+  const controlPoll = setInterval(() => {
+    // STOP takes precedence over PAUSE — if both sentinels exist (or the user double-clicks),
+    // terminal beats resumable. We only need to kill bots once; subsequent ticks are no-ops.
+    if (!stopRequested && existsSync(P.stopFile(worldRoot, runId))) {
+      stopRequested = true
+      if (!pauseRequested) killBotsOnce('stop')
+      return
+    }
     if (!pauseRequested && existsSync(P.pauseFile(worldRoot, runId))) {
       pauseRequested = true
-      log(worldRoot, runId, 'pause requested — killing current day (resumable from this day)')
-      for (const b of setupRes.bots) { void b.server.shutdown({ timeoutMs: 2000 }).catch(() => { /* ignore — we're tearing down */ }) }
+      if (!stopRequested) killBotsOnce('pause')
     }
   }, 1000)
   try {
     for (let cursor = fromCursor; cursor < dates.length; cursor++) {
-      if (aborted || existsSync(P.stopFile(worldRoot, runId))) { log(worldRoot, runId, 'stop requested — aborting'); await teardown(worldRoot, runId, setupRes, 'aborted', days); return }
+      if (aborted || stopRequested || existsSync(P.stopFile(worldRoot, runId))) { log(worldRoot, runId, 'stop requested — aborting'); await teardown(worldRoot, runId, setupRes, 'aborted', days); return }
       if (pauseRequested || existsSync(P.pauseFile(worldRoot, runId))) { log(worldRoot, runId, 'pause requested — pausing (resumable from this day)'); await teardown(worldRoot, runId, setupRes, 'paused', days); return }
       // Drain pending restarts BEFORE today's chat goes out. Each timeout from yesterday
       // owns a still-in-flight chat on its bot's server; we kill+spawn so today's chat
@@ -623,21 +669,14 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const state = readState(worldRoot, runId)
         writeState(worldRoot, runId, { ...state, current_date: date, updated_at: new Date().toISOString() })
       }
-      const isResearch = isResearchDay(cursor, config.researchDayEvery)
-      const isFirstDay = cursor === 0
-      // First day shares research-day's wider budget: full rules + cold-start onboarding
-      // (discover_tools, read SOUL/IDENTITY/journal, query holdings/cooldown, web_fetch
-      // sanity check, write first journal entry) consistently spills past a 60s budget.
-      // Research-day budget is the right ceiling for that workload too, so reuse it
-      // instead of adding another knob.
-      const useExtendedBudget = isFirstDay || isResearch
-      const timeoutMs = useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs
-      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : ''].filter(Boolean).join(' ')
-      log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
+      // chatStepDays > 1：cursor 0, N, 2N, … 才唤起 bot；中间天系统侧 settle + close 仍按日推进。
+      // cursor 0 永远是 chat day（与 isFirstDay 对齐）。
+      const isChatDay = cursor % config.chatStepDays === 0
       // 系统侧 settle：T+1 收口。每天 chat **之前** 把所有 order_date < today 的 pending 单按
       // reference_nav 结算（BUY → 持仓增加 + 释放 cash_in_transit；SELL → 现金回流 + 释放 pending_sell）。
       // close_my_day 不做这件事，所以必须独立调一次。bot 在 BOT_ONLY 端口看不到 settle。
       // Day 1 (cursor=0) 也调，no-op 安全（没有更早的 pending 单）。
+      // chatStepDays > 1 时中间天也调——系统视角的"每日开盘"不能跳。
       if (config.fundMcpCli) {
         for (const { botId } of setupRes.bots) {
           try {
@@ -648,8 +687,24 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           }
         }
       }
+      if (!isChatDay) {
+        log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date} [skip-chat step=${config.chatStepDays}] — system-side settle/close only`)
+      }
+      let statuses: DayBotStatus[] = []
+      if (isChatDay) {
+      const isResearch = isResearchDay(cursor, config.researchDayEvery)
+      const isFirstDay = cursor === 0
+      // First day shares research-day's wider budget: full rules + cold-start onboarding
+      // (discover_tools, read SOUL/IDENTITY, query holdings/cooldown, web_fetch
+      // sanity check) consistently spills past a 60s budget.
+      // Research-day budget is the right ceiling for that workload too, so reuse it
+      // instead of adding another knob.
+      const useExtendedBudget = isFirstDay || isResearch
+      const timeoutMs = useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs
+      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : ''].filter(Boolean).join(' ')
+      log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
-      const statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
+      statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
         // Prefetch the per-bot daily context (account snapshot, recent PnL,
         // held-fund NAV, major indices) so the bot doesn't have to spend
         // round-trips re-discovering routine inputs every morning. Talks to
@@ -658,7 +713,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         // Best-effort: each fetcher returns null on error, renderer just
         // skips the corresponding block. A simworld blip won't break the day.
         const dailyContext = await fetchDailyContext({
-          worldRoot, runId, botId: b.botId, asOfDate: date,
+          runId, botId: b.botId, asOfDate: date,
           fundMcpCli: config.fundMcpCli,
           simworldUrl: config.simworldUpstreamUrl,
           // dates[0] anchors the benchmark cumulative %. Without it the
@@ -669,15 +724,43 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           // 也驱动 daily fee block——不传费率拉不到，bot 看不到申购/赎回阶梯。
           buyableFundCodes: config.buyableFundCodes,
         })
+        // 滚动 history window：从前几个交易日的 session jsonl 抽 digest（去掉工具结果原文），
+        // 按 20000 字符预算切割。超 budget 时用主模型（openclaw.json 的 default route）按 4 维度
+        // 压缩老的 60%。Day 1 时 sessions.json 还没有任何记录，返回空字符串。
+        // best-effort：抽取/压缩失败不阻塞 chat。
+        let historyWindow = ''
+        try {
+          const hw = await buildHistoryWindow({
+            rlOpenclawDir: P.rlOpenclawDir(worldRoot, runId),
+            botId: b.botId,
+            beforeDate: date,
+            openclawJsonPath: openclawJsonSource(config),
+          })
+          historyWindow = hw.markdown
+          if (hw.dayCount > 0) {
+            log(worldRoot, runId, `bot ${b.botId} history window ${date}: ${hw.dayCount} days (${hw.recentDays} recent + ${hw.compactedDays} compacted), ${hw.totalChars} chars`)
+          }
+        } catch (err) {
+          log(worldRoot, runId, `bot ${b.botId} history window ${date} FAILED (continuing without): ${err instanceof Error ? err.message : String(err)}`)
+        }
         // Bot 的 methodology 由 research-loop 每次 chat splice 进 system prompt 的
         // ## METHODOLOGY.md section，daily message 只附短提示（METHODOLOGY_DAY1_HINT /
         // METHODOLOGY_DAYN_HINT），不重复注入正文。
+        // belief-context（市场环境判断的滚动摘要）：best-effort 注入到 daily message。
+        // build 失败不阻塞 chat 主流程——空串等于不渲染对应 section。
+        const beliefBlock = await buildBeliefContext(b.botId, runId, date).catch((e: unknown) => {
+          log(worldRoot, runId, `[belief-context] bot ${b.botId} ${date} build failed: ${e instanceof Error ? e.message : String(e)}`)
+          return ''
+        })
         const message = renderDailyMessage({
           worldRoot, date, isFirstDay,
-          quotesPath: quotesAbs, journalRelPath: JOURNAL_REL,
+          botId: b.botId,
+          quotesPath: quotesAbs,
           buyableFundCodes: config.buyableFundCodes,
-          simworldTools: setupRes.simworldProxy.tools,
+          simworldTools: resolveSimworldTools(config.simworldTools, setupRes.simworldProxy.tools),
           dailyContext,
+          historyWindow,
+          beliefBlock,
           // 仅 Day 1 fullRules 用到——message.ts 自己门控；这里无脑传即可，Day N 会丢弃。
           tradingDaysTotal: setupRes.tradingDates.length,
         })
@@ -689,8 +772,25 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         else if (s.status === 'timeout') needsRestart.add(s.bot)
       }
       // The poller killed the bot servers mid-chat → bail BEFORE close_my_day and BEFORE
-      // advancing the cursor. cursor stays on this day so resume re-runs it from scratch.
+      // advancing the cursor. STOP wins over PAUSE if both fired (or were double-clicked).
+      // cursor stays on this day so paused-resume re-runs it from scratch; for aborted the
+      // cursor is moot (terminal status, no resume).
+      if (stopRequested) { log(worldRoot, runId, `stop requested — dropping day ${date} (aborting)`); await teardown(worldRoot, runId, setupRes, 'aborted', days); return }
       if (pauseRequested) { log(worldRoot, runId, `pause requested — dropping day ${date} (resume will re-run it)`); await teardown(worldRoot, runId, setupRes, 'paused', days); return }
+      // "放松"判定：当日只要任一 bot 至少做了一次 tool call 就算推进（即便最终被 timeout / dead /
+      // chat_error 收尾）——bot14 在 1-06 的真实案例：chat 在 200000ms 客户端 timeout 触发后 8ms
+      // 才吐出 reply，明明已经跑了 18 轮工具，只是擦边没赶上。失败只针对 toolCalls===0 的情况：
+      // 0s 垃圾日（connection refused → chat 秒挂 → 一个工具都没调）；那种 pause 在当天，resume
+      // 重跑。
+      const failing = statuses.filter(s => s.status !== 'ok' && (s.toolCalls ?? 0) === 0)
+      if (failing.length > 0) {
+        const reasons = failing.map(s => `${s.bot}=${s.status}${s.error ? `(${s.error.slice(0, 80)})` : ''}`).join(' ')
+        log(worldRoot, runId, `day ${date} failure — pausing run (resume will re-run this day): ${reasons}`)
+        days.push({ date, bots: statuses })
+        await teardown(worldRoot, runId, setupRes, 'paused', days)
+        return
+      }
+      } // end if (isChatDay)
       // 系统侧 close：每个 bot（不论 chat 状态如何）跑一次 close_my_day 落收盘快照。
       // bot 在 BOT_ONLY 端口看不到 close_my_day，只能 world 触发；这是"每天收盘核算"的硬契约。
       // snapshot 文本写到 <botDayDir>/close_my_day.json，方便后续审阅。
@@ -707,8 +807,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           }
         }
       }
-      days.push({ date, bots: statuses })
-      log(worldRoot, runId, `day ${date} done: ${statuses.map(s => `${s.bot}=${s.status}`).join(' ')}`)
+      if (isChatDay) {
+        days.push({ date, bots: statuses })
+        log(worldRoot, runId, `day ${date} done: ${statuses.map(s => `${s.bot}=${s.status}`).join(' ')}`)
+      } else {
+        log(worldRoot, runId, `day ${date} done: [skip-chat] settle/close only`)
+      }
       const st = readState(worldRoot, runId)
       writeState(worldRoot, runId, { ...st, cursor: cursor + 1, updated_at: new Date().toISOString() })
     }
@@ -718,7 +822,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
     await teardown(worldRoot, runId, setupRes, 'failed', days)
     throw err
   } finally {
-    clearInterval(pausePoll)
+    clearInterval(controlPoll)
     process.off('SIGINT', onSigint)
   }
 }
@@ -742,8 +846,10 @@ export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
   // 清掉可能残留的 STOP / PAUSE 哨兵（否则 resume 会立刻被它中止/暂停）
   rmSync(P.stopFile(worldRoot, runId), { force: true })
   rmSync(P.pauseFile(worldRoot, runId), { force: true })
-  // setup（重启记忆服务、重建/复用影子 workspace、重起 bot server），但 trading_dates 取自 state
-  const setupRes = await setup({ worldRoot, config, runId, startBotServer: opts.startBotServer })
+  // resume = 续跑既有账户，setup 的 init_fund_account 绝不能带 --reset：force=true 会清掉
+  // 本 run 的 holdings/actions/snapshots 并把现金重置成初始资金，等于把续跑变成"从断点重开"。
+  // 强制 fundInitReset=false（无视 yaml），让 init 对已存在账户走 no-op，账本原样保留。
+  const setupRes = await setup({ worldRoot, config: { ...config, fundInitReset: false }, runId, startBotServer: opts.startBotServer })
   // 若 calendar/replay 变了导致交易日序列对不上，拒绝
   if (setupRes.tradingDates.length !== state.trading_dates.length || setupRes.tradingDates[0] !== state.trading_dates[0] || setupRes.tradingDates[setupRes.tradingDates.length - 1] !== state.trading_dates[state.trading_dates.length - 1]) {
     for (const b of setupRes.bots) { try { await b.server.shutdown({ timeoutMs: 2000 }) } catch { /* ignore */ } }
@@ -754,7 +860,13 @@ export async function resumeWorld(opts: ResumeWorldOptions): Promise<void> {
   // Adopt the run for THIS process so orphan-detection sees a fresh PID; the prior
   // PID may have died (that's how we got here) or, worse, been recycled to an
   // unrelated process — leaving the stale one would mis-direct future health checks.
-  writeState(worldRoot, runId, { ...state, pid: process.pid, updated_at: new Date().toISOString() })
+  // Also flip status back to 'running': a resumed run is running, not paused. Keeping
+  // status='paused' on disk forces every reader (dashboard, orphan-monitor) to do a
+  // liveness-based effective-status translation, which goes stale during the setup
+  // window and lies to the UI. Drop aborted_reason if some prior orphan-reaper stamped
+  // it — we just resurrected the run, that audit note is no longer true.
+  const { aborted_reason: _drop, ...rest } = state
+  writeState(worldRoot, runId, { ...rest, status: 'running', pid: process.pid, updated_at: new Date().toISOString() })
   await runLoop({ worldRoot, runId, config, setupRes, fromCursor: state.cursor })
 }
 

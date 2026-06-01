@@ -1,0 +1,622 @@
+{
+  "hs300": {
+    "code": "510300.SH",
+    "is_top5": [
+      [
+        "donchian_120",
+        {
+          "total_return": 0.27938472204511045,
+          "annual_return": 0.03717496111977869,
+          "sharpe": 0.3354225423264654,
+          "sortino": 0.4993962767124723,
+          "max_drawdown": -0.1722756156363009,
+          "calmar": 0.21578771309260905,
+          "trade_flips": 5,
+          "avg_exposure": 0.4914756025867137,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ],
+      [
+        "mom_120",
+        {
+          "total_return": 0.2918714754424572,
+          "annual_return": 0.03866843742601822,
+          "sharpe": 0.35011067775581545,
+          "sortino": 0.5281661116943578,
+          "max_drawdown": -0.2364713003893234,
+          "calmar": 0.16352275038177988,
+          "trade_flips": 45,
+          "avg_exposure": 0.49265138154027044,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ],
+      [
+        "regime_lev_hi20_l50",
+        {
+          "total_return": 0.21222609439736217,
+          "annual_return": 0.028922726225985684,
+          "sharpe": 0.3224994983732927,
+          "sortino": 0.4773401710715132,
+          "max_drawdown": -0.19781902435048315,
+          "calmar": 0.14620801169629793,
+          "trade_flips": 57,
+          "avg_exposure": 0.4112286890064668,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ],
+      [
+        "dl_bearonly_200",
+        {
+          "total_return": 0.2918258799872375,
+          "annual_return": 0.03866300639932341,
+          "sharpe": 0.3280635191585007,
+          "sortino": 0.5036209711573147,
+          "max_drawdown": -0.27414523094614895,
+          "calmar": 0.1410311106484945,
+          "trade_flips": 17,
+          "avg_exposure": 0.6472663139329806,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ],
+      [
+        "dl_bearonly_150",
+        {
+          "total_return": 0.2891567728540887,
+          "annual_return": 0.03834479522465872,
+          "sharpe": 0.32980742234634025,
+          "sortino": 0.5051654859750424,
+          "max_drawdown": -0.27840347412518596,
+          "calmar": 0.13773102273650772,
+          "trade_flips": 33,
+          "avg_exposure": 0.6114050558495003,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ],
+      [
+        "vt15_x_trend200",
+        {
+          "total_return": 0.1674080347761897,
+          "annual_return": 0.02319619222237379,
+          "sharpe": 0.2753416209794837,
+          "sortino": 0.4056027623097786,
+          "max_drawdown": -0.20490181211992786,
+          "calmar": 0.113206379106092,
+          "trade_flips": 443,
+          "avg_exposure": 0.4029310851095266,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ],
+      [
+        "regime_lev_hi25_l30",
+        {
+          "total_return": 0.14736626137976527,
+          "annual_return": 0.020574591643287787,
+          "sharpe": 0.2397921350462378,
+          "sortino": 0.34645023902869354,
+          "max_drawdown": -0.23261495388002928,
+          "calmar": 0.0884491357933037,
+          "trade_flips": 53,
+          "avg_exposure": 0.41675485008818347,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ],
+      [
+        "donchian_60",
+        {
+          "total_return": 0.19854950107790037,
+          "annual_return": 0.027194622413479808,
+          "sharpe": 0.2654301510968253,
+          "sortino": 0.40111370917010764,
+          "max_drawdown": -0.31860010251505755,
+          "calmar": 0.08535660283472303,
+          "trade_flips": 11,
+          "avg_exposure": 0.5520282186948854,
+          "bh_total_return": 0.04292101341281063,
+          "bh_annual_return": 0.006245413320973947,
+          "bh_sharpe": 0.12752652710769755,
+          "bh_max_drawdown": -0.4198381263991745,
+          "bars": 1701
+        }
+      ]
+    ],
+    "oos_top5": [
+      [
+        "donchian_120",
+        {
+          "total_return": 0.02262729494351201,
+          "annual_return": 0.009820041810107094,
+          "sharpe": 0.14048803487389253,
+          "sortino": 0.2079117699756168,
+          "max_drawdown": -0.16314361339071792,
+          "calmar": 0.06019262173989464,
+          "trade_flips": 5,
+          "avg_exposure": 0.512998266897747,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ],
+      [
+        "mom_120",
+        {
+          "total_return": 0.17606407656490575,
+          "annual_return": 0.07339644511273935,
+          "sharpe": 0.529644683876634,
+          "sortino": 0.8824812790035226,
+          "max_drawdown": -0.13689936536718095,
+          "calmar": 0.5361342977440476,
+          "trade_flips": 23,
+          "avg_exposure": 0.6568457538994801,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ],
+      [
+        "regime_lev_hi20_l50",
+        {
+          "total_return": 0.0669397292106293,
+          "annual_return": 0.028702662846800564,
+          "sharpe": 0.2990726397935559,
+          "sortino": 0.43262724382883916,
+          "max_drawdown": -0.12462970355213954,
+          "calmar": 0.23030354745883386,
+          "trade_flips": 16,
+          "avg_exposure": 0.5901213171577123,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ],
+      [
+        "dl_bearonly_200",
+        {
+          "total_return": 0.34523028909526543,
+          "annual_return": 0.1382846282789616,
+          "sharpe": 0.839333558675986,
+          "sortino": 1.3600924606279732,
+          "max_drawdown": -0.1625113327289216,
+          "calmar": 0.850922984611962,
+          "trade_flips": 11,
+          "avg_exposure": 0.733102253032929,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ],
+      [
+        "dl_bearonly_150",
+        {
+          "total_return": 0.3294578495666798,
+          "annual_return": 0.1324364807752514,
+          "sharpe": 0.7915829589784266,
+          "sortino": 1.3135229649086595,
+          "max_drawdown": -0.16251133272892182,
+          "calmar": 0.8149368942544025,
+          "trade_flips": 19,
+          "avg_exposure": 0.82842287694974,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ],
+      [
+        "vt15_x_trend200",
+        {
+          "total_return": 0.04959841304588619,
+          "annual_return": 0.02136670031373522,
+          "sharpe": 0.24265118465101332,
+          "sortino": 0.3451859886146843,
+          "max_drawdown": -0.12325764877238343,
+          "calmar": 0.1733498937107954,
+          "trade_flips": 195,
+          "avg_exposure": 0.5747523732018801,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ],
+      [
+        "regime_lev_hi25_l30",
+        {
+          "total_return": 0.04772426920355599,
+          "annual_return": 0.020569798675008633,
+          "sharpe": 0.2294514831660152,
+          "sortino": 0.3286667890380935,
+          "max_drawdown": -0.12955036339873827,
+          "calmar": 0.1587783942504091,
+          "trade_flips": 13,
+          "avg_exposure": 0.6055459272097055,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ],
+      [
+        "donchian_60",
+        {
+          "total_return": 0.09931866699025726,
+          "annual_return": 0.04222238047735738,
+          "sharpe": 0.3420926650906578,
+          "sortino": 0.5593067186158965,
+          "max_drawdown": -0.1375509823523281,
+          "calmar": 0.3069580438851933,
+          "trade_flips": 7,
+          "avg_exposure": 0.6117850953206239,
+          "bh_total_return": 0.4250501576382928,
+          "bh_annual_return": 0.16730421005714802,
+          "bh_sharpe": 0.9191363839211701,
+          "bh_max_drawdown": -0.16251133272892138,
+          "bars": 577
+        }
+      ]
+    ],
+    "oos_buyhold": {
+      "total_return": 0.4250501576382928,
+      "annual_return": 0.16730421005714802,
+      "sharpe": 0.9191363839211701,
+      "sortino": 1.5785913265220208,
+      "max_drawdown": -0.16251133272892138,
+      "calmar": 1.0294925729039552,
+      "trade_flips": 0,
+      "avg_exposure": 1.0,
+      "bh_total_return": 0.4250501576382928,
+      "bh_annual_return": 0.16730421005714802,
+      "bh_sharpe": 0.9191363839211701,
+      "bh_max_drawdown": -0.16251133272892138,
+      "bars": 577
+    }
+  },
+  "zz1000": {
+    "code": "512100.SH",
+    "is_top5": [
+      [
+        "bbands_break_flat",
+        {
+          "total_return": 2.8255110859615824,
+          "annual_return": 0.22004301880795119,
+          "sharpe": 0.46417407387513615,
+          "sortino": 2.6849356466128134,
+          "max_drawdown": -0.19256308100929564,
+          "calmar": 1.1427061597406047,
+          "trade_flips": 9,
+          "avg_exposure": 0.6435294117647059,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ],
+      [
+        "donchian_60",
+        {
+          "total_return": 2.687736322144664,
+          "annual_return": 0.2134274483199834,
+          "sharpe": 0.4550849207924334,
+          "sortino": 2.7533258321554803,
+          "max_drawdown": -0.21610624741233875,
+          "calmar": 0.9876042496483496,
+          "trade_flips": 10,
+          "avg_exposure": 0.46,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ],
+      [
+        "mom_60",
+        {
+          "total_return": 2.266392253527017,
+          "annual_return": 0.19179914939234055,
+          "sharpe": 0.4288191119927363,
+          "sortino": 2.671154701941356,
+          "max_drawdown": -0.2569615057929384,
+          "calmar": 0.7464119919459602,
+          "trade_flips": 88,
+          "avg_exposure": 0.4717647058823529,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ],
+      [
+        "dl_crashbear_120",
+        {
+          "total_return": 1.9353702614704122,
+          "annual_return": 0.17307058811889964,
+          "sharpe": 0.40763945145751573,
+          "sortino": 2.3681194239392203,
+          "max_drawdown": -0.24131597977714125,
+          "calmar": 0.7171948922683562,
+          "trade_flips": 23,
+          "avg_exposure": 0.6135294117647059,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ],
+      [
+        "mom_60_derisk",
+        {
+          "total_return": 1.9988940405496711,
+          "annual_return": 0.17679949155579489,
+          "sharpe": 0.41010306532248547,
+          "sortino": 2.61274501362122,
+          "max_drawdown": -0.31781196524377386,
+          "calmar": 0.5563021877423115,
+          "trade_flips": 84,
+          "avg_exposure": 0.45294117647058824,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ],
+      [
+        "trail_dd10_p120",
+        {
+          "total_return": 1.1295076969014124,
+          "annual_return": 0.11856845069937161,
+          "sharpe": 0.33960304180778655,
+          "sortino": 1.968604130353338,
+          "max_drawdown": -0.3647531692964756,
+          "calmar": 0.3250648950578351,
+          "trade_flips": 67,
+          "avg_exposure": 0.6523529411764706,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ],
+      [
+        "buyhold",
+        {
+          "total_return": 1.5390374331550714,
+          "annual_return": 0.14811725402094145,
+          "sharpe": 0.38410377581565375,
+          "sortino": 1.8402533907816978,
+          "max_drawdown": -0.4830769230769226,
+          "calmar": 0.3066121500433504,
+          "trade_flips": 0,
+          "avg_exposure": 1.0,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ],
+      [
+        "dd_ladder_10_20",
+        {
+          "total_return": 1.276981424891805,
+          "annual_return": 0.12972642885431074,
+          "sharpe": 0.3550556228724372,
+          "sortino": 2.0173442297392774,
+          "max_drawdown": -0.42776438661328375,
+          "calmar": 0.30326608037987196,
+          "trade_flips": 80,
+          "avg_exposure": 0.7820588235294118,
+          "bh_total_return": 1.5390374331550714,
+          "bh_annual_return": 0.14811725402094145,
+          "bh_sharpe": 0.38410377581565375,
+          "bh_max_drawdown": -0.4830769230769226,
+          "bars": 1700
+        }
+      ]
+    ],
+    "oos_top5": [
+      [
+        "bbands_break_flat",
+        {
+          "total_return": 0.2311954901526756,
+          "annual_return": 0.09508941375364288,
+          "sharpe": 0.5196445753102077,
+          "sortino": 0.7939433460344899,
+          "max_drawdown": -0.18686546997389508,
+          "calmar": 0.5088656227762506,
+          "trade_flips": 5,
+          "avg_exposure": 0.7261698440207972,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ],
+      [
+        "donchian_60",
+        {
+          "total_return": 0.39325631207098377,
+          "annual_return": 0.15585767731800515,
+          "sharpe": 0.7892413731993466,
+          "sortino": 1.192232660631472,
+          "max_drawdown": -0.17431016173524505,
+          "calmar": 0.8941399386384205,
+          "trade_flips": 3,
+          "avg_exposure": 0.5927209705372617,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ],
+      [
+        "mom_60",
+        {
+          "total_return": 0.21201366436729296,
+          "annual_return": 0.0876050619477382,
+          "sharpe": 0.5001749320127667,
+          "sortino": 0.7666987702674949,
+          "max_drawdown": -0.2562276180705636,
+          "calmar": 0.34190327571796836,
+          "trade_flips": 39,
+          "avg_exposure": 0.5597920277296361,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ],
+      [
+        "dl_crashbear_120",
+        {
+          "total_return": 0.2541774559816452,
+          "annual_return": 0.10397052725268296,
+          "sharpe": 0.5741146932333733,
+          "sortino": 0.8620137192166992,
+          "max_drawdown": -0.22608920331553495,
+          "calmar": 0.4598650697511613,
+          "trade_flips": 19,
+          "avg_exposure": 0.6239168110918544,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ],
+      [
+        "mom_60_derisk",
+        {
+          "total_return": 0.18011881258339657,
+          "annual_return": 0.07501115811512005,
+          "sharpe": 0.4473885661210881,
+          "sortino": 0.6833174697690502,
+          "max_drawdown": -0.2637333775433044,
+          "calmar": 0.2844204204028115,
+          "trade_flips": 35,
+          "avg_exposure": 0.537261698440208,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ],
+      [
+        "trail_dd10_p120",
+        {
+          "total_return": 0.36964277638457776,
+          "annual_return": 0.14726070470597663,
+          "sharpe": 0.7349536659021454,
+          "sortino": 1.1449465344828658,
+          "max_drawdown": -0.22063873664826494,
+          "calmar": 0.6674290604769679,
+          "trade_flips": 15,
+          "avg_exposure": 0.6360485268630849,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ],
+      [
+        "buyhold",
+        {
+          "total_return": 0.49529914529914776,
+          "annual_return": 0.19209551146268122,
+          "sharpe": 0.7701423292742476,
+          "sortino": 1.2847003791987794,
+          "max_drawdown": -0.26210705182667815,
+          "calmar": 0.7328895202320119,
+          "trade_flips": 0,
+          "avg_exposure": 1.0,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ],
+      [
+        "dd_ladder_10_20",
+        {
+          "total_return": 0.3850152209379962,
+          "annual_return": 0.15286673607428414,
+          "sharpe": 0.7296569673011892,
+          "sortino": 1.1817043228889914,
+          "max_drawdown": -0.18725601025579064,
+          "calmar": 0.8163515599070441,
+          "trade_flips": 23,
+          "avg_exposure": 0.804159445407279,
+          "bh_total_return": 0.49529914529914776,
+          "bh_annual_return": 0.19209551146268122,
+          "bh_sharpe": 0.7701423292742476,
+          "bh_max_drawdown": -0.26210705182667815,
+          "bars": 577
+        }
+      ]
+    ],
+    "oos_buyhold": {
+      "total_return": 0.49529914529914776,
+      "annual_return": 0.19209551146268122,
+      "sharpe": 0.7701423292742476,
+      "sortino": 1.2847003791987794,
+      "max_drawdown": -0.26210705182667815,
+      "calmar": 0.7328895202320119,
+      "trade_flips": 0,
+      "avg_exposure": 1.0,
+      "bh_total_return": 0.49529914529914776,
+      "bh_annual_return": 0.19209551146268122,
+      "bh_sharpe": 0.7701423292742476,
+      "bh_max_drawdown": -0.26210705182667815,
+      "bars": 577
+    }
+  }
+}

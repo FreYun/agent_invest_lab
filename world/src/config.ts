@@ -35,6 +35,11 @@ export interface WorldConfig {
   // 触发条件：(cursor + 1) % researchDayEvery === 0，即第 N / 2N / 3N 个交易日。
   researchDayEvery: number
   researchDayTimeoutSeconds: number
+  // bot chat 频率（交易日步长）。1 = 每个交易日都唤起 bot（默认）。N > 1 = 每 N 个交易日唤起
+  // 一次 bot chat（cursor 0, N, 2N, …），中间天系统侧 settle_pending_orders + close_my_day 仍
+  // 按日推进，simulated_datetime 和 currentDateRef 同样每天更新——只是 bot 不被叫起。用于
+  // 模拟"周频"或更长周期的调仓节奏。
+  chatStepDays: number
   loop: 'research-loop' | 'openclaw-pi'
   openclawRoot?: string
   piServerEntry?: string
@@ -59,6 +64,11 @@ export interface WorldConfig {
   // bot 的 mcporter.json 用 ${SIMWORLD_PROXY_URL} 占位符引用代理监听 URL，
   // buildShadowWorkspace 拷贝时替换。
   simworldUpstreamUrl: string
+  // 可选。手动指定 daily prompt 里 simworld-data 工具清单（白名单）。
+  // 不设 → 用 probe 从 upstream 抓到的全集（现状，会全量灌进 prompt）。
+  // 设了 → 只列这些 name；description 缺省时按 name 从 probe 结果里 fallback，
+  // probe 里也找不到就只渲染裸 name。
+  simworldTools?: { name: string; description?: string }[]
   // 可选。fund-portfolio-mcp 的 streamable-http 上游 URL（默认 http://localhost:28172/mcp）。
   // 提供时 world 会起一个 fund-portfolio-proxy 包住它：
   //   - tools/list 把每个 writer 工具的 run_id 从 inputSchema 里删掉
@@ -131,6 +141,7 @@ export function loadWorldConfig(path: string): WorldConfig {
   const perBotTimeoutSeconds = typeof raw.per_bot_timeout_seconds === 'number' && raw.per_bot_timeout_seconds > 0 ? Math.floor(raw.per_bot_timeout_seconds) : 1200
   const researchDayEvery = typeof raw.research_day_every === 'number' && raw.research_day_every >= 0 ? Math.floor(raw.research_day_every) : 0
   const researchDayTimeoutSeconds = typeof raw.research_day_timeout_seconds === 'number' && raw.research_day_timeout_seconds > 0 ? Math.floor(raw.research_day_timeout_seconds) : Math.max(perBotTimeoutSeconds, 300)
+  const chatStepDays = typeof raw.chat_step_days === 'number' && raw.chat_step_days >= 1 ? Math.floor(raw.chat_step_days) : 1
   const rlConfigBase = typeof raw.rl_config_base === 'string' && raw.rl_config_base.trim()
     ? resolveMaybe(baseDir, raw.rl_config_base)
     : resolveMaybe(baseDir, '../config/trading-rl-config.base.json')
@@ -172,6 +183,42 @@ export function loadWorldConfig(path: string): WorldConfig {
 
   const simworldUpstreamUrl = reqString(raw, 'simworld_upstream_url').trim()
 
+  let simworldTools: { name: string; description?: string }[] | undefined
+  if (raw.simworld_tools !== undefined) {
+    if (!Array.isArray(raw.simworld_tools)) {
+      throw new Error('world config: "simworld_tools" must be an array of { name, description? } objects (or a list of name strings)')
+    }
+    const seen = new Set<string>()
+    simworldTools = raw.simworld_tools.map((entry, i) => {
+      let name: string
+      let description: string | undefined
+      if (typeof entry === 'string') {
+        name = entry.trim()
+      } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        const e = entry as Record<string, unknown>
+        if (typeof e.name !== 'string' || !e.name.trim()) {
+          throw new Error(`world config: "simworld_tools[${i}].name" must be a non-empty string`)
+        }
+        name = e.name.trim()
+        if (e.description !== undefined) {
+          if (typeof e.description !== 'string') {
+            throw new Error(`world config: "simworld_tools[${i}].description" must be a string`)
+          }
+          description = e.description
+        }
+      } else {
+        throw new Error(`world config: "simworld_tools[${i}]" must be a string or { name, description? } object`)
+      }
+      if (!name) throw new Error(`world config: "simworld_tools[${i}]" name cannot be empty`)
+      if (seen.has(name)) throw new Error(`world config: "simworld_tools" contains duplicate name "${name}"`)
+      seen.add(name)
+      return description !== undefined ? { name, description } : { name }
+    })
+    if (simworldTools.length === 0) {
+      throw new Error('world config: "simworld_tools" cannot be empty when set — omit the key to fall back to probe-all')
+    }
+  }
+
   // 可选；默认指向本机 fund-portfolio-mcp 默认端口（28172）。基金 run 才会被实际使用。
   const fundPortfolioUpstreamUrl = typeof raw.fund_portfolio_upstream_url === 'string' && raw.fund_portfolio_upstream_url.trim()
     ? raw.fund_portfolio_upstream_url.trim()
@@ -200,5 +247,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     throw new Error('world config: "buyable_fund_codes" is required when "fund_mcp_cli" is set — list the fund codes bot can buy this run (e.g. [510300, 159915, 002611])')
   }
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, fundPortfolioUpstreamUrl }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl }
 }
