@@ -7,6 +7,7 @@ export interface BeliefRecord {
   date: string;
   belief: Belief;
   runId: string;
+  source: "md" | "reply"; // 多基金 bot 从 MD frontmatter, 单基金 bot 从 reply.json
 }
 
 const RUNS_ROOT = "/home/rooot/agent_invest_lab/world/runtime/runs";
@@ -21,13 +22,9 @@ async function safeReaddir(p: string): Promise<string[]> {
   }
 }
 
-/**
- * Extract the YAML frontmatter (between leading `---` ... `---`) from an MD
- * file body. Returns null if no frontmatter present.
- */
+/** Extract YAML frontmatter (between leading `---` ... `---`). */
 function extractFrontmatter(text: string): string | null {
   if (!text.startsWith("---")) return null;
-  // Find the second `---` line
   const lines = text.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") return null;
   for (let i = 1; i < lines.length; i++) {
@@ -56,6 +53,61 @@ async function loadBeliefFromMd(mdPath: string): Promise<Belief | null> {
   }
 }
 
+/** Parse a YAML text block to Belief (handles both raw and ---wrapped frontmatter style). */
+function tryParseBeliefYamlBlock(yamlText: string): Belief | null {
+  let payload = yamlText.trim();
+  if (payload.startsWith("---")) {
+    const lines = payload.split(/\r?\n/);
+    let endIdx = -1;
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i]?.trim() === "---") { endIdx = i; break; }
+    }
+    if (endIdx > 0) {
+      payload = lines.slice(1, endIdx).join("\n");
+    }
+  }
+  let parsed: unknown;
+  try {
+    parsed = yaml.parse(payload);
+  } catch {
+    return null;
+  }
+  return parseBelief(parsed);
+}
+
+/** Find first fenced ```yaml block containing `belief:` in a text body, parse it. */
+function extractBeliefFromText(body: string): Belief | null {
+  if (!body || !body.includes("belief:")) return null;
+  const fenceRe = /```(?:ya?ml)?\s*\n([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = fenceRe.exec(body)) !== null) {
+    const block = m[1] ?? "";
+    if (!block.includes("belief:")) continue;
+    const belief = tryParseBeliefYamlBlock(block);
+    if (belief) return belief;
+  }
+  // Fallback: try parsing from "belief:" onwards (no fence case).
+  const idx = body.indexOf("belief:");
+  if (idx >= 0) {
+    const chunk = body.slice(idx, idx + 4000);
+    const belief = tryParseBeliefYamlBlock(chunk);
+    if (belief) return belief;
+  }
+  return null;
+}
+
+/** Single-fund bots write YAML belief inside reply.json's `reply` field (no MD write tool). */
+async function loadBeliefFromReplyJson(replyJsonPath: string): Promise<Belief | null> {
+  try {
+    const text = await readFile(replyJsonPath, "utf8");
+    const parsed = JSON.parse(text) as { reply?: string };
+    if (!parsed?.reply) return null;
+    return extractBeliefFromText(parsed.reply);
+  } catch {
+    return null;
+  }
+}
+
 function daysBeforeISO(currentDate: string, days: number): string {
   const d = new Date(currentDate + "T00:00:00Z");
   if (isNaN(d.getTime())) return currentDate;
@@ -64,9 +116,9 @@ function daysBeforeISO(currentDate: string, days: number): string {
 }
 
 /**
- * Scan ~/runtime/runs/dash-*\/<date>/<botId>/memory/portfolio/fund/市场环境判断.md
- * for the windowDays trading days before currentDate (cap at windowDays * 1.5
- * calendar days).
+ * Scan recent dash-* runs for this bot's beliefs. Two sources:
+ *   1. memory/portfolio/fund/市场环境判断.md frontmatter (多基金 bot)
+ *   2. reply.json's `reply` field, ```yaml fence (单基金 bot)
  */
 export async function scanRecentBeliefs(
   botId: string,
@@ -78,15 +130,14 @@ export async function scanRecentBeliefs(
   try {
     const runDirs = await safeReaddir(RUNS_ROOT);
     const dashRuns = runDirs.filter((n) => n.startsWith("dash-"));
-    // Sort descending (newest first) — names contain ISO-ish timestamps so lexicographic works.
     dashRuns.sort((a, b) => b.localeCompare(a));
     const recentRuns = dashRuns.slice(0, MAX_RUN_DIRS);
 
     const calendarLimit = Math.ceil(windowDays * 1.5);
     const minDate = daysBeforeISO(currentDate, calendarLimit);
 
-    // dateISO -> {runId, mtime, belief}
-    const byDate = new Map<string, { runId: string; mtime: number; belief: Belief }>();
+    // dateISO -> {runId, mtime, belief, source}
+    const byDate = new Map<string, { runId: string; mtime: number; belief: Belief; source: "md" | "reply" }>();
 
     for (const run of recentRuns) {
       const runPath = path.join(RUNS_ROOT, run);
@@ -94,42 +145,46 @@ export async function scanRecentBeliefs(
       const candidateDates = dateDirs
         .filter((d) => ISO_DATE.test(d))
         .filter((d) => d >= minDate && d < currentDate);
-      // Take at most windowDays * 1.5 most recent
       candidateDates.sort();
       const slice = candidateDates.slice(-Math.ceil(windowDays * 1.5));
 
       for (const dateDir of slice) {
         const mdPath = path.join(
-          runPath,
-          dateDir,
-          botId,
-          "memory",
-          "portfolio",
-          "fund",
-          "市场环境判断.md",
+          runPath, dateDir, botId, "memory", "portfolio", "fund", "市场环境判断.md",
         );
-        const belief = await loadBeliefFromMd(mdPath);
-        if (!belief) continue;
+        const replyPath = path.join(runPath, dateDir, botId, "reply.json");
+
+        let belief: Belief | null = null;
+        let source: "md" | "reply" = "md";
         let mtime = 0;
-        try {
-          const st = await stat(mdPath);
-          mtime = st.mtimeMs;
-        } catch {
-          // ignore
+
+        const mdBelief = await loadBeliefFromMd(mdPath);
+        if (mdBelief) {
+          belief = mdBelief;
+          source = "md";
+          try { mtime = (await stat(mdPath)).mtimeMs; } catch { /* ignore */ }
+        } else {
+          const replyBelief = await loadBeliefFromReplyJson(replyPath);
+          if (replyBelief) {
+            belief = replyBelief;
+            source = "reply";
+            try { mtime = (await stat(replyPath)).mtimeMs; } catch { /* ignore */ }
+          }
         }
+        if (!belief) continue;
+
         const prev = byDate.get(dateDir);
         if (!prev || mtime > prev.mtime) {
-          byDate.set(dateDir, { runId: run, mtime, belief });
+          byDate.set(dateDir, { runId: run, mtime, belief, source });
         }
       }
     }
 
     const records: BeliefRecord[] = [];
     for (const [date, entry] of byDate.entries()) {
-      records.push({ date, belief: entry.belief, runId: entry.runId });
+      records.push({ date, belief: entry.belief, runId: entry.runId, source: entry.source });
     }
     records.sort((a, b) => a.date.localeCompare(b.date));
-    // Trim to windowDays most recent records
     return records.slice(-windowDays);
   } catch (err) {
     console.warn(`[belief-context/md-history] scanRecentBeliefs failed: ${String(err)}`);

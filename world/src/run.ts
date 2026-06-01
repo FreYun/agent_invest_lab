@@ -460,12 +460,13 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
   try {
     const r = await b.server.chat({ message, session_key: SESSION_KEY(runId, b.botId, date), history: [] }, { timeoutMs: perBotTimeoutMs })
     writeFileSync(P.replyFile(worldRoot, runId, date, b.botId), JSON.stringify(r, null, 2) + '\n')
-    // belief MD 校验（非阻塞）：bot 在本回合可能更新了 memory/portfolio/fund/市场环境判断.md，
-    // 这里跑结构校验并把结果落到 belief_validation.json，便于审阅与下回合 buildBeliefContext。
+    // belief 校验（非阻塞）：两路源——多基金 bot 在 MD frontmatter, 单基金 bot 在 reply.json fence。
+    // 结果落 belief_validation.json，便于审阅与下回合 buildBeliefContext。
     // 任何异常都 swallow——绝不阻塞 chat 主流程；用 date 作 stamp 避免引入系统时间依赖。
     try {
       const mdPath = join(P.shadowWorkspaceDir(worldRoot, runId, b.botId), 'memory/portfolio/fund/市场环境判断.md')
-      const result = await validateBeliefMd(mdPath)
+      const replyPath = P.replyFile(worldRoot, runId, date, b.botId)
+      const result = await validateBeliefMd(mdPath, replyPath)
       if (result !== null) {
         const validationPath = join(P.botDayDir(worldRoot, runId, date, b.botId), 'belief_validation.json')
         writeFileSync(validationPath, JSON.stringify({ checked_at_date: date, ...result }, null, 2))

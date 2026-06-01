@@ -26,10 +26,10 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .bot-row-name{font-size:14px;font-weight:600}
 .bot-row-return{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
 .bot-row-return.gain{color:var(--gain)}.bot-row-return.loss{color:var(--loss)}.bot-row-return.flat{color:var(--text)}
-.bot-row-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.bot-row-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex-shrink:0}
 .bot-row-stamp{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
-.bot-row-theme{flex:0 1 auto;min-width:0;max-width:120px;font-size:10px;color:#9fb4d6;background:rgba(102,208,234,.08);border:1px solid rgba(102,208,234,.18);border-radius:5px;padding:2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bot-row-theme.empty{color:var(--dim);background:transparent;border-color:transparent;padding:2px 0}
+.bot-row-fund{flex:1 1 auto;min-width:0;text-align:center;font-size:11px;color:#9fb4d6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px}
+.bot-row-fund.fund-empty{color:var(--dim)}
 .bot-filter{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
 .bot-quick{display:flex;gap:6px;flex-wrap:wrap}
 .bot-quick-btn{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
@@ -163,19 +163,29 @@ function computeMetrics(series){
   // Sharpe = mean(daily_return) / stddev(daily_return)  — per-day risk-adjusted return
   // Calmar = cumReturn / |maxDD|                        — interval return per unit of worst drawdown
   if (!series || series.length < 2) {
-    return { days: series?.length ?? 0, cumReturn: null, maxDD: null, sharpe: null, calmar: null }
+    return { days: series?.length ?? 0, cumReturn: null, maxDD: null, maxLoss: null, sharpe: null, sortino: null, calmar: null }
   }
   const first = Number(series[0].net_value)
   const last = Number(series[series.length - 1].net_value)
   const cumReturn = first > 0 ? last / first - 1 : null
+  // 区间最大浮亏：相对建仓初始净值的最深亏损 = min(净值)/首值 - 1（从未低于起点则为 0）
+  let minNV = Infinity
+  for (const p of series){ const v = Number(p.net_value); if (Number.isFinite(v) && v < minNV) minNV = v }
+  const maxLoss = (first > 0 && Number.isFinite(minNV)) ? Math.min(0, minNV / first - 1) : null
   const rets = dailyReturns(series)
   const mean = rets.length ? rets.reduce((s, x) => s + x, 0) / rets.length : 0
   const variance = rets.length > 1 ? rets.reduce((s, x) => s + (x - mean) ** 2, 0) / (rets.length - 1) : 0
   const stddev = Math.sqrt(variance)
-  const sharpe = stddev > 0 ? mean / stddev : null
+  // 下行波动（目标收益=0）：只对负收益求方差，sqrt(mean(min(0,r)^2))
+  const downsideVar = rets.length ? rets.reduce((s, x) => s + Math.min(0, x) ** 2, 0) / rets.length : 0
+  const downsideDev = Math.sqrt(downsideVar)
   const maxDD = maxDrawdown(series)
-  const calmar = (maxDD != null && maxDD < 0 && cumReturn != null) ? cumReturn / Math.abs(maxDD) : null
-  return { days: series.length, cumReturn, maxDD, sharpe, calmar }
+  // 收益率为负时，夏普/索提诺/卡玛没有经济含义，不计算（显示 --）
+  const negative = cumReturn != null && cumReturn < 0
+  const sharpe = (!negative && stddev > 0) ? mean / stddev : null
+  const sortino = (!negative && downsideDev > 0) ? mean / downsideDev : null
+  const calmar = (!negative && maxDD != null && maxDD < 0 && cumReturn != null) ? cumReturn / Math.abs(maxDD) : null
+  return { days: series.length, cumReturn, maxDD, maxLoss, sharpe, sortino, calmar }
 }
 function rangeForPreset(preset, series){
   if (!series?.length || preset === 'all') return { from: null, to: null }
@@ -277,12 +287,9 @@ function renderBotList(data){
     const retCls = bot.cumulativeReturnPct > 0 ? 'gain' : bot.cumulativeReturnPct < 0 ? 'loss' : 'flat'
     const selected = bot.botId === state.selected ? ' active' : ''
     const stampText = stamp ? `跑于 ${stamp.short}` : '跑测时间未知'
-    const ti = botThemeInfo(bot)
-    const themeLabel = ti.themes.length
-      ? ti.themes.slice(0, 3).join('·') + (ti.themes.length > 3 ? `+${ti.themes.length - 3}` : '')
-      : '空仓'
-    const themeHtml = `<span class="bot-row-theme${ti.themes.length ? '' : ' empty'}" title="${esc(ti.title)}">${esc(themeLabel)}</span>`
-    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><div class="bot-row-main"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-stamp">${esc(stampText)}</span></div>${themeHtml}<span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
+    const fi = botFundInfo(bot)
+    const fundHtml = `<span class="bot-row-fund${fi.empty ? ' fund-empty' : ''}" title="${esc(fi.title)}">${esc(fi.label)}</span>`
+    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><div class="bot-row-main"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-stamp">${esc(stampText)}</span></div>${fundHtml}<span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
   }).join('')
   root.innerHTML = rows + (hidden > 0 ? `<div class="bot-hidden-note">更早的 ${hidden} 个 bot 已隐藏</div>` : '')
   root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => { void selectBot(el.dataset.bot) }))
@@ -738,7 +745,9 @@ function renderMetricsPanel(bot){
   return `<table class="metrics-table"><thead><tr><th>指标</th><th>${esc(bot.botId)}</th><th>${benchLabel}</th><th>与基准对比</th></tr></thead><tbody>`
     + row('累计收益', bm.cumReturn, km.cumReturn, true)
     + row('最大回撤', bm.maxDD, km.maxDD, true)
+    + row('最大亏损', bm.maxLoss, km.maxLoss, true)
     + row('夏普比率', bm.sharpe, km.sharpe, false)
+    + row('索提诺比率', bm.sortino, km.sortino, false)
     + row('卡玛比率', bm.calmar, km.calmar, false)
     + `<tr><td>样本天数</td><td>${bm.days}</td><td>${km.days}</td><td></td></tr>`
     + `</tbody></table>`
@@ -769,6 +778,9 @@ function renderActions(bot){
 }
 function renderDetail(bot){
   const reg = bot.reviews[bot.reviews.length - 1]
+  // 最大亏损：全区间相对建仓初值的最深浮亏（区别于从峰值起算的最大回撤）
+  const _maxLoss = computeMetrics(bot.series || []).maxLoss
+  const maxLossPct = _maxLoss == null ? null : _maxLoss * 100
   let alphaPill = ''
   if (bot.benchmark && bot.benchmark.series.length){
     const benchEndPct = (bot.benchmark.series[bot.benchmark.series.length - 1].net_value - 1) * 100
@@ -780,7 +792,7 @@ function renderDetail(bot){
   const chartHtml = typeof chartData === 'string'
     ? chartData
     : chartData.html + renderPositionChart(bot, chartData.dateToIdx, chartData.xAxisDates)
-  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
+  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
   if (typeof chartData !== 'string') attachCursor(byId('detailRoot'), bot, chartData)
 }
 async function hydrateBotByIndex(idx){
@@ -811,16 +823,18 @@ async function selectBot(botId){
 // 列表按“跑测时间未知”处理且筛选时不隐藏。+8 时区换算与 formatRunLabel 保持一致。
 // 上海时区“今天往前推 daysAgo 天”的日期 YYYY-MM-DD(daysAgo=0 即今天)。口径与 runStamp
 // 的 +8 换算一致,保证快捷按钮算出的阈值能和列表里每个 run 的“跑测日期”正确比较。
-// 取 bot 当前实仓(weight>0)持仓的主题集合(按逗号拆分去重) + 一个 hover 看全的 title(基金名+主题)。
-// 全部清仓/空仓时 themes 为空,列表显示“空仓”。
-function botThemeInfo(bot){
+// 取 bot 当前实仓(weight>0)的基金,按仓位降序。label=主仓基金名(多只时 “X 等N只”),
+// title=hover 看全(每只基金名+主题+仓位%)。空仓返回 empty=true,列表显示“空仓”。
+function botFundInfo(bot){
   const holds = (bot.holdings || []).filter(h => Number(h.weight || 0) > 0)
-  const set = new Set()
-  for (const h of holds) for (const t of String(h.theme || '').split(/[,，]/)) { const v = t.trim(); if (v) set.add(v) }
-  const title = holds.length
-    ? holds.map(h => `${h.fund_name}${String(h.theme || '').trim() ? '（' + String(h.theme).trim() + '）' : ''}`).join('；')
-    : '当前空仓'
-  return { themes: [...set], title }
+    .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))
+  if (!holds.length) return { label: '空仓', empty: true, title: '当前空仓' }
+  const label = holds.length === 1 ? holds[0].fund_name : `${holds[0].fund_name} 等${holds.length}只`
+  const title = holds.map(h => {
+    const th = String(h.theme || '').trim()
+    return `${h.fund_name}${th ? '（' + th + '）' : ''} ${(Number(h.weight || 0) * 100).toFixed(0)}%`
+  }).join('；')
+  return { label, empty: false, title }
 }
 function shDateDaysAgo(daysAgo){
   const sh = new Date(Date.now() + 8 * 3600 * 1000)
