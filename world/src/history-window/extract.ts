@@ -28,7 +28,7 @@ const TOOL_ARG_KEEP_KEYS = new Set([
   'name', 'category', 'industry',
 ])
 
-const TOOL_NAME_PREFIX_STRIP = ['mcp__simworld_data__', 'mcp__fund_portfolio_mcp__']
+const TOOL_NAME_PREFIX_STRIP = ['mcp__simworld_data__', 'mcp__fund_portfolio_mcp__', 'mcp__strategy_mcp__']
 
 function stripToolPrefix(name: string): string {
   for (const p of TOOL_NAME_PREFIX_STRIP) {

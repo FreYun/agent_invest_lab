@@ -45,10 +45,9 @@ WHERE bot_id = ? AND trade_date = ?;
 
 ## 链路边界（必须遵守）
 
-- **基金链路**: 只使用 `fund.db` / `memory/portfolio/fund/*` / `fund-portfolio-mcp` / `fund_md_to_db.py`
-- **投顾链路**: 只使用 `tougu.db` / `memory/portfolio/*` / `tougu-portfolio-mcp` / `tougu_md_to_db.py`
-- 如果当前会话是基金 cron 传入的 `run_id/trade_date/paradigm_active`，**不要**去 `discover_tools("tougu")`，不要改用投顾 MCP 工具，不要读写投顾路径
-- 如果当前会话是投顾链路，同理不要碰 `fund-portfolio-mcp`、`fund.db`、`memory/portfolio/fund/*`
+- 本 bot 当前只走**基金链路**: 只使用 `fund.db` / `memory/portfolio/fund/*` / `fund-portfolio-mcp` / `fund_md_to_db.py`
+- 如果当前会话传入 `run_id/trade_date/paradigm_active`，必须保持在基金链路内，不要切到其它产品池或其它数据库路径
+- 市场判断只为基金组合巡检服务，不写入非基金链路路径
 
 ## 输出格式
 

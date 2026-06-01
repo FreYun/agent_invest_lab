@@ -26,6 +26,22 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .bot-row-name{font-size:14px;font-weight:600}
 .bot-row-return{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
 .bot-row-return.gain{color:var(--gain)}.bot-row-return.loss{color:var(--loss)}.bot-row-return.flat{color:var(--text)}
+.bot-row-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.bot-row-stamp{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bot-row-theme{flex:0 1 auto;min-width:0;max-width:120px;font-size:10px;color:#9fb4d6;background:rgba(102,208,234,.08);border:1px solid rgba(102,208,234,.18);border-radius:5px;padding:2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bot-row-theme.empty{color:var(--dim);background:transparent;border-color:transparent;padding:2px 0}
+.bot-filter{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+.bot-quick{display:flex;gap:6px;flex-wrap:wrap}
+.bot-quick-btn{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.bot-quick-btn:hover{background:rgba(255,255,255,.08)}
+.bot-quick-btn.active{background:#122034;border-color:var(--accent);color:var(--accent)}
+.bot-filter-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bot-filter-label{font-size:11px;color:var(--dim)}
+.bot-filter input[type=date]{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;font-family:inherit;color-scheme:dark}
+.bot-filter input[type=date]:focus{outline:none;border-color:var(--accent)}
+.bot-filter-clear{background:rgba(255,255,255,.03);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,color .12s}
+.bot-filter-clear:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.bot-hidden-note{font-size:11px;color:var(--dim);text-align:center;padding:6px 0 2px}
 .detail-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px 15px;margin-bottom:14px}.detail-title{font-size:22px;font-weight:800}.detail-sub{margin-top:4px;color:var(--dim);font-size:12px}.detail-pillrow{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.pill{border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:12px;background:rgba(255,255,255,.03)}.pill strong{font-weight:700}.pill.buy{color:var(--gain)}.pill.sell{color:var(--loss)}
 .panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:14px}.panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.grid-2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,.9fr);gap:14px}.chart-wrap{padding-top:2px}.chart{width:100%;height:auto;display:block;border-radius:6px;background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)}
 .axis{font-size:10px;fill:var(--dim)}.line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.bench-line{fill:none;stroke:var(--accent2);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.9;pointer-events:none}.area{fill:url(#areaGrad);opacity:.9;pointer-events:none}.gridline{stroke:rgba(255,255,255,.06);stroke-width:1}.baseline{stroke:rgba(255,184,107,.35);stroke-width:1.4;stroke-dasharray:4 4}.marker-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1.5}.marker-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1.5}.marker-text{font-size:10px;font-weight:700;fill:var(--text)}.chart-legend{display:flex;gap:14px;align-items:center;font-size:11px;color:var(--dim);margin-bottom:6px}.lg-item{display:inline-flex;align-items:center;gap:6px}.lg-swatch{display:inline-block;width:18px;height:3px;border-radius:2px}.lg-swatch.lg-bot{background:var(--accent)}.lg-swatch.lg-bench{background:var(--accent2)}.user-line{fill:none;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;opacity:.32;pointer-events:none}.lg-swatch.lg-user{height:2px;opacity:.6}.user-hit{fill:none;stroke-width:9;opacity:0;stroke-linecap:round;cursor:pointer}.user-mk{opacity:0;pointer-events:none;transition:opacity .08s;stroke:rgba(0,0,0,.5);stroke-width:.8}.user-grp:hover .user-mk,.user-grp.pinned .user-mk{opacity:.95;pointer-events:auto}.user-grp:hover .user-line{opacity:.92;stroke-width:1.8}.user-grp.pinned .user-line{opacity:.98;stroke-width:2.4}.user-grp.pinned .user-mk{stroke:#fff;stroke-width:1.1}.lg-pin-hint{color:var(--dim);font-size:10px;font-style:italic}
@@ -78,6 +94,18 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
   <div class="layout">
     <aside class="sidebar">
       <div class="section-head"><span>Bot 列表</span><span id="botCount"></span></div>
+      <div class="bot-filter">
+        <div class="bot-quick">
+          <button type="button" class="bot-quick-btn" data-since-days="1">昨天</button>
+          <button type="button" class="bot-quick-btn" data-since-days="2">近3天</button>
+          <button type="button" class="bot-quick-btn" data-since-days="6">近7天</button>
+        </div>
+        <div class="bot-filter-row">
+          <span class="bot-filter-label">只看此日期之后跑的</span>
+          <input type="date" id="botSinceIn" class="bot-filter-date" aria-label="只看此日期之后跑的回测">
+          <button type="button" id="botSinceClear" class="bot-filter-clear" hidden>清除</button>
+        </div>
+      </div>
       <div class="bot-list" id="botList"></div>
     </aside>
     <section class="content"><div id="detailRoot"></div></section>
@@ -95,6 +123,7 @@ const state = {
   selected: null,
   rangePreset: 'all', rangeFrom: null, rangeTo: null,
   selectedRuns: {},          // bot_id -> runId (preserves per-bot run picks across auto-refresh)
+  botSince: null,            // 'YYYY-MM-DD'(上海时区): 只显示该日期当天及之后跑的 bot; null=全部
   expandedActions: new Set(),// "botId|action_id" keys to re-expand after re-render
   pinnedUsers: new Set(),    // cycleId keys: 钉住的真实用户曲线,跨自动刷新保持高亮
   lastRefreshAt: null,
@@ -239,12 +268,35 @@ function renderSummary(data){
 }
 function renderBotList(data){
   const root = byId('botList')
-  root.innerHTML = data.bots.map(bot => {
+  const since = state.botSince
+  let hidden = 0
+  const rows = data.bots.map(bot => {
+    const stamp = runStamp(bot.runId)
+    // 无法解析时间戳的 run 视为“跑测时间未知”,筛选时一律保留(不隐藏),避免误丢数据。
+    if (since && stamp && stamp.date < since) { hidden++; return '' }
     const retCls = bot.cumulativeReturnPct > 0 ? 'gain' : bot.cumulativeReturnPct < 0 ? 'loss' : 'flat'
     const selected = bot.botId === state.selected ? ' active' : ''
-    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
+    const stampText = stamp ? `跑于 ${stamp.short}` : '跑测时间未知'
+    const ti = botThemeInfo(bot)
+    const themeLabel = ti.themes.length
+      ? ti.themes.slice(0, 3).join('·') + (ti.themes.length > 3 ? `+${ti.themes.length - 3}` : '')
+      : '空仓'
+    const themeHtml = `<span class="bot-row-theme${ti.themes.length ? '' : ' empty'}" title="${esc(ti.title)}">${esc(themeLabel)}</span>`
+    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><div class="bot-row-main"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-stamp">${esc(stampText)}</span></div>${themeHtml}<span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
   }).join('')
+  root.innerHTML = rows + (hidden > 0 ? `<div class="bot-hidden-note">更早的 ${hidden} 个 bot 已隐藏</div>` : '')
   root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => { void selectBot(el.dataset.bot) }))
+  syncFilterControls()
+}
+// 把筛选控件同步到 state.botSince: 清除按钮显隐、日期框回填、快捷按钮高亮当前命中的那个。
+function syncFilterControls(){
+  const since = state.botSince
+  const clearBtn = byId('botSinceClear')
+  if (clearBtn) clearBtn.hidden = !since
+  const inp = byId('botSinceIn')
+  if (inp && inp.value !== (since || '')) inp.value = since || ''
+  document.querySelectorAll('.bot-quick-btn').forEach(b =>
+    b.classList.toggle('active', !!since && shDateDaysAgo(Number(b.dataset.sinceDays)) === since))
 }
 const STACK_PALETTE = [
   '#6cd0ea', '#c084fc', '#f59e0b', '#22c55e',
@@ -754,6 +806,38 @@ async function selectBot(botId){
   const bot = await hydrateBotByIndex(idx) || state.data.bots[0]
   if (bot) renderDetail(bot)
 }
+// run_id (dash-<UTC时间戳>) → 上海时区的 {date:'YYYY-MM-DD', short:'MM-DD HH:mm'};
+// 供 bot 列表的“跑测时间”展示与日期筛选共用。非该格式(罕见,如手工命名的 run)返回 null,
+// 列表按“跑测时间未知”处理且筛选时不隐藏。+8 时区换算与 formatRunLabel 保持一致。
+// 上海时区“今天往前推 daysAgo 天”的日期 YYYY-MM-DD(daysAgo=0 即今天)。口径与 runStamp
+// 的 +8 换算一致,保证快捷按钮算出的阈值能和列表里每个 run 的“跑测日期”正确比较。
+// 取 bot 当前实仓(weight>0)持仓的主题集合(按逗号拆分去重) + 一个 hover 看全的 title(基金名+主题)。
+// 全部清仓/空仓时 themes 为空,列表显示“空仓”。
+function botThemeInfo(bot){
+  const holds = (bot.holdings || []).filter(h => Number(h.weight || 0) > 0)
+  const set = new Set()
+  for (const h of holds) for (const t of String(h.theme || '').split(/[,，]/)) { const v = t.trim(); if (v) set.add(v) }
+  const title = holds.length
+    ? holds.map(h => `${h.fund_name}${String(h.theme || '').trim() ? '（' + String(h.theme).trim() + '）' : ''}`).join('；')
+    : '当前空仓'
+  return { themes: [...set], title }
+}
+function shDateDaysAgo(daysAgo){
+  const sh = new Date(Date.now() + 8 * 3600 * 1000)
+  const d = new Date(Date.UTC(sh.getUTCFullYear(), sh.getUTCMonth(), sh.getUTCDate()) - daysAgo * 86400000)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+}
+function runStamp(runId){
+  const m = String(runId || '').match(/^dash-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const sh = new Date(new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`).getTime() + 8 * 3600 * 1000)
+  const pad = (n) => String(n).padStart(2, '0')
+  return {
+    date: `${sh.getUTCFullYear()}-${pad(sh.getUTCMonth() + 1)}-${pad(sh.getUTCDate())}`,
+    short: `${pad(sh.getUTCMonth() + 1)}-${pad(sh.getUTCDate())} ${pad(sh.getUTCHours())}:${pad(sh.getUTCMinutes())}`,
+  }
+}
 function formatRunLabel(run){
   // run_id 里的时间分量是 UTC（toISOString 来源），上海客户视角要 +8 显示。
   const m = run.runId.match(/^dash-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/)
@@ -905,6 +989,11 @@ document.addEventListener('change', (e) => {
     switchBotRun(botId, runId).catch(err => { byId('detailRoot').innerHTML = `<div class="empty">${esc(err.message || String(err))}</div>` })
     return
   }
+  if (e.target.id === 'botSinceIn') {
+    state.botSince = e.target.value || null
+    if (state.data) renderBotList(state.data)
+    return
+  }
   if (e.target.id === 'rangeFromIn' || e.target.id === 'rangeToIn') {
     state.rangePreset = 'custom'
     state.rangeFrom = byId('rangeFromIn').value || null
@@ -917,6 +1006,18 @@ document.addEventListener('click', (e) => {
   const runBtn = e.target.closest?.('.run-btn[data-run-act]')
   if (runBtn) {
     void runControl(runBtn.dataset.runAct, runBtn.dataset.runId, runBtn)
+    return
+  }
+  const quick = e.target.closest?.('.bot-quick-btn')
+  if (quick) {
+    const since = shDateDaysAgo(Number(quick.dataset.sinceDays))
+    state.botSince = state.botSince === since ? null : since  // 再点已选中的按钮 → 取消筛选
+    if (state.data) renderBotList(state.data)
+    return
+  }
+  if (e.target.id === 'botSinceClear') {
+    state.botSince = null
+    if (state.data) renderBotList(state.data)
     return
   }
   const btn = e.target.closest?.('.range-presets button[data-range]')
