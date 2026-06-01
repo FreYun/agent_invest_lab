@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { universeContaminationFile } from '../paths.ts'
+import { replyFile, sentFile, universeContaminationFile } from '../paths.ts'
 import { listControllableRuns, type WorldState } from '../state.ts'
 import { requestPause, requestStop } from '../run-control.ts'
 import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
@@ -197,6 +197,47 @@ interface Dataset {
 
 function quoteSql(s: string): string {
   return `'${s.replace(/'/g, "''")}'`
+}
+
+/** bot 每天滚动刷新、注回 prompt 的自我反思内容（来自当日 sent.md / reply.json 的真值切片）。
+ *  - memoryWindow: 【交易记忆窗口】= buildHistoryWindow 产出的"最近原样 + 更早 4 维度压缩"笔记
+ *  - decision:     reply.json 的 reply 字段 = bot 当日收尾的决策总结 */
+interface BotReflection {
+  tradeDate: string
+  memoryWindow: string
+  decision: string
+}
+
+/** sent.md 是按 `【…】` 顶级标记分段的当日完整 prompt 原文。切成 header→body 段，
+ *  好按标记前缀挑出反思相关的块。第一个 `【` 之前的内容（通常没有）丢弃。 */
+function sliceSentSections(md: string): { header: string; body: string }[] {
+  const out: { header: string; lines: string[] }[] = []
+  let cur: { header: string; lines: string[] } | null = null
+  for (const line of md.split('\n')) {
+    if (line.startsWith('【')) { cur = { header: line, lines: [line] }; out.push(cur) }
+    else if (cur) cur.lines.push(line)
+  }
+  return out.map(s => ({ header: s.header, body: s.lines.join('\n').trim() }))
+}
+
+/** 读当日 sent.md / reply.json，best-effort 拼出反思内容。文件缺失（首日 / 旧 run）
+ *  时对应字段留空字符串，由前端兜底提示——保证功能可加性，不抛错。 */
+function loadReflection(worldRoot: string, runId: string, botId: string, date: string): BotReflection {
+  const result: BotReflection = { tradeDate: date, memoryWindow: '', decision: '' }
+  const sentPath = sentFile(worldRoot, runId, date, botId)
+  if (existsSync(sentPath)) {
+    const sections = sliceSentSections(readFileSync(sentPath, 'utf8'))
+    const pick = (prefix: string) => sections.find(s => s.header.startsWith(prefix))?.body ?? ''
+    result.memoryWindow = pick('【交易记忆窗口')
+  }
+  const replyPath = replyFile(worldRoot, runId, date, botId)
+  if (existsSync(replyPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(replyPath, 'utf8')) as { reply?: unknown }
+      if (typeof parsed.reply === 'string') result.decision = parsed.reply
+    } catch { /* best-effort：reply.json 损坏就留空 */ }
+  }
+  return result
 }
 
 async function queryRows<T>(dbPath: string, sql: string): Promise<T[]> {
@@ -734,6 +775,20 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         const bot = await loadBotForRun(dbPath, botId, runId, runs)
         if (!bot) { sendJson(res, 404, { error: 'no data for bot/run' }); return }
         sendJson(res, 200, bot)
+        return
+      }
+      // bot 当日滚动反思（交易记忆窗口 / 决策回复）——读 runtime 下的 sent.md /
+      // reply.json 真值切片。参数走 ID/日期白名单正则，挡掉 ../ 路径穿越。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/bot-reflection') {
+        const botId = url.searchParams.get('bot_id') ?? ''
+        const runId = url.searchParams.get('run_id') ?? ''
+        const tradeDate = url.searchParams.get('trade_date') ?? ''
+        const idRe = /^[A-Za-z0-9._-]+$/
+        if (!idRe.test(botId) || !idRe.test(runId) || !/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) {
+          sendJson(res, 400, { error: 'bot_id, run_id, trade_date required and must be well-formed' })
+          return
+        }
+        sendJson(res, 200, loadReflection(worldRoot, runId, botId, tradeDate))
         return
       }
       // Live run control: list controllable runs (running/paused) read from per-run

@@ -47,6 +47,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .axis{font-size:10px;fill:var(--dim)}.line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.bench-line{fill:none;stroke:var(--accent2);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.9;pointer-events:none}.area{fill:url(#areaGrad);opacity:.9;pointer-events:none}.gridline{stroke:rgba(255,255,255,.06);stroke-width:1}.baseline{stroke:rgba(255,184,107,.35);stroke-width:1.4;stroke-dasharray:4 4}.marker-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1.5}.marker-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1.5}.marker-text{font-size:10px;font-weight:700;fill:var(--text)}.chart-legend{display:flex;gap:14px;align-items:center;font-size:11px;color:var(--dim);margin-bottom:6px}.lg-item{display:inline-flex;align-items:center;gap:6px}.lg-swatch{display:inline-block;width:18px;height:3px;border-radius:2px}.lg-swatch.lg-bot{background:var(--accent)}.lg-swatch.lg-bench{background:var(--accent2)}.user-line{fill:none;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;opacity:.32;pointer-events:none}.lg-swatch.lg-user{height:2px;opacity:.6}.user-hit{fill:none;stroke-width:9;opacity:0;stroke-linecap:round;cursor:pointer}.user-mk{opacity:0;pointer-events:none;transition:opacity .08s;stroke:rgba(0,0,0,.5);stroke-width:.8}.user-grp:hover .user-mk,.user-grp.pinned .user-mk{opacity:.95;pointer-events:auto}.user-grp:hover .user-line{opacity:.92;stroke-width:1.8}.user-grp.pinned .user-line{opacity:.98;stroke-width:2.4}.user-grp.pinned .user-mk{stroke:#fff;stroke-width:1.1}.lg-pin-hint{color:var(--dim);font-size:10px;font-style:italic}
 .table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px 8px;border-bottom:1px solid rgba(255,255,255,.04);text-align:left;font-size:12px}.table th{color:var(--dim);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em}.table td.num,.table th.num{text-align:right;font-variant-numeric:tabular-nums}.table tr:last-child td{border-bottom:none}.row-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:11px;border:1px solid var(--border)}.row-badge.buy{color:var(--gain)}.row-badge.sell{color:var(--loss)}.row-badge.hold{color:var(--dim)}.row-badge.active{color:var(--loss)}.row-badge.contaminated{color:var(--accent2);border-color:rgba(255,184,107,.4);background:rgba(255,184,107,.06)}
 .panel-holdings{display:flex;flex-direction:column}.panel-holdings .holdings{flex:1;align-content:center}.holdings{display:grid;grid-template-columns:1fr;gap:10px}.holding{border:1px solid rgba(255,255,255,.05);border-radius:6px;background:rgba(255,255,255,.02);padding:12px 12px 10px}.holding-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.holding-name{font-size:13px;font-weight:700;line-height:1.35}.holding-code{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace;margin-top:2px}.holding-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;color:var(--dim);font-size:11px}.holding strong{color:var(--text)}.reason{margin-top:8px;font-size:12px;line-height:1.55;color:var(--dim);white-space:pre-wrap}.empty{border:1px dashed var(--border);border-radius:var(--radius);padding:24px;color:var(--dim);text-align:center}
+.panel-reflection .reflection-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.rfl-date-sel{margin-left:auto;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:inherit;cursor:pointer}.rfl-date-sel:focus{outline:none;border-color:var(--accent)}.reflection-tabs{display:flex;gap:6px}.reflection-tabs button{background:rgba(255,255,255,.05);border:1px solid var(--border);color:rgba(255,255,255,.7);font-size:12px;padding:4px 12px;border-radius:6px;cursor:pointer}.reflection-tabs button.active{background:var(--accent);border-color:var(--accent);color:#fff}.rfl-fs-btn{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--text);font-size:14px;line-height:1;padding:4px 9px;border-radius:6px;cursor:pointer}.rfl-fs-btn:hover{border-color:var(--accent)}.reflection-body{max-height:460px;overflow:auto;font-size:13px;line-height:1.75;border:1px solid rgba(255,255,255,.09);border-radius:6px;background:rgba(22,24,36,.6);padding:16px;color:rgba(255,255,255,.87)}.rfl-h2{font-size:14px;font-weight:700;color:#fff;margin:14px 0 5px}.rfl-h3{font-size:13px;font-weight:700;color:#f0b95c;margin:14px 0 5px;letter-spacing:.02em}.rfl-quote{color:rgba(255,255,255,.66);border-left:2px solid var(--accent);padding-left:10px;margin:5px 0}.rfl-li{color:rgba(255,255,255,.84);margin:3px 0}.rfl-p{color:rgba(255,255,255,.84);margin:3px 0}.rfl-sp{height:8px}.rfl-p strong,.rfl-li strong,.rfl-quote strong,.rfl-h2 strong{color:#fff;font-weight:700}.panel-reflection.fullscreen{position:fixed;inset:16px;z-index:60;margin:0;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 0 0 9999px rgba(0,0,0,.66)}.panel-reflection.fullscreen .reflection-body{max-height:none;flex:1}
 .action-row{cursor:pointer;transition:background .12s}.action-row:hover{background:rgba(255,255,255,.025)}.action-row.expanded{background:rgba(102,217,232,.04)}.action-chevron{display:inline-block;color:var(--dim);font-size:10px;transition:transform .15s ease}.action-row.expanded .action-chevron{transform:rotate(90deg);color:var(--accent)}.reason-row td{padding:0;border-bottom:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.22);border-left:3px solid var(--accent)}.reason-section{padding:10px 14px}.reason-section + .reason-section{border-top:1px solid rgba(255,255,255,.04)}.reason-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:4px;font-weight:600}.reason-body{font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap}.reason-body.reason-settle{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}.reason-body.reason-empty{padding:10px 14px;color:rgba(255,255,255,.25);font-style:italic;font-size:12px}
 .holding-weight{display:flex;align-items:baseline;gap:8px;margin-left:auto}.holding-weight-pct{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--accent);letter-spacing:.5px;line-height:1}.holding-weight-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.holding-weight-bar{margin-top:10px;height:6px;border-radius:999px;background:rgba(255,255,255,.05);overflow:hidden;position:relative}.holding-weight-bar-fill{height:100%;background:linear-gradient(90deg, var(--accent) 0%, rgba(102,217,232,.6) 100%);border-radius:inherit;transition:width .25s ease-out}
 .runs-panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:16px}.runs-panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.run-list{display:flex;flex-direction:column;gap:8px}
@@ -99,6 +100,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
           <button type="button" class="bot-quick-btn" data-since-days="1">昨天</button>
           <button type="button" class="bot-quick-btn" data-since-days="2">近3天</button>
           <button type="button" class="bot-quick-btn" data-since-days="6">近7天</button>
+          <button type="button" class="bot-quick-btn" id="botRunningBtn">正在跑</button>
         </div>
         <div class="bot-filter-row">
           <span class="bot-filter-label">只看此日期之后跑的</span>
@@ -124,8 +126,15 @@ const state = {
   rangePreset: 'all', rangeFrom: null, rangeTo: null,
   selectedRuns: {},          // bot_id -> runId (preserves per-bot run picks across auto-refresh)
   botSince: null,            // 'YYYY-MM-DD'(上海时区): 只显示该日期当天及之后跑的 bot; null=全部
+  onlyRunning: false,        // 只显示当前 status=running 的 run 里的 bot(与日期筛选可叠加)
+  runningBots: new Set(),    // 运行中 run 的 botId 集合; 由 /api/backtest/runs 刷新填充
   expandedActions: new Set(),// "botId|action_id" keys to re-expand after re-render
   pinnedUsers: new Set(),    // cycleId keys: 钉住的真实用户曲线,跨自动刷新保持高亮
+  reflectionTab: 'memory',   // 反思面板当前 tab: 'memory'|'belief'|'decision'
+  reflectionDate: null,      // 反思面板当前展示的交易日(随净值曲线光标联动)
+  reflectionPinned: null,    // 用日期下拉钉住的交易日; null=跟随光标/最新。hover 临时覆盖,移开回钉住日
+  _lastDetailSig: null,      // 上次 renderDetail 的数据签名; 自动刷新时据此判定是否需要重渲染(避免打断下拉/hover)
+  reflectionCache: new Map(),// `${runId}|${botId}|${date}` -> BotReflection (sent.md/reply.json 切片,按日不变可缓存)
   lastRefreshAt: null,
   refreshError: null,
 }
@@ -284,6 +293,8 @@ function renderBotList(data){
     const stamp = runStamp(bot.runId)
     // 无法解析时间戳的 run 视为“跑测时间未知”,筛选时一律保留(不隐藏),避免误丢数据。
     if (since && stamp && stamp.date < since) { hidden++; return '' }
+    // “正在跑”筛选:只保留当前 status=running 的 run 所含的 bot。
+    if (state.onlyRunning && !state.runningBots.has(bot.botId)) { hidden++; return '' }
     const retCls = bot.cumulativeReturnPct > 0 ? 'gain' : bot.cumulativeReturnPct < 0 ? 'loss' : 'flat'
     const selected = bot.botId === state.selected ? ' active' : ''
     const stampText = stamp ? `跑于 ${stamp.short}` : '跑测时间未知'
@@ -291,7 +302,8 @@ function renderBotList(data){
     const fundHtml = `<span class="bot-row-fund${fi.empty ? ' fund-empty' : ''}" title="${esc(fi.title)}">${esc(fi.label)}</span>`
     return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><div class="bot-row-main"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-stamp">${esc(stampText)}</span></div>${fundHtml}<span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
   }).join('')
-  root.innerHTML = rows + (hidden > 0 ? `<div class="bot-hidden-note">更早的 ${hidden} 个 bot 已隐藏</div>` : '')
+  const hiddenNote = state.onlyRunning ? `已隐藏 ${hidden} 个未在跑的 bot` : `更早的 ${hidden} 个 bot 已隐藏`
+  root.innerHTML = rows + (hidden > 0 ? `<div class="bot-hidden-note">${hiddenNote}</div>` : '')
   root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => { void selectBot(el.dataset.bot) }))
   syncFilterControls()
 }
@@ -302,8 +314,10 @@ function syncFilterControls(){
   if (clearBtn) clearBtn.hidden = !since
   const inp = byId('botSinceIn')
   if (inp && inp.value !== (since || '')) inp.value = since || ''
-  document.querySelectorAll('.bot-quick-btn').forEach(b =>
+  document.querySelectorAll('.bot-quick-btn[data-since-days]').forEach(b =>
     b.classList.toggle('active', !!since && shDateDaysAgo(Number(b.dataset.sinceDays)) === since))
+  const runBtn = byId('botRunningBtn')
+  if (runBtn) runBtn.classList.toggle('active', state.onlyRunning)
 }
 const STACK_PALETTE = [
   '#6cd0ea', '#c084fc', '#f59e0b', '#22c55e',
@@ -580,6 +594,7 @@ function attachCursor(detailRoot, bot, chartCtx){
     const body = byId('holdingsBody')
     if (title) title.textContent = '最新持仓'
     if (body) body.innerHTML = renderHoldings(bot)
+    scheduleReflection(bot, state.reflectionPinned || bot.latestTradeDate)  // 回落到钉住日,否则最新日
   }
 
   function drawCursor(axisIdx){
@@ -671,6 +686,9 @@ function attachCursor(detailRoot, bot, chartCtx){
     const body = byId('holdingsBody')
     if (title) title.textContent = `持仓快照（${date}）`
     if (body) body.innerHTML = renderHoldings(bot, date)
+
+    // 反思面板联动到光标所在交易日(防抖+缓存,见 scheduleReflection)
+    scheduleReflection(bot, date)
   }
 
   function onMove(e){
@@ -776,7 +794,91 @@ function renderActions(bot){
     return `<tr class="action-row${expanded ? ' expanded' : ''}" data-action-id="${esc(aid)}"><td>${esc(a.action_date)}</td><td>${esc(a.fund_name)}<div style="color:var(--dim);font-size:11px">${esc(a.fund_code)}</div></td><td><span class="row-badge ${a.side}">${esc(sideLabel)}</span></td><td class="num">¥${fmtMoney(a.amount || 0)}</td><td class="num">${fmtMoney(a.shares || 0)}</td><td class="num">${fmtNav(a.nav_used)}</td><td class="num"><span style="color:${deltaColor}">${deltaSign}${deltaPct.toFixed(1)}%</span></td><td class="num">${afterPct.toFixed(1)}%</td><td class="num"><span class="action-chevron">▸</span></td></tr><tr class="reason-row" data-action-id="${esc(aid)}"${expanded ? '' : ' hidden'}><td colspan="9">${reasonHtml}</td></tr>`
   }).join('')}</tbody></table>`
 }
+// ---- 当日反思面板（交易记忆窗口 / 市场环境判断 / 当天决策）----
+const REFLECTION_TABS = [['memory', '交易记忆窗口'], ['decision', '当天决策']]
+// 极简 markdown 渲染：够展示反思笔记的 ###/##/> 引用/- 列表/**粗体**，不引第三方库。
+// 表格(| … |)会落到普通段落,可读即可。先按行识别前缀,再 esc 内容防 XSS。
+function mdLite(text){
+  if (!text) return ''
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  return text.split('\n').map(raw => {
+    const line = raw.replace(/\s+$/, '')
+    if (!line.trim()) return '<div class="rfl-sp"></div>'
+    if (line.startsWith('### ')) return `<div class="rfl-h3">${inline(line.slice(4))}</div>`
+    if (line.startsWith('## ')) return `<div class="rfl-h2">${inline(line.slice(3))}</div>`
+    if (line.startsWith('# ')) return `<div class="rfl-h2">${inline(line.slice(2))}</div>`
+    if (line.startsWith('> ')) return `<div class="rfl-quote">${inline(line.slice(2))}</div>`
+    const li = line.match(/^(\s*)- (.*)$/)
+    if (li) return `<div class="rfl-li" style="padding-left:${Math.floor(li[1].length / 2) * 12 + 12}px">• ${inline(li[2])}</div>`
+    return `<div class="rfl-p">${inline(line)}</div>`
+  }).join('')
+}
+function reflectionKey(bot, date){ return `${bot.runId}|${bot.botId}|${date}` }
+// 交易记忆窗口只保留 4 维度压缩笔记：碰到第一个"原样保留/在此之后新增…（原样）"分隔标题就截断,
+// 后面那些逐日 tool_call 流水(todo_write/sector_market…)不展示。建仓首日整段就是原样、没有压缩笔记,
+// 此时(截断点≤标题行)回退展示原文,免得截成空白。
+function clipMemoryWindow(txt){
+  if (!txt) return txt
+  const lines = txt.split('\n')
+  const cut = lines.findIndex(l => /^###\s*(在此之后新增|最近).*原样/.test(l.trim()))
+  if (cut <= 1) return txt
+  return lines.slice(0, cut).join('\n').replace(/\s+$/, '') + '\n\n> （已折叠最近"原样"交易日的逐日明细，仅保留 4 维度压缩笔记）'
+}
+function renderReflectionPanel(bot){
+  const dates = (bot.series || []).map(p => p.trade_date)
+  if (state.reflectionPinned && !dates.includes(state.reflectionPinned)) state.reflectionPinned = null  // 钉住日不属于本 bot → 清掉
+  let date = state.reflectionPinned || state.reflectionDate
+  if (!date || !dates.includes(date)) date = bot.latestTradeDate  // 切 bot/超出区间 → 回落到最新日
+  state.reflectionDate = date
+  const tabs = REFLECTION_TABS.map(([k, label]) => `<button data-rfl-tab="${k}"${state.reflectionTab === k ? ' class="active"' : ''}>${label}</button>`).join('')
+  const dateOpts = ['<option value="">最新 / 跟随光标</option>']
+    .concat(dates.slice().reverse().map(d => `<option value="${esc(d)}"${state.reflectionPinned === d ? ' selected' : ''}>${esc(d)}</option>`))
+    .join('')
+  return `<div class="panel panel-reflection" id="reflectionPanel"><div class="reflection-head"><h2 id="reflectionTitle">当日反思 · ${esc(date || '--')}</h2><select class="rfl-date-sel" id="reflectionDateSel" title="跳到指定交易日（钉住，hover 临时覆盖）">${dateOpts}</select><div class="reflection-tabs">${tabs}</div><button class="rfl-fs-btn" id="reflectionFsBtn" title="全屏 / 退出全屏">⛶</button></div><div class="reflection-body" id="reflectionBody"><div class="empty">加载中…</div></div></div>`
+}
+function paintReflection(bot){
+  const body = byId('reflectionBody'); const title = byId('reflectionTitle')
+  if (!body) return
+  const date = state.reflectionDate
+  if (title) title.textContent = `当日反思 · ${date}${date === bot.latestTradeDate ? '（最新）' : ''}${state.reflectionPinned ? ' · 已钉住' : ''}`
+  const data = state.reflectionCache.get(reflectionKey(bot, date))
+  if (!data){ body.innerHTML = '<div class="empty">加载中…</div>'; return }
+  const raw = { memory: data.memoryWindow, decision: data.decision }[state.reflectionTab] || ''
+  const txt = state.reflectionTab === 'memory' ? clipMemoryWindow(raw) : raw
+  const hint = { memory: '当日无交易记忆窗口（建仓首日或旧 run 未启用）', decision: '当日无决策回复记录' }[state.reflectionTab]
+  body.innerHTML = txt ? mdLite(txt) : `<div class="empty">${hint}</div>`
+}
+let _rflTimer = null
+// 光标在净值曲线上移动会高频触发——标题即时更新(cheap),内容请求做 160ms 防抖 + 按日缓存。
+function scheduleReflection(bot, date){
+  state.reflectionDate = date
+  const title = byId('reflectionTitle')
+  if (title) title.textContent = `当日反思 · ${date}${date === bot.latestTradeDate ? '（最新）' : ''}`
+  if (state.reflectionCache.has(reflectionKey(bot, date))){ paintReflection(bot); return }
+  clearTimeout(_rflTimer)
+  _rflTimer = setTimeout(() => { void loadReflectionForDate(bot, date) }, 160)
+}
+async function loadReflectionForDate(bot, date){
+  const key = reflectionKey(bot, date)
+  if (!state.reflectionCache.has(key)){
+    const empty = { tradeDate: date, memoryWindow: '', beliefBlock: '', decision: '' }
+    try {
+      const r = await fetch(`/api/backtest/bot-reflection?bot_id=${encodeURIComponent(bot.botId)}&run_id=${encodeURIComponent(bot.runId)}&trade_date=${encodeURIComponent(date)}`, { cache: 'no-store' })
+      state.reflectionCache.set(key, r.ok ? await r.json() : empty)
+    } catch { state.reflectionCache.set(key, empty) }
+  }
+  if (state.reflectionDate === date) paintReflection(bot)  // 防止过期 hover 覆盖当前
+}
+// 详情区"是否需要重渲染"的数据签名:只在选中 bot / run / 关键指标 / 区间筛选变化时变。
+// 自动刷新(10s)拿它和上次比,相同就跳过 renderDetail——否则整块 innerHTML 重建会把用户正在
+// 操作的原生下拉框、hover、滚动位置全打断(表现为"下拉框自动滑回最前面")。
+function botRenderSig(bot){
+  return [bot.botId, bot.runId, bot.latestTradeDate, bot.days, bot.actionCount, bot.holdingsCount,
+    Number(bot.netValue).toFixed(6), Number(bot.totalValue).toFixed(2),
+    state.rangePreset, state.rangeFrom, state.rangeTo].join('|')
+}
 function renderDetail(bot){
+  state._lastDetailSig = botRenderSig(bot)
   const reg = bot.reviews[bot.reviews.length - 1]
   // 最大亏损：全区间相对建仓初值的最深浮亏（区别于从峰值起算的最大回撤）
   const _maxLoss = computeMetrics(bot.series || []).maxLoss
@@ -792,8 +894,9 @@ function renderDetail(bot){
   const chartHtml = typeof chartData === 'string'
     ? chartData
     : chartData.html + renderPositionChart(bot, chartData.dateToIdx, chartData.xAxisDates)
-  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
+  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div><div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>${renderReflectionPanel(bot)}`
   if (typeof chartData !== 'string') attachCursor(byId('detailRoot'), bot, chartData)
+  if (state.reflectionDate) void loadReflectionForDate(bot, state.reflectionDate)  // 渲染后拉当前日反思(默认最新日)
 }
 async function hydrateBotByIndex(idx){
   if (idx < 0 || !state.data?.bots[idx]) return null
@@ -942,7 +1045,14 @@ async function refreshData({ initial = false } = {}){
   renderBotList(state.data)
   const idx = state.data.bots.findIndex(b => b.botId === state.selected)
   const bot = await hydrateBotByIndex(idx) || state.data.bots[0]
-  if (bot) renderDetail(bot)
+  if (bot) {
+    // 自动刷新时只在数据真正变化、且用户没在操作详情区下拉框时才重渲染——避免打断交互。
+    const domBotId = byId('detailRoot')?.querySelector('.detail-title')?.textContent
+    const ae = document.activeElement
+    const interacting = ae && ae.tagName === 'SELECT' && byId('detailRoot')?.contains(ae)
+    const changed = domBotId !== bot.botId || botRenderSig(bot) !== state._lastDetailSig
+    if (initial || (changed && !interacting)) renderDetail(bot)
+  }
   updateRefreshBadge()
 }
 // ---- live run control ------------------------------------------------------
@@ -971,7 +1081,10 @@ async function refreshRuns(){
     const res = await fetch('/api/backtest/runs', { cache: 'no-store' })
     if (!res.ok) return
     const { runs } = await res.json()
+    // 收集 status=running 的 run 所含 botId,供“正在跑”筛选使用。
+    state.runningBots = new Set((runs || []).filter(r => r.status === 'running').flatMap(r => r.bots || []))
     renderRuns(runs)
+    if (state.onlyRunning && state.data) renderBotList(state.data)
   } catch { /* ignore — leave the panel as-is until the next poll */ }
 }
 async function runControl(act, runId, btn){
@@ -1003,6 +1116,13 @@ document.addEventListener('change', (e) => {
     switchBotRun(botId, runId).catch(err => { byId('detailRoot').innerHTML = `<div class="empty">${esc(err.message || String(err))}</div>` })
     return
   }
+  if (e.target.id === 'reflectionDateSel') {
+    const v = e.target.value
+    state.reflectionPinned = v || null  // 空 = 取消钉住,回到跟随光标/最新
+    const bot = state.data?.bots.find(b => b.botId === state.selected)
+    if (bot) scheduleReflection(bot, v || bot.latestTradeDate)
+    return
+  }
   if (e.target.id === 'botSinceIn') {
     state.botSince = e.target.value || null
     if (state.data) renderBotList(state.data)
@@ -1022,6 +1142,12 @@ document.addEventListener('click', (e) => {
     void runControl(runBtn.dataset.runAct, runBtn.dataset.runId, runBtn)
     return
   }
+  const runningToggle = e.target.closest?.('#botRunningBtn')
+  if (runningToggle) {
+    state.onlyRunning = !state.onlyRunning
+    if (state.data) renderBotList(state.data)
+    return
+  }
   const quick = e.target.closest?.('.bot-quick-btn')
   if (quick) {
     const since = shDateDaysAgo(Number(quick.dataset.sinceDays))
@@ -1032,6 +1158,18 @@ document.addEventListener('click', (e) => {
   if (e.target.id === 'botSinceClear') {
     state.botSince = null
     if (state.data) renderBotList(state.data)
+    return
+  }
+  if (e.target.closest?.('#reflectionFsBtn')) {
+    byId('reflectionPanel')?.classList.toggle('fullscreen')
+    return
+  }
+  const rflTab = e.target.closest?.('.reflection-tabs button[data-rfl-tab]')
+  if (rflTab) {
+    state.reflectionTab = rflTab.dataset.rflTab
+    rflTab.parentElement.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === rflTab))
+    const bot = state.data?.bots.find(b => b.botId === state.selected)
+    if (bot) paintReflection(bot)  // 同日切 tab,缓存已有,直接重绘
     return
   }
   const btn = e.target.closest?.('.range-presets button[data-range]')
@@ -1064,6 +1202,9 @@ document.addEventListener('click', (e) => {
     }
     return
   }
+})
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') byId('reflectionPanel')?.classList.remove('fullscreen')  // Esc 退出反思面板全屏
 })
 boot().catch(err => { byId('detailRoot').innerHTML = `<div class="empty">${esc(err.message || String(err))}</div>` })
 </script>
