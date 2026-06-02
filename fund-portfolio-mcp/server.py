@@ -4341,57 +4341,44 @@ async def upsert_fund_top_stocks(stocks_json: str) -> str:
 
 
 # ============================================================
-# G2. 从 research-mcp 自动拉取并落库 (admin 一键扩 lab)
+# G2. 从 ttjj-api 自动拉取并落库 (admin 一键扩 lab)
 # ============================================================
 
-_RESEARCH_MCP_URL = os.getenv("RESEARCH_MCP_URL", "http://research-mcp.jijinmima.cn/mcp")
-_RESEARCH_MCP_HEADERS = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/event-stream",
-}
-_RESEARCH_MCP_TIMEOUT = 120
+_TTJJ_API_URL = os.getenv("TTJJ_API_URL", "http://ttjj-data-api.jijinmima.cn").rstrip("/")
+_TTJJ_API_HEADERS = {"Content-Type": "application/json"}
+_TTJJ_API_TIMEOUT = 120
 
 
-def _research_mcp_session(url: str = _RESEARCH_MCP_URL) -> dict:
-    """跟 research-mcp 建一次 streamable-http 会话，返回带 mcp-session-id 的 headers。"""
-    r = requests.post(url, json={
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                   "clientInfo": {"name": "fund-portfolio-mcp/upsert", "version": "1"}},
-    }, headers=_RESEARCH_MCP_HEADERS, timeout=20)
-    r.raise_for_status()
-    sid = r.headers.get("mcp-session-id", "")
-    h = dict(_RESEARCH_MCP_HEADERS)
-    if sid:
-        h["Mcp-Session-Id"] = sid
-        try:
-            requests.post(url, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
-                          headers=h, timeout=10)
-        except Exception:
-            pass
-    return h
-
-
-def _research_mcp_call(headers: dict, name: str, args: dict, url: str = _RESEARCH_MCP_URL, timeout: int = _RESEARCH_MCP_TIMEOUT) -> dict:
-    """调 research-mcp 的某 tool，解析 SSE/JSON 返回，拿 result.content[0].text 当 JSON 解析。"""
-    body = {"jsonrpc": "2.0", "id": 99, "method": "tools/call",
-            "params": {"name": name, "arguments": args}}
-    r = requests.post(url, json=body, headers=headers, timeout=timeout)
+def _ttjj_post(path: str, payload: dict, timeout: int = _TTJJ_API_TIMEOUT) -> dict:
+    """POST 到 ttjj-api 的某 REST 接口，返回解析后的 JSON。success=False 时抛错。"""
+    r = requests.post(f"{_TTJJ_API_URL}{path}", json=payload,
+                      headers=_TTJJ_API_HEADERS, timeout=timeout)
     r.raise_for_status()
     r.encoding = "utf-8"
-    for ln in r.text.split("\n"):
-        if ln.startswith("data: "):
-            d = json.loads(ln[6:])
-            if "error" in d:
-                raise RuntimeError(f"research-mcp error: {d['error']}")
-            content = d.get("result", {}).get("content", [])
-            if content:
-                text = content[0].get("text", "")
-                try:
-                    return json.loads(text)
-                except json.JSONDecodeError:
-                    return {"raw_text": text}
-    raise RuntimeError(f"research-mcp 无法解析响应: {r.text[:200]}")
+    data = r.json()
+    if isinstance(data, dict) and data.get("success") is False:
+        raise RuntimeError(f"ttjj-api error: {data.get('message') or data}")
+    return data
+
+
+def _ttjj_fund_basic_info(fund_code: str) -> dict | None:
+    """拿单只基金 basic-info dict（ttjj items 命中项），查不到返回 None。"""
+    resp = _ttjj_post("/api/fund/basic-info", {"fund_codes": [fund_code]})
+    items = resp.get("items") or []
+    for it in items:
+        if str(it.get("基金代码")) == str(fund_code):
+            return it
+    return items[0] if items else None
+
+
+def _norm_nav_date(s):
+    """净值日期统一成 YYYY-MM-DD（ttjj 已是该格式，YYYYMMDD 兜底转换）。"""
+    if not s:
+        return None
+    s = str(s).strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
 
 
 def _parse_float_safe(v):
@@ -4403,16 +4390,10 @@ def _parse_float_safe(v):
         return None
 
 
-def _fetch_one_fund_from_source(headers: dict, fund_code: str, start_date: str, end_date: str) -> dict:
-    """从 research-mcp 拉一只基金的元数据 + nav 区间数据。返回 {info: dict|None, nav_rows: [(date,nav,daily%)], ...}。
+def _fetch_one_fund_from_source(fund_code: str, start_date: str, end_date: str) -> dict:
+    """从 ttjj-api 拉一只基金的元数据 + nav 区间数据。返回 {info: dict|None, nav_rows: [(date,nav,daily%)], ...}。
     分段拉 nav 防 API timeout（每段 2 年）。失败时抛异常。"""
-    info_resp = _research_mcp_call(headers, "get_fund_info", {"fund_code": fund_code})
-    info_data = (info_resp.get("data") or {}).get(fund_code) or {}
-    cols = info_data.get("columns") or []
-    rows = info_data.get("data") or []
-    info_dict = None
-    if cols and rows and isinstance(rows[0], (list, tuple)):
-        info_dict = dict(zip(cols, rows[0]))
+    info_dict = _ttjj_fund_basic_info(fund_code)
 
     nav_rows: list[tuple] = []
     seen_dates: set[str] = set()
@@ -4420,27 +4401,30 @@ def _fetch_one_fund_from_source(headers: dict, fund_code: str, start_date: str, 
     end_d = datetime.strptime(end_date, "%Y-%m-%d").date()
     while chunk_start <= end_d:
         chunk_end = min(chunk_start + timedelta(days=365 * 2), end_d)
-        nav_resp = _research_mcp_call(headers, "get_fund_nav_and_return", {
-            "fund_code": fund_code,
+        nav_resp = _ttjj_post("/api/fund/nav", {
+            "fund_codes": [fund_code],
             "start_date": chunk_start.strftime("%Y-%m-%d"),
             "end_date": chunk_end.strftime("%Y-%m-%d"),
         })
-        d = nav_resp.get("data") or {}
-        cols = d.get("columns") or []
-        nav_data = d.get("data") or []
-        if cols:
-            idx = {c: i for i, c in enumerate(cols)}
-            di = idx.get("日期"); ni = idx.get("复权单位净值"); ri = idx.get("日收益率(%)")
-            for rec in nav_data:
-                if not isinstance(rec, (list, tuple)):
-                    continue
-                nav_date = rec[di] if di is not None and di < len(rec) else None
-                nav = _parse_float_safe(rec[ni]) if ni is not None and ni < len(rec) else None
-                if not nav_date or nav is None or nav_date in seen_dates:
-                    continue
-                seen_dates.add(nav_date)
-                daily = _parse_float_safe(rec[ri]) if ri is not None and ri < len(rec) else None
-                nav_rows.append((nav_date, nav, daily))
+        items = nav_resp.get("items") or []
+        recs: list = []
+        for it in items:
+            if str(it.get("基金代码")) == str(fund_code):
+                recs = it.get("净值记录") or []
+                break
+        else:
+            if items:
+                recs = items[0].get("净值记录") or []
+        for rec in recs:
+            if not isinstance(rec, dict):
+                continue
+            nav_date = _norm_nav_date(rec.get("交易日期"))
+            nav = _parse_float_safe(rec.get("复权单位净值"))
+            if not nav_date or nav is None or nav_date in seen_dates:
+                continue
+            seen_dates.add(nav_date)
+            daily = _parse_float_safe(rec.get("日收益率"))
+            nav_rows.append((nav_date, nav, daily))
         chunk_start = chunk_end + timedelta(days=1)
     nav_rows.sort(key=lambda x: x[0])
     return {"info": info_dict, "nav_rows": nav_rows}
@@ -4449,18 +4433,17 @@ def _fetch_one_fund_from_source(headers: dict, fund_code: str, start_date: str, 
 def _do_upsert_funds(fund_codes: list[str], start_date: str, end_date: str) -> dict:
     """实际批量执行：每只独立拉取/写库，错误隔离；返回 ok/errors 列表 + 总写入计数。"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    headers = _research_mcp_session()
     ok_results = []
     errors = []
     total_info_upserted = 0
     total_nav_upserted = 0
     for fc in fund_codes:
         try:
-            fetched = _fetch_one_fund_from_source(headers, fc, start_date, end_date)
+            fetched = _fetch_one_fund_from_source(fc, start_date, end_date)
             info = fetched["info"]
             nav_rows = fetched["nav_rows"]
             if not info and not nav_rows:
-                raise RuntimeError("research-mcp 既无元数据也无净值")
+                raise RuntimeError("ttjj-api 既无元数据也无净值")
             with get_conn() as conn:
                 info_written = 0
                 if info:
@@ -4539,14 +4522,14 @@ def _default_dates(start_date: str, end_date: str, info_established: str | None 
 
 @writer_tool
 async def upsert_fund_from_source(fund_code: str, start_date: str = "", end_date: str = "") -> str:
-    """[admin] 从 research-mcp 拉单只基金的元数据 + 净值，落进本地 fund.db (fund_info + fund_nav)。
+    """[admin] 从 ttjj-api 拉单只基金的元数据 + 净值，落进本地 fund.db (fund_info + fund_nav)。
 
     场景：lab 里要新加一只基金、或刷新某只已有基金的最新净值。
-    数据源：research-mcp 的 get_fund_info / get_fund_nav_and_return（http://research-mcp.jijinmima.cn/mcp）。
+    数据源：ttjj-api 的 /api/fund/basic-info / /api/fund/nav（http://ttjj-data-api.jijinmima.cn）。
 
     传入：
       fund_code   6 位基金代码
-      start_date  净值起始日 YYYY-MM-DD；不传 = 自动取 research-mcp 报的成立日；都没有则取 5 年前
+      start_date  净值起始日 YYYY-MM-DD；不传 = 自动取 ttjj-api 报的成立日；都没有则取 5 年前
       end_date    净值截止日 YYYY-MM-DD；不传 = 今天
 
     行为：
@@ -4557,25 +4540,17 @@ async def upsert_fund_from_source(fund_code: str, start_date: str = "", end_date
     返回：success + 单只 fund 的 ok 详情（fund_name / fund_type / info_upserted / nav_upserted /
           nav_first / nav_last）；失败时 success=False + reason。
 
-    费率说明：mgmt_fee / custody_fee / purchase_fee / sales_service_fee 直接落 research-mcp 提供的值
+    费率说明：mgmt_fee / custody_fee / purchase_fee / sales_service_fee 直接落 ttjj-api 提供的值
     （百分比数，0.15 = 0.15%）。redeem_fee_json 默认留空，要自定义阶梯请另调 upsert_fund_fees。
-    ETF 类（基金名/类型含 'ETF'）的 purchase_fee 若 research-mcp 报 None，自动落 0。"""
+    ETF 类（基金名/类型含 'ETF'）的 purchase_fee 若 ttjj-api 报 None，自动落 0。"""
     if not fund_code:
         return json.dumps({"success": False, "message": "fund_code 必填"}, ensure_ascii=False)
-    # 先用 research-mcp 报的成立日决定 start_date 默认值
-    headers = _research_mcp_session()
-    info_resp = None
+    # 先用 ttjj-api 报的成立日决定 start_date 默认值
     try:
-        info_resp = _research_mcp_call(headers, "get_fund_info", {"fund_code": fund_code})
+        info_map = _ttjj_fund_basic_info(fund_code)
     except Exception as exc:
-        return json.dumps({"success": False, "fund_code": fund_code, "reason": f"get_fund_info 失败: {exc}"}, ensure_ascii=False)
-    info_data = (info_resp.get("data") or {}).get(fund_code) or {}
-    cols = info_data.get("columns") or []
-    rows = info_data.get("data") or []
-    established = None
-    if cols and rows and isinstance(rows[0], (list, tuple)):
-        info_map = dict(zip(cols, rows[0]))
-        established = info_map.get("成立时间")
+        return json.dumps({"success": False, "fund_code": fund_code, "reason": f"basic-info 失败: {exc}"}, ensure_ascii=False)
+    established = (info_map or {}).get("成立时间")
     s, e = _default_dates(start_date, end_date, established)
 
     result = _do_upsert_funds([fund_code], s, e)
@@ -4596,9 +4571,9 @@ async def upsert_funds_from_source(fund_codes_json: str, start_date: str = "", e
       fund_codes_json  JSON 数组字符串，如 '["510300","021985","006729"]'
       start_date       全部基金共用的净值起点；不传 = 5 年前
       end_date         全部基金共用的净值终点；不传 = 今天
-                       （单只基金成立日晚于 start_date 时 research-mcp 自然返回较少行，不报错）
+                       （单只基金成立日晚于 start_date 时 ttjj-api 自然返回较少行，不报错）
 
-    行为：对每只 fund_code 独立拉取 + 写库；研究 MCP 返回失败 / 抛异常时记 errors 不阻断其余。
+    行为：对每只 fund_code 独立拉取 + 写库；ttjj-api 返回失败 / 抛异常时记 errors 不阻断其余。
 
     返回：
       ok_count / error_count

@@ -79,7 +79,7 @@ mem0_search(query: "黄金ETF写过哪些角度", scope: "self")
 ## Tool Priority
 
 1. **memory** → check history first, update incrementally
-2. **research-mcp** → financial data
+2. **simworld-data**（ttjj 研究数据）→ financial data
 3. **browser** → Xueqiu, EastMoney research reports, etc.
 4. **MCP search** → supplementary search, overseas data
 5. **xiaohongshu-mcp** → note management, interactions
@@ -137,7 +137,7 @@ browser_close(profile: "bot9")
 
 ## Tushare Pro API
 
-用于获取**当日实时**大盘指数行情（research-mcp 的指数数据有 T+1 延迟）。
+用于获取**当日实时**大盘指数行情（simworld-data 的指数数据有 T+1 延迟）。
 
 - **Token**: `ed396239156fa590b3730414be7984b029e021c3531e419f6bc170d4`
 - **API 地址**: `https://api.tushare.pro`（HTTP POST，JSON 格式）
@@ -197,7 +197,7 @@ npx mcporter call "fund-selector.select_funds(directions: '科技,新能源', li
 bot9 角色：**content_creator**（基础行情查询）
 
 ```
-npx mcporter call "research-mcp.tool_name(...)"
+mcp__simworld_data__<tool_name>(...)   # 经 simworld-data 调研究数据
 ```
 
 可用范围：基础行情报价。高级数据（Tushare 全量、研报等）需通过消息总线请求 bot7/bot8。

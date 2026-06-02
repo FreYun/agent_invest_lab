@@ -130,4 +130,4 @@ Composite_z = w_val·z_val + w_earn·z_earn + w_liq·z_liq + w_macro·z_macro + 
 
 ---
 
-数据缺失时：`research-mcp` / `ttjj_data_pit_mcp` 兜底查历史；**Doris 后端超时就当没有该数据、换口径或跳过，绝不写 retry 循环反复捶**。当前读数与逐项核验见研究底稿《沪深300研究方法论深度分析》。
+数据缺失时：`simworld-data` / `ttjj_data_pit_mcp` 兜底查历史；**Doris 后端超时就当没有该数据、换口径或跳过，绝不写 retry 循环反复捶**。当前读数与逐项核验见研究底稿《沪深300研究方法论深度分析》。

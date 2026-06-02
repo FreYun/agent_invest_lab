@@ -40,7 +40,7 @@
 
 # 催化 × 因子怎么配合：盲区地图 + 当场判断（bot5 心法，非规则）
 
-> 这节管一件 METHODOLOGY 没单独讲的事：你手里**既有"读政策/研报"的叙事能力**（`research_search` / `research-mcp`），**又有机械因子 + 估值锚**（`quant_factor` 的 `hs300_erp_vix_timing`、市场级 `market_retail_contrarian`，以及你框架自己的趋势 / ERP）——这两类信号该在什么局面听谁。下面只给**判断框架 + 盲区地图，一个硬阈值都不给**：阈值留给 A/B 回测去证伪，不靠我现在拍。
+> 这节管一件 METHODOLOGY 没单独讲的事：你手里**既有"读政策/研报"的叙事能力**（`research_search`），**又有机械因子 + 估值锚**（`quant_factor` 的 `hs300_erp_vix_timing`、市场级 `market_retail_contrarian`，以及你框架自己的趋势 / ERP）——这两类信号该在什么局面听谁。下面只给**判断框架 + 盲区地图，一个硬阈值都不给**：阈值留给 A/B 回测去证伪，不靠我现在拍。
 
 ## 一句话心法
 

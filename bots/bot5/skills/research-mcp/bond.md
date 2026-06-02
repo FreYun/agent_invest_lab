@@ -1,43 +1,14 @@
-# 债券工具详细参数
+# 债券（bond）
 
-## 国债收益率
+国债收益率曲线 + 可转债。`bond_yield_curve` 的 `curve_type` 支持 cn/us/credit，`maturities` 必填。
 
-### `get_cn_bond_yield` — 中国国债收益率
-- `maturity*`: 期限，逗号分隔。如 "10Y,5Y,2Y,1Y"（大写）
-- `start_date`, `end_date`: YYYYMMDD，默认近1月
-- 返回：每日收益率数据
+调用：`mcp__simworld_data__<工具名>(...)`；**`simulated_datetime` 由 proxy 自动注入，勿传**。精确 schema 见 `tools-catalog.json`。
 
-### `get_us_bond_yield` — 美国国债收益率
-- `maturity*`: 如 "10Y,2Y"（大写）
-- `start_date`, `end_date`: YYYYMMDD
+## bond — 债券：国债收益率曲线 + 可转债分析/配置利差/转股溢价
 
-## 信用债
-
-### `get_credit_bond_yield` — 中债信用债收益率
-- `maturity*`: 期限用**小写**，如 "3y,5y,10y"
-  - 可选：1y, 2y, 3y, 4y, 5y, 6y, 7y, 8y, 9y, 10y, 15y, 20y, 30y
-- `start_date`, `end_date`: YYYYMMDD
-
-## 利差
-
-### `get_bond_yield_spread` — 利差查询
-- `spread_type`: **必须**是以下两个值之一：
-  - `"cn_vs_us"` — 中美利差（中国国债 - 美国国债），maturity 用大写如 "10Y"
-  - `"credit_vs_cn"` — 信用利差（信用债 - 中国国债），maturity 用小写如 "5y"
-- `maturity`: 见上
-- `start_date`, `end_date`: YYYYMMDD
-- `include_raw_data`: 默认 true，是否包含原始收益率
-
-### `get_bond_yield_comparison` — 债券收益率对比
-- `bond_type`: 如 "国债"
-- `maturity`: 如 "10Y"
-- 返回：对比数据
-
-## 期限格式速记
-
-| 场景 | 格式 | 示例 |
-|------|------|------|
-| 国债（中/美） | 大写 | 10Y, 5Y, 2Y, 1Y |
-| 信用债 | 小写 | 10y, 5y, 3y, 1y |
-| 中美利差 maturity | 大写 | 10Y, 5Y, 3M |
-| 信用利差 maturity | 小写 | 10y, 5y, 3y |
+| 工具 | 说明 | 主要参数 |
+|------|------|---------|
+| `bond_yield_curve` | 国债收益率曲线（PIT，走 researchdata.dwd_bd_yield_curve_standard）。 | **maturities**, curve_type, start_date, end_date |
+| `convertible_bond_analysis` | 可转债分析（PIT，双模式，L1）。底表 researchdata.dwd_bd_trd_convert ⟕ dim_bd_info。 | bond_codes, start_date, end_date, order_by, order_dir, top_n |
+| `convertible_bond_market_spread` | 转债配置利差（PIT，L1）。底表 researchdata.dwa_bd_cvt_mkt_yield_spread。 | start_date, end_date |
+| `convertible_bond_premium_estimate` | 转债百元券转股溢价率估计（PIT，L1）。底表 researchdata.dwa_bd_cvt_premium_rates。 | start_date, end_date |

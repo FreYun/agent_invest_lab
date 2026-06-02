@@ -261,4 +261,4 @@ Composite_z = w_liq·z_liq + w_earn·z_earn + w_val·z_val + w_sent·z_sent + w_
 
 ---
 
-数据缺失时：`research-mcp` / `ttjj_data_pit_mcp` 兜底查历史；**Doris 后端超时就当没有该数据、换口径或跳过，绝不写 retry 循环反复捶**。客观择时第二意见走 `simworld-mcp.quant_factor`（见三-A）。当前读数与逐项核验见研究底稿《中证1000研究方法论深度分析》（待补）。
+数据缺失时：`simworld-data` / `ttjj_data_pit_mcp` 兜底查历史；**Doris 后端超时就当没有该数据、换口径或跳过，绝不写 retry 循环反复捶**。客观择时第二意见走 `simworld-mcp.quant_factor`（见三-A）。当前读数与逐项核验见研究底稿《中证1000研究方法论深度分析》（待补）。

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-基金池入库脚本：从 xlsx 只取基金代码，其余信息全部走 research-mcp 拉取并补全到 fund.db。
+基金池入库脚本：从 xlsx 只取基金代码，其余信息全部走 ttjj-api 拉取并补全到 fund.db。
 
 写入三张表：
-- fund_info          基本信息（get_fund_info）
-- fund_performance   分区间业绩（get_fund_performance），as_of_date = end_date
-- fund_nav           复权净值（get_fund_nav_and_return），start_date..end_date
+- fund_info          基本信息（/api/fund/basic-info）
+- fund_performance   分区间业绩（/api/fund/performance），as_of_date = end_date
+- fund_nav           复权净值（/api/fund/nav），start_date..end_date
 
 合并语义（不替换）：
 - 新增 xlsx 里有、库里没有的基金；刷新两边都有的基金。
@@ -13,7 +13,7 @@
 - fund_info 用 ON CONFLICT 只更新本脚本拉到的列，保留已有的 redeem_fee_json / theme /
   share_class / purchase_status / redeem_status。
 
-数据源：research-mcp（http://research-mcp.jijinmima.cn/mcp）
+数据源：ttjj-api（http://ttjj-data-api.jijinmima.cn）
 
 用法：
   python3 scripts/fund-pool-ingest.py --start-date 2024-01-01            # 全量，end 默认今天
@@ -29,8 +29,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
+import os
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
@@ -40,14 +40,11 @@ import requests
 DB_PATH = "/home/rooot/agent_invest_lab/data/fund.db"
 XLSX_PATH = "/home/rooot/agent_invest_lab/data/被动指数型基金池（权益黄金）.xlsx"
 LOG_PATH = "/home/rooot/agent_invest_lab/logs/fund-pool-ingest.log"
-RESEARCH_MCP_URL = "http://research-mcp.jijinmima.cn/mcp"
-MCP_TIMEOUT = 120
-MCP_HEADERS = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/event-stream",
-}
+TTJJ_API_URL = os.getenv("TTJJ_API_URL", "http://ttjj-data-api.jijinmima.cn").rstrip("/")
+API_TIMEOUT = 120
+API_HEADERS = {"Content-Type": "application/json"}
 
-# research-mcp 周期名称 -> fund_performance.period 代码（今年以来无对应列，不入库）
+# ttjj-api 周期名称 -> fund_performance.period 代码（今年以来无对应列，不入库）
 PERIOD_NAME_MAP = {
     "近一月": "1m",
     "近三月": "3m",
@@ -57,8 +54,6 @@ PERIOD_NAME_MAP = {
     "近三年": "3y",
     "近五年": "5y",
 }
-
-_SESSIONS: dict[str, str] = {}
 
 Path(LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
 log = logging.getLogger("fund-pool-ingest")
@@ -73,73 +68,27 @@ if not log.handlers:
     log.propagate = False
 
 
-# ----------------------------- MCP -----------------------------
-def mcp_init(url: str) -> bool:
-    body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "fund-pool-ingest", "version": "1.0"},
-        },
-    }
-    try:
-        resp = requests.post(url, json=body, headers=MCP_HEADERS, timeout=10)
-        resp.raise_for_status()
-        sid = resp.headers.get("mcp-session-id", "")
-        if sid:
-            _SESSIONS[url] = sid
-            try:
-                requests.post(
-                    url,
-                    json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
-                    headers={**MCP_HEADERS, "Mcp-Session-Id": sid},
-                    timeout=10,
-                )
-            except Exception:
-                pass
-        log.info("MCP init ok: %s", url)
-        return True
-    except Exception as exc:
-        log.error("MCP init failed: %s", exc)
-        return False
-
-
-def mcp_call(url: str, tool_name: str, arguments: dict, timeout: int = MCP_TIMEOUT) -> dict:
-    body = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {"name": tool_name, "arguments": arguments},
-    }
-    headers = dict(MCP_HEADERS)
-    sid = _SESSIONS.get(url, "")
-    if sid:
-        headers["Mcp-Session-Id"] = sid
-    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+# ----------------------------- ttjj-api -----------------------------
+def ttjj_post(path: str, payload: dict, timeout: int = API_TIMEOUT) -> dict:
+    """POST 到 ttjj-api 的某 REST 接口，返回解析后的 JSON。success=False 时抛错。"""
+    resp = requests.post(f"{TTJJ_API_URL}{path}", json=payload, headers=API_HEADERS, timeout=timeout)
     resp.encoding = "utf-8"
     resp.raise_for_status()
-    for line in resp.text.split("\n"):
-        if line.startswith("data: "):
-            data = json.loads(line[6:])
-            content = data.get("result", {}).get("content", [])
-            if content:
-                text = content[0].get("text", "")
-                try:
-                    return json.loads(text)
-                except json.JSONDecodeError:
-                    return {"raw_text": text}
     data = resp.json()
-    content = data.get("result", {}).get("content", [])
-    if content:
-        text = content[0].get("text", "")
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return {"raw_text": text}
-    raise ValueError(f"无法解析 MCP 响应: {resp.text[:300]}")
+    if isinstance(data, dict) and data.get("success") is False:
+        raise ValueError(data.get("message") or f"ttjj-api {path} 返回失败")
+    return data
+
+
+def ttjj_health() -> bool:
+    try:
+        resp = requests.get(f"{TTJJ_API_URL}/health", headers=API_HEADERS, timeout=10)
+        resp.raise_for_status()
+        log.info("ttjj-api ok: %s", TTJJ_API_URL)
+        return True
+    except Exception as exc:
+        log.error("ttjj-api 不可达: %s", exc)
+        return False
 
 
 # --------------------------- helpers ---------------------------
@@ -203,26 +152,14 @@ def read_codes_from_xlsx(path: str) -> list[str]:
     return codes
 
 
-def row_to_map(rec: dict) -> dict:
-    """research-mcp 单基金 {columns:[...], data:[[...]]} -> 首行 dict（列名->值）。"""
-    cols = rec.get("columns") or []
-    data = rec.get("data") or []
-    if not data or not isinstance(data[0], (list, tuple)):
-        return {}
-    first = data[0]
-    return {cols[i]: first[i] for i in range(min(len(cols), len(first)))}
-
-
 # --------------------------- fetch+upsert: fund_info ---------------------------
 def fetch_info_batch(codes: list[str]) -> dict[str, dict]:
-    res = mcp_call(RESEARCH_MCP_URL, "get_fund_info", {"fund_code": ",".join(codes)})
-    if not res.get("success"):
-        raise ValueError(res.get("message", "get_fund_info 返回失败"))
+    res = ttjj_post("/api/fund/basic-info", {"fund_codes": list(codes)})
     out = {}
-    for code, rec in (res.get("data") or {}).items():
-        m = row_to_map(rec)
-        if m:
-            out[code] = m
+    for it in (res.get("items") or []):
+        code = str(it.get("基金代码") or "").strip()
+        if code:
+            out[code] = it
     return out
 
 
@@ -268,30 +205,25 @@ def upsert_info(conn: sqlite3.Connection, code: str, m: dict) -> None:
 
 
 # --------------------------- fetch+upsert: fund_performance ---------------------------
-def fetch_perf_batch(codes: list[str]) -> dict[str, dict]:
-    res = mcp_call(RESEARCH_MCP_URL, "get_fund_performance", {"fund_code": ",".join(codes)})
-    if not res.get("success"):
-        raise ValueError(res.get("message", "get_fund_performance 返回失败"))
-    return res.get("data") or {}
+def fetch_perf_batch(codes: list[str]) -> dict[str, list]:
+    res = ttjj_post("/api/fund/performance", {"fund_codes": list(codes)})
+    out = {}
+    for it in (res.get("items") or []):
+        code = str(it.get("基金代码") or "").strip()
+        if code:
+            out[code] = it.get("绩效记录") or []
+    return out
 
 
-def upsert_perf(conn: sqlite3.Connection, code: str, rec: dict, as_of_date: str) -> int:
-    cols = rec.get("columns") or []
-    data = rec.get("data") or []
-    if not data:
+def upsert_perf(conn: sqlite3.Connection, code: str, recs: list, as_of_date: str) -> int:
+    if not recs:
         return 0
-    ci = {n: i for i, n in enumerate(cols)}
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    def g(row, key):
-        i = ci.get(key)
-        return row[i] if i is not None and i < len(row) else None
-
     rows = []
-    for row in data:
-        if not isinstance(row, (list, tuple)):
+    for r in recs:
+        if not isinstance(r, dict):
             continue
-        period = PERIOD_NAME_MAP.get(g(row, "周期名称"))
+        period = PERIOD_NAME_MAP.get(r.get("周期名称"))
         if not period:  # 今年以来 等不入库
             continue
         rows.append(
@@ -299,13 +231,13 @@ def upsert_perf(conn: sqlite3.Connection, code: str, rec: dict, as_of_date: str)
                 code,
                 as_of_date,
                 period,
-                parse_float(g(row, "收益率")),
-                parse_float(g(row, "收益率排名百分比")),
-                g(row, "收益率排名"),
-                parse_float(g(row, "最大回撤")),
-                parse_float(g(row, "波动率")),
-                parse_float(g(row, "夏普比率")),
-                parse_float(g(row, "卡玛比率")),
+                parse_float(r.get("收益率")),
+                parse_float(r.get("收益率排名百分比")),
+                r.get("收益率排名"),
+                parse_float(r.get("最大回撤")),
+                parse_float(r.get("波动率")),
+                parse_float(r.get("夏普比率")),
+                parse_float(r.get("卡玛比率")),
                 now,
             )
         )
@@ -326,39 +258,37 @@ def upsert_perf(conn: sqlite3.Connection, code: str, rec: dict, as_of_date: str)
 
 # --------------------------- fetch+upsert: fund_nav ---------------------------
 def fetch_nav_rows(fund_code: str, start_date: str, end_date: str) -> list[dict]:
-    res = mcp_call(
-        RESEARCH_MCP_URL,
-        "get_fund_nav_and_return",
-        {"fund_code": fund_code, "start_date": start_date, "end_date": end_date},
+    res = ttjj_post(
+        "/api/fund/nav",
+        {"fund_codes": [fund_code], "start_date": start_date, "end_date": end_date},
     )
-    if not res.get("success"):
-        raise ValueError(res.get("message", "fund_nav 返回失败"))
-    data = res.get("data") or {}
-    columns = data.get("columns") or []
-    records = data.get("data") or []
-    idx = {name: i for i, name in enumerate(columns)}
-    ret_key = "日收益率(%)" if "日收益率(%)" in idx else ("日收益率" if "日收益率" in idx else None)
+    items = res.get("items") or []
+    records = []
+    for it in items:
+        if str(it.get("基金代码")) == str(fund_code):
+            records = it.get("净值记录") or []
+            break
+    else:
+        if items:
+            records = items[0].get("净值记录") or []
 
     out = []
     for rec in records:
-        if not isinstance(rec, (list, tuple)):
+        if not isinstance(rec, dict):
             continue
-        nav_date = rec[idx["日期"]] if "日期" in idx and idx["日期"] < len(rec) else None
+        nav_date = rec.get("交易日期")
+        if nav_date and len(str(nav_date)) == 8 and str(nav_date).isdigit():
+            s = str(nav_date)
+            nav_date = f"{s[:4]}-{s[4:6]}-{s[6:]}"
         if not nav_date:
             continue
         out.append(
             {
                 "fund_code": fund_code,
                 "nav_date": nav_date,
-                "nav": parse_float(
-                    rec[idx["复权单位净值"]]
-                    if "复权单位净值" in idx and idx["复权单位净值"] < len(rec)
-                    else None
-                ),
+                "nav": parse_float(rec.get("复权单位净值")),
                 "acc_nav": None,
-                "daily_return_pct": parse_float(
-                    rec[idx[ret_key]] if ret_key and idx[ret_key] < len(rec) else None
-                ),
+                "daily_return_pct": parse_float(rec.get("日收益率")),
             }
         )
     return out
@@ -528,7 +458,7 @@ def main() -> int:
         return 0
     log.info("待处理基金: %d 只 | 净值 %s..%s | 业绩 as_of=%s", len(codes), start_date, end_date, end_date)
 
-    if not mcp_init(RESEARCH_MCP_URL):
+    if not ttjj_health():
         return 2
 
     info_failed: list[str] = []

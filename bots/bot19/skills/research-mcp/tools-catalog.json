@@ -1,406 +1,1002 @@
 {
-  "generated_at": "2026-04-07T17:15:16.870024",
-  "upstream_url": "http://research-mcp.jijinmima.cn/mcp",
+  "generated_from": "simworld-data (ttjj / 天天基金, http://127.0.0.1:18078/mcp)",
+  "note": "时点参数 simulated_datetime 由 world simworld-proxy 自动注入，bot 调用时不要传；其余 date/start_date/end_date 等照常传。",
   "categories": {
-    "market_ashares": {
-      "description": "A股市场行情、指数、估值、成交额、恐慌指数、市场温度",
+    "fund": {
+      "description": "基金分析：基本信息/净值/业绩/持仓/经理/风格/费率/分红/筛选/申赎",
       "tools": [
-        "get_ashares_gvix",
-        "get_ashares_index_quote",
-        "get_ashares_index_val",
-        "get_ashares_turnover",
-        "get_market_temperature",
-        "get_market_trading_stat",
-        "index_quote_simple",
-        "market_overview"
-      ]
-    },
-    "market_hk": {
-      "description": "港股市场行情、恒生系列指数、南向资金",
-      "tools": [
-        "get_hshares_index_quote",
-        "get_hshares_market_overview",
-        "get_hshares_turnover",
-        "get_hsi_quote",
-        "get_hstech_quote",
-        "get_southbound_hkd_turnover"
-      ]
-    },
-    "market_us": {
-      "description": "美股指数行情（道琼斯、标普500、纳斯达克）",
-      "tools": [
-        "get_dowjones_quote",
-        "get_nasdaq100_quote",
-        "get_sp500_quote",
-        "get_usstock_index_list",
-        "get_usstock_index_quote"
+        "fund_abnormal_movement",
+        "fund_basic_info",
+        "fund_bonus",
+        "fund_index_return",
+        "fund_index_subscription_redemption",
+        "fund_index_tracking",
+        "fund_industry_exposure",
+        "fund_invest_position",
+        "fund_manager_profile",
+        "fund_nav",
+        "fund_performance",
+        "fund_rate",
+        "fund_stock_holdings_screen",
+        "fund_style_analysis",
+        "fund_subscription_redemption_summary",
+        "fund_theme_screening",
+        "fund_top_holdings",
+        "fund_turnover_rate"
       ]
     },
     "stock": {
-      "description": "个股基本面、行情、估值、资金流向、股东、因子分析",
+      "description": "个股：画像/行情/资金/股权/财务质量/Alpha因子/事件/技术因子",
       "tools": [
-        "get_stock_barra_attribution",
-        "get_stock_barra_exposure",
-        "get_stock_capital_structure",
-        "get_stock_cf_quality",
-        "get_stock_consensus",
-        "get_stock_consensus_growth",
-        "get_stock_consensus_roe",
-        "get_stock_daily_quote",
-        "get_stock_dividend",
-        "get_stock_earning_quality",
-        "get_stock_equity_distribution",
-        "get_stock_fund_flow",
-        "get_stock_growth",
-        "get_stock_income_derived",
-        "get_stock_industry",
-        "get_stock_industry_zx",
-        "get_stock_info",
-        "get_stock_market_value",
-        "get_stock_northbound_holding",
-        "get_stock_northflow",
-        "get_stock_operating_capability",
-        "get_stock_operating_stable",
-        "get_stock_profit_ability",
-        "get_stock_share_structure",
-        "get_stock_shareholder",
-        "get_stock_sue",
-        "get_stock_suspend_info",
-        "get_stock_valuation",
-        "get_stock_xlflow"
+        "stock_alpha",
+        "stock_capital_flow",
+        "stock_events",
+        "stock_factor",
+        "stock_financial_quality",
+        "stock_market",
+        "stock_ownership",
+        "stock_profile"
       ]
     },
-    "fund": {
-      "description": "基金分析、净值、经理、风格、持仓、异动",
+    "market_timing": {
+      "description": "市场/择时：指数行情估值/股债性价比/市场温度/VIX/期权波动率/研究部择时因子",
       "tools": [
-        "fund_basicinfo",
-        "fund_bonus",
-        "fund_info_basic",
-        "fund_info_detailed",
-        "fund_invest",
-        "fund_rate",
-        "get_fund_abnormal_movement",
-        "get_fund_campisi_indicator",
-        "get_fund_comprehensive_analysis",
-        "get_fund_ind_by_report",
-        "get_fund_index_return",
-        "get_fund_industry_holding",
-        "get_fund_info",
-        "get_fund_manager_info",
-        "get_fund_nav_and_return",
-        "get_fund_performance",
-        "get_fund_sector",
-        "get_fund_style_analysis",
-        "get_fund_top_stocks",
-        "get_fund_turnover_rate",
-        "get_multiple_funds_nav",
-        "get_tracking_funds_by_index"
+        "macro_50etf_vix",
+        "market_index_gzxjb",
+        "market_index_quote",
+        "market_index_val",
+        "market_temperature",
+        "option_gvspread_signal",
+        "option_vix",
+        "quant_factor"
       ]
     },
-    "fund_screen": {
-      "description": "基金筛选（按类型、主题、持仓、换手率等）",
+    "index_factor": {
+      "description": "指数因子（择时）：成分权重 + 拥挤度/乖离/成交集中度及历史分位",
       "tools": [
-        "filter_fund_by_turnover",
-        "fund_screening",
-        "fund_stock_holdings",
-        "fund_theme_screening",
-        "performance_periods",
-        "simple_fund_search"
+        "idx_congestion_pctrank",
+        "idx_constituents",
+        "idx_corrected_deviation",
+        "idx_ma200_deviation",
+        "idx_turnover_concentration"
+      ]
+    },
+    "sector": {
+      "description": "板块：检索/成分/行情/因子分/子因子明细/指数↔板块匹配",
+      "tools": [
+        "sector_constituents",
+        "sector_factor",
+        "sector_factor_detail",
+        "sector_index_match",
+        "sector_market",
+        "sector_search"
       ]
     },
     "bond": {
-      "description": "债券收益率（国债、信用债）、利差监测",
+      "description": "债券：国债收益率曲线 + 可转债分析/配置利差/转股溢价",
       "tools": [
-        "get_bond_yield_comparison",
-        "get_bond_yield_spread",
-        "get_cn_bond_yield",
-        "get_credit_bond_yield",
-        "get_us_bond_yield"
+        "bond_yield_curve",
+        "convertible_bond_analysis",
+        "convertible_bond_market_spread",
+        "convertible_bond_premium_estimate"
       ]
     },
     "macro": {
-      "description": "宏观经济数据（中国GDP/CPI/PPI/M2、美国宏观）",
+      "description": "宏观：宏观数据 + EDB指标检索/取值 + Nowcasting快照",
       "tools": [
-        "get_cn_macro_data",
-        "us_macro_data",
-        "us_macro_simple"
+        "macro_data",
+        "macro_indicator_search",
+        "macro_indicator_value",
+        "macro_nowcasting_snapshot"
       ]
     },
     "commodity": {
-      "description": "商品现货与期货行情（黄金、白银等）",
+      "description": "商品：现货/期货行情",
       "tools": [
-        "commodity_data",
-        "futures_data"
+        "commodity_market"
       ]
     },
-    "news_report": {
-      "description": "新闻搜索、研报搜索、实体识别、资产研报观点",
+    "research": {
+      "description": "研究：新闻/研报搜索 + 研究观点 + 金融实体抽取",
       "tools": [
-        "get_asset_repo_summary",
-        "news_search",
-        "query_segment",
+        "entity_extract",
         "research_search",
-        "search_rerank"
+        "research_view"
       ]
     },
-    "_uncategorized": {
-      "description": "未分类工具",
+    "system": {
+      "description": "系统：健康检查",
       "tools": [
-        "get_bk_view",
-        "get_bk_view_weekly",
-        "get_fund_bk_view",
-        "get_strategy_equity_analysis",
-        "get_strategy_info",
-        "get_strategy_nav",
-        "get_strategy_performance",
-        "get_strategy_portfolio"
+        "health_check"
       ]
     }
   },
   "tools": {
-    "commodity_data": {
-      "category": "commodity",
-      "description": "获取商品历史行情数据",
+    "bond_yield_curve": {
+      "category": "bond",
+      "description": "国债收益率曲线（PIT，走 researchdata.dwd_bd_yield_curve_standard）。",
       "inputSchema": {
         "properties": {
-          "symbol": {
-            "default": "",
+          "maturities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Maturities",
+            "type": "array"
+          },
+          "curve_type": {
+            "default": "cn",
+            "title": "Curve Type",
             "type": "string"
           },
           "start_date": {
-            "default": "",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
-            "default": "",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "filter_fund_by_turnover": {
-      "category": "fund_screen",
-      "description": "根据换手率筛选基金代码。",
-      "inputSchema": {
-        "properties": {
-          "bottom": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "default": -1.0
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "maturities"
+        ],
+        "title": "bond_yield_curveArguments",
+        "type": "object"
+      }
+    },
+    "commodity_market": {
+      "category": "commodity",
+      "description": "商品行情（PIT，16:10 约定，走 researchdata.dwd_commodity_trd_daily）。",
+      "inputSchema": {
+        "properties": {
+          "market_type": {
+            "default": "spot",
+            "title": "Market Type",
+            "type": "string"
           },
-          "up": {
+          "symbols": {
             "anyOf": [
               {
-                "type": "number"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "default": 99999.0
+            "default": null,
+            "title": "Symbols"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [],
+        "title": "commodity_marketArguments",
         "type": "object"
       }
     },
-    "fund_basicinfo": {
-      "category": "fund",
-      "description": "查询基金基本信息接口。支持批量查询多个基金，返回基金的基本净值数据、收益率等关键信息。",
+    "convertible_bond_analysis": {
+      "category": "bond",
+      "description": "可转债分析（PIT，双模式，L1）。底表 researchdata.dwd_bd_trd_convert ⟕ dim_bd_info。",
       "inputSchema": {
         "properties": {
-          "fcodes": {
+          "bond_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bond Codes"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "order_by": {
+            "default": "swapor",
+            "title": "Order By",
             "type": "string"
           },
-          "fields": {
-            "default": "FCODE,SHORTNAME,TZCL,NAV,ACCNAV",
+          "order_dir": {
+            "default": "asc",
+            "title": "Order Dir",
+            "type": "string"
+          },
+          "top_n": {
+            "default": 50,
+            "title": "Top N",
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "title": "convertible_bond_analysisArguments",
+        "type": "object"
+      }
+    },
+    "convertible_bond_market_spread": {
+      "category": "bond",
+      "description": "转债配置利差（PIT，L1）。底表 researchdata.dwa_bd_cvt_mkt_yield_spread。",
+      "inputSchema": {
+        "properties": {
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [],
+        "title": "convertible_bond_market_spreadArguments",
+        "type": "object"
+      }
+    },
+    "convertible_bond_premium_estimate": {
+      "category": "bond",
+      "description": "转债百元券转股溢价率估计（PIT，L1）。底表 researchdata.dwa_bd_cvt_premium_rates。",
+      "inputSchema": {
+        "properties": {
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [],
+        "title": "convertible_bond_premium_estimateArguments",
+        "type": "object"
+      }
+    },
+    "entity_extract": {
+      "category": "research",
+      "description": "从自然语言中抽取金融实体（基金/经理/公司/指数/主题）。",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "title": "Text",
             "type": "string"
           }
         },
         "required": [
-          "fcodes"
+          "text"
         ],
+        "title": "entity_extractArguments",
+        "type": "object"
+      }
+    },
+    "fund_abnormal_movement": {
+      "category": "fund",
+      "description": "基金异动检测（PIT，21:00 入库约定）：返回单日涨跌幅超 4% 的事件。",
+      "inputSchema": {
+        "properties": {
+          "fund_code": {
+            "title": "Fund Code",
+            "type": "string"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Direction"
+          }
+        },
+        "required": [
+          "fund_code"
+        ],
+        "title": "fund_abnormal_movementArguments",
+        "type": "object"
+      }
+    },
+    "fund_basic_info": {
+      "category": "fund",
+      "description": "基金基本信息（PIT）：基金公司、经理、类型、成立时间等。",
+      "inputSchema": {
+        "properties": {
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fund Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fund_codes"
+        ],
+        "title": "fund_basic_infoArguments",
         "type": "object"
       }
     },
     "fund_bonus": {
       "category": "fund",
-      "description": "查询基金分红明细接口",
+      "description": "基金分红记录（PIT，FSRQ 除权日 <= T）。",
       "inputSchema": {
         "properties": {
-          "fcode": {
+          "fund_code": {
+            "title": "Fund Code",
             "type": "string"
           },
           "date": {
-            "default": "",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date"
           }
         },
         "required": [
-          "fcode"
+          "fund_code"
         ],
+        "title": "fund_bonusArguments",
         "type": "object"
       }
     },
-    "fund_info_basic": {
+    "fund_index_return": {
       "category": "fund",
-      "description": "基金基本信息简化版 - 专门用于查询单个基金基本信息",
+      "description": "基金指数超额收益（PIT，NAV 派生量血缘扩展，21:00 约定）。",
       "inputSchema": {
         "properties": {
-          "fcode": {
-            "type": "string"
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fund Codes",
+            "type": "array"
+          },
+          "trade_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trade Date"
+          },
+          "period_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Period Codes"
           }
         },
         "required": [
-          "fcode"
+          "fund_codes"
         ],
+        "title": "fund_index_returnArguments",
         "type": "object"
       }
     },
-    "fund_info_detailed": {
+    "fund_index_subscription_redemption": {
       "category": "fund",
-      "description": "基金详细信息简化版 - 查询基金的完整信息",
+      "description": "按指数汇总基金申赎（申请/赎回/净申赎），区分个人与机构客户。",
       "inputSchema": {
         "properties": {
-          "fcode": {
+          "index_code": {
+            "title": "Index Code",
+            "type": "string"
+          },
+          "calc_date": {
+            "title": "Calc Date",
+            "type": "string"
+          },
+          "cutoff_time": {
+            "default": "15:00:00",
+            "title": "Cutoff Time",
             "type": "string"
           }
         },
         "required": [
-          "fcode"
+          "index_code",
+          "calc_date"
         ],
+        "title": "fund_index_subscription_redemptionArguments",
         "type": "object"
       }
     },
-    "fund_invest": {
+    "fund_index_tracking": {
       "category": "fund",
-      "description": "查询基金持仓情况工具",
+      "description": "查某指数的跟踪基金（路由型 + 半 PIT，仅按 estabdate <= T 过滤）。",
       "inputSchema": {
         "properties": {
-          "fcode": {
+          "index_code": {
+            "title": "Index Code",
             "type": "string"
           }
         },
         "required": [
-          "fcode"
+          "index_code"
         ],
+        "title": "fund_index_trackingArguments",
+        "type": "object"
+      }
+    },
+    "fund_industry_exposure": {
+      "category": "fund",
+      "description": "基金行业暴露（PIT，noticedate 闸门）。",
+      "inputSchema": {
+        "properties": {
+          "fund_code": {
+            "title": "Fund Code",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
+          },
+          "industry_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Industry Type"
+          },
+          "is_full": {
+            "default": false,
+            "title": "Is Full",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "fund_code"
+        ],
+        "title": "fund_industry_exposureArguments",
+        "type": "object"
+      }
+    },
+    "fund_invest_position": {
+      "category": "fund",
+      "description": "基金详细持仓（PIT）：股票（A 股 + QDII）+ 债券（含债项评级）。",
+      "inputSchema": {
+        "properties": {
+          "fund_code": {
+            "title": "Fund Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fund_code"
+        ],
+        "title": "fund_invest_positionArguments",
+        "type": "object"
+      }
+    },
+    "fund_manager_profile": {
+      "category": "fund",
+      "description": "基金经理画像（PIT）：T 时刻在任经理 + 任职区间。",
+      "inputSchema": {
+        "properties": {
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fund Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fund_codes"
+        ],
+        "title": "fund_manager_profileArguments",
+        "type": "object"
+      }
+    },
+    "fund_nav": {
+      "category": "fund",
+      "description": "基金净值历史（PIT，21:00 入库可见约定）。",
+      "inputSchema": {
+        "properties": {
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fund Codes",
+            "type": "array"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "fund_codes"
+        ],
+        "title": "fund_navArguments",
+        "type": "object"
+      }
+    },
+    "fund_performance": {
+      "category": "fund",
+      "description": "基金业绩（PIT）：近 N 周期收益率/最大回撤/夏普/卡玛/同类排名。",
+      "inputSchema": {
+        "properties": {
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fund Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fund_codes"
+        ],
+        "title": "fund_performanceArguments",
         "type": "object"
       }
     },
     "fund_rate": {
       "category": "fund",
-      "description": "查询基金费率及相关费用信息接口",
+      "description": "基金费率（PIT，半 PIT eutime 闸门）。",
       "inputSchema": {
         "properties": {
-          "fcode": {
+          "fund_code": {
+            "title": "Fund Code",
             "type": "string"
           }
         },
         "required": [
-          "fcode"
+          "fund_code"
         ],
+        "title": "fund_rateArguments",
         "type": "object"
       }
     },
-    "fund_screening": {
-      "category": "fund_screen",
-      "description": "基金筛选工具 - 根据多维度条件筛选符合条件的基金",
-      "inputSchema": {
-        "properties": {
-          "fund_codes": {
-            "default": "",
-            "type": "string"
-          },
-          "filters_json": {
-            "default": "",
-            "type": "string"
-          },
-          "only_init": {
-            "default": true,
-            "type": "boolean"
-          },
-          "limit": {
-            "default": 10,
-            "type": "integer"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "fund_stock_holdings": {
-      "category": "fund_screen",
-      "description": "根据股票持仓筛选基金",
+    "fund_stock_holdings_screen": {
+      "category": "fund",
+      "description": "按股票反查持有该股的基金（PIT，noticedate 闸门）。",
       "inputSchema": {
         "properties": {
           "stock_codes": {
-            "type": "string"
+            "items": {
+              "type": "string"
+            },
+            "title": "Stock Codes",
+            "type": "array"
           },
           "fund_codes": {
-            "default": "",
-            "type": "string"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fund Codes"
           },
           "match_all": {
             "default": true,
+            "title": "Match All",
             "type": "boolean"
           }
         },
         "required": [
           "stock_codes"
         ],
+        "title": "fund_stock_holdings_screenArguments",
+        "type": "object"
+      }
+    },
+    "fund_style_analysis": {
+      "category": "fund",
+      "description": "基金风格分析（PIT）：大小盘 × 成长价值 × 行业配置。",
+      "inputSchema": {
+        "properties": {
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fund Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fund_codes"
+        ],
+        "title": "fund_style_analysisArguments",
+        "type": "object"
+      }
+    },
+    "fund_subscription_redemption_summary": {
+      "category": "fund",
+      "description": "基金申赎汇总。",
+      "inputSchema": {
+        "properties": {
+          "calc_date": {
+            "title": "Calc Date",
+            "type": "string"
+          },
+          "cutoff_time": {
+            "default": "15:00:00",
+            "title": "Cutoff Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calc_date"
+        ],
+        "title": "fund_subscription_redemption_summaryArguments",
         "type": "object"
       }
     },
     "fund_theme_screening": {
-      "category": "fund_screen",
-      "description": "根据主题名称筛选基金（支持并集或交集）",
+      "category": "fund",
+      "description": "按主题筛选基金（PIT，双数据源）。",
       "inputSchema": {
         "properties": {
-          "sec_name": {
-            "default": "",
-            "type": "string"
+          "themes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Themes",
+            "type": "array"
           },
-          "if_union": {
-            "default": false,
-            "type": "boolean"
-          },
-          "if_intersection": {
-            "default": true,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "futures_data": {
-      "category": "commodity",
-      "description": "获取期货行情数据",
-      "inputSchema": {
-        "properties": {
-          "symbol": {
-            "default": "",
-            "type": "string"
-          },
-          "start_date": {
-            "default": "",
-            "type": "string"
-          },
-          "end_date": {
-            "default": "",
+          "mode": {
+            "default": "intersection",
+            "title": "Mode",
             "type": "string"
           }
         },
+        "required": [
+          "themes"
+        ],
+        "title": "fund_theme_screeningArguments",
         "type": "object"
       }
     },
-    "get_ashares_gvix": {
-      "category": "market_ashares",
-      "description": "A股恐慌指数(GVIX)查询工具",
+    "fund_top_holdings": {
+      "category": "fund",
+      "description": "基金前十大重仓股（PIT，按 noticedate 公告日闸门）。",
+      "inputSchema": {
+        "properties": {
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fund Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fund_codes"
+        ],
+        "title": "fund_top_holdingsArguments",
+        "type": "object"
+      }
+    },
+    "fund_turnover_rate": {
+      "category": "fund",
+      "description": "基金换手率（PIT，noticedate 闸门）。",
+      "inputSchema": {
+        "properties": {
+          "fund_code": {
+            "title": "Fund Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fund_code"
+        ],
+        "title": "fund_turnover_rateArguments",
+        "type": "object"
+      }
+    },
+    "health_check": {
+      "category": "system",
+      "description": "检查 SimWorld Data API 是否可用。",
+      "inputSchema": {
+        "properties": {},
+        "title": "health_checkArguments",
+        "type": "object",
+        "required": []
+      }
+    },
+    "idx_congestion_pctrank": {
+      "category": "index_factor",
+      "description": "指数复合拥挤度 + 历史分位（researchdata.dwa_idx_factor_ma5cjjzdpctrk JOIN dwa_idx_factor_ma5cjjzd）。",
+      "inputSchema": {
+        "properties": {
+          "securityvarietycode": {
+            "title": "Securityvarietycode",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "win": {
+            "default": 200,
+            "title": "Win",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "securityvarietycode",
+          "date"
+        ],
+        "title": "idx_congestion_pctrankArguments",
+        "type": "object"
+      }
+    },
+    "idx_constituents": {
+      "category": "index_factor",
+      "description": "指数成分权重（as-of-T，PIT）：返回 <= T 最新一期成分股 + 权重百分比。",
+      "inputSchema": {
+        "properties": {
+          "index_code": {
+            "title": "Index Code",
+            "type": "string"
+          },
+          "top_n": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 50,
+            "title": "Top N"
+          }
+        },
+        "required": [
+          "index_code"
+        ],
+        "title": "idx_constituentsArguments",
+        "type": "object"
+      }
+    },
+    "idx_corrected_deviation": {
+      "category": "index_factor",
+      "description": "指数修正相对乖离度 + 历史分位（researchdata.dwa_idx_factor_ma200gllrk）。",
+      "inputSchema": {
+        "properties": {
+          "securityvarietycode": {
+            "title": "Securityvarietycode",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "win": {
+            "default": 200,
+            "title": "Win",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "securityvarietycode",
+          "date"
+        ],
+        "title": "idx_corrected_deviationArguments",
+        "type": "object"
+      }
+    },
+    "idx_ma200_deviation": {
+      "category": "index_factor",
+      "description": "指数 200 日均线乖离率因子（researchdata.dwa_idx_factor_ma200gll.ma200gll）：原始 ma200gll 值。",
+      "inputSchema": {
+        "properties": {
+          "securityvarietycode": {
+            "title": "Securityvarietycode",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "securityvarietycode",
+          "date"
+        ],
+        "title": "idx_ma200_deviationArguments",
+        "type": "object"
+      }
+    },
+    "idx_turnover_concentration": {
+      "category": "index_factor",
+      "description": "指数成交集中度因子（researchdata.dwa_idx_factor_cjjzd.cjjzd）：原始 cjjzd 值。",
+      "inputSchema": {
+        "properties": {
+          "securityvarietycode": {
+            "title": "Securityvarietycode",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "securityvarietycode",
+          "date"
+        ],
+        "title": "idx_turnover_concentrationArguments",
+        "type": "object"
+      }
+    },
+    "macro_50etf_vix": {
+      "category": "market_timing",
+      "description": "50ETF VIX（PIT，15:00 收盘可见约定）。",
       "inputSchema": {
         "properties": {
           "start_date": {
@@ -412,7 +1008,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -423,27 +1020,38 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [],
+        "title": "macro_50etf_vixArguments",
         "type": "object"
       }
     },
-    "get_ashares_index_quote": {
-      "category": "market_ashares",
-      "description": "A股指数行情数据查询工具",
+    "macro_data": {
+      "category": "macro",
+      "description": "宏观数据（PIT，COALESCE 派生兜底）。",
       "inputSchema": {
         "properties": {
-          "symbol": {
+          "region": {
+            "title": "Region",
+            "type": "string"
+          },
+          "categories": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Categories"
           },
           "start_date": {
             "anyOf": [
@@ -454,7 +1062,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -465,18 +1074,27 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [
+          "region"
+        ],
+        "title": "macro_dataArguments",
         "type": "object"
       }
     },
-    "get_ashares_index_val": {
-      "category": "market_ashares",
-      "description": "A股指数估值查询工具",
+    "macro_indicator_search": {
+      "category": "macro",
+      "description": "EDB 指标检索（48 万指标，name/ename LIKE + 国家/大类/重要度过滤，无 PIT）。",
       "inputSchema": {
         "properties": {
-          "symbol": {
+          "keyword": {
+            "title": "Keyword",
+            "type": "string"
+          },
+          "country": {
             "anyOf": [
               {
                 "type": "string"
@@ -485,7 +1103,69 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Country"
+          },
+          "majorindtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Majorindtype"
+          },
+          "important": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Important"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "keyword"
+        ],
+        "title": "macro_indicator_searchArguments",
+        "type": "object"
+      }
+    },
+    "macro_indicator_value": {
+      "category": "macro",
+      "description": "EDB 指标取值（PIT，COALESCE(publish_date, indicator_dt+30d)<=T 闸门）。",
+      "inputSchema": {
+        "properties": {
+          "indicator_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Indicator Ids",
+            "type": "array"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -496,15 +1176,165 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [
+          "indicator_ids"
+        ],
+        "title": "macro_indicator_valueArguments",
         "type": "object"
       }
     },
-    "get_ashares_turnover": {
-      "category": "market_ashares",
-      "description": "A股总成交额查询工具",
+    "macro_nowcasting_snapshot": {
+      "category": "macro",
+      "description": "信澳宏观 Nowcasting 快照。",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "title": "macro_nowcasting_snapshotArguments",
+        "type": "object"
+      }
+    },
+    "market_index_gzxjb": {
+      "category": "market_timing",
+      "description": "A股指数股债性价比（PIT，15:00 收盘后可见）：股票相对债券的风险溢价，做仓位择时。",
+      "inputSchema": {
+        "properties": {
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "calmodel": {
+            "default": "pe",
+            "title": "Calmodel",
+            "type": "string"
+          },
+          "caltype": {
+            "default": 1,
+            "title": "Caltype",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "symbols"
+        ],
+        "title": "market_index_gzxjbArguments",
+        "type": "object"
+      }
+    },
+    "market_index_quote": {
+      "category": "market_timing",
+      "description": "指数行情（PIT，15:00 收盘后可见）。当前只有 market='cn' 真接入，hk/us 上游未实现。",
+      "inputSchema": {
+        "properties": {
+          "market": {
+            "title": "Market",
+            "type": "string"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "market",
+          "symbols"
+        ],
+        "title": "market_index_quoteArguments",
+        "type": "object"
+      }
+    },
+    "market_index_val": {
+      "category": "market_timing",
+      "description": "A股指数估值（PIT，15:00 收盘后可见）：返回 PE_TTM + 历史百分位的单点快照。",
+      "inputSchema": {
+        "properties": {
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "symbols"
+        ],
+        "title": "market_index_valArguments",
+        "type": "object"
+      }
+    },
+    "market_temperature": {
+      "category": "market_timing",
+      "description": "A股市场温度（PIT，15:00 收盘后可见）：市场情绪/风险综合温度计，可做仓位择时。",
       "inputSchema": {
         "properties": {
           "start_date": {
@@ -516,7 +1346,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -527,58 +1358,34 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [],
+        "title": "market_temperatureArguments",
         "type": "object"
       }
     },
-    "get_asset_repo_summary": {
-      "category": "news_report",
-      "description": "大类资产研报观点查询工具",
+    "option_gvspread_signal": {
+      "category": "market_timing",
+      "description": "期权 GV-Spread 交易信号（PIT，15:00 收盘后可见，L1）：做波动率/拥挤度择时。",
       "inputSchema": {
         "properties": {
-          "mkt": {
+          "type_codes": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_bk_view": {
-      "category": "_uncategorized",
-      "description": "板块观点查询工具",
-      "inputSchema": {
-        "properties": {
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "sec_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+            "default": null,
+            "title": "Type Codes"
           },
           "start_date": {
             "anyOf": [
@@ -589,7 +1396,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -600,7 +1408,194 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [],
+        "title": "option_gvspread_signalArguments",
+        "type": "object"
+      }
+    },
+    "option_vix": {
+      "category": "market_timing",
+      "description": "期权多品种波动率（PIT，15:00 收盘后可见，L1）：VIX / GVIX / GVSpread + 成交量金额。",
+      "inputSchema": {
+        "properties": {
+          "type_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Type Codes"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [],
+        "title": "option_vixArguments",
+        "type": "object"
+      }
+    },
+    "quant_factor": {
+      "category": "market_timing",
+      "description": "研究部离线挖掘 + 回测验证的择时因子（PIT 在线计算）。",
+      "inputSchema": {
+        "properties": {
+          "history_days": {
+            "default": 0,
+            "title": "History Days",
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "title": "quant_factorArguments",
+        "type": "object"
+      }
+    },
+    "research_search": {
+      "category": "research",
+      "description": "新闻 / 研报搜索（半 PIT，KB API + SHOWTIME/INFOCODE 兜底过滤）。",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "search_type": {
+            "default": "news",
+            "title": "Search Type",
+            "type": "string"
+          },
+          "top_k": {
+            "default": 10,
+            "title": "Top K",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "research_searchArguments",
+        "type": "object"
+      }
+    },
+    "research_view": {
+      "category": "research",
+      "description": "研究观点（PIT）。三种 view_type 走不同上游链路。",
+      "inputSchema": {
+        "properties": {
+          "view_type": {
+            "title": "View Type",
+            "type": "string"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "sec_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sec Codes"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
           },
           "direction": {
             "anyOf": [
@@ -611,310 +1606,20 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Direction"
           },
           "latest_only": {
             "default": true,
+            "title": "Latest Only",
             "type": "boolean"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_bk_view_weekly": {
-      "category": "_uncategorized",
-      "description": "周度板块观点查询工具",
-      "inputSchema": {
-        "properties": {
-          "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "sec_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           },
           "weeks": {
             "default": 1,
+            "title": "Weeks",
             "type": "integer"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_bond_yield_comparison": {
-      "category": "bond",
-      "description": "债券收益率对比查询工具",
-      "inputSchema": {
-        "properties": {
-          "bond_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           },
-          "maturity": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_bond_yield_spread": {
-      "category": "bond",
-      "description": "债券收益率利差查询工具",
-      "inputSchema": {
-        "properties": {
-          "spread_type": {
-            "default": "cn_vs_us",
-            "type": "string"
-          },
-          "maturity": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "include_raw_data": {
-            "default": true,
-            "type": "boolean"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_cn_bond_yield": {
-      "category": "bond",
-      "description": "中国国债收益率查询工具",
-      "inputSchema": {
-        "properties": {
-          "maturity": {
-            "type": "string"
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "required": [
-          "maturity"
-        ],
-        "type": "object"
-      }
-    },
-    "get_cn_macro_data": {
-      "category": "macro",
-      "description": "中国宏观经济数据查询工具",
-      "inputSchema": {
-        "properties": {
-          "category": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_credit_bond_yield": {
-      "category": "bond",
-      "description": "中债信用债收益率查询工具",
-      "inputSchema": {
-        "properties": {
-          "maturity": {
-            "type": "string"
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "required": [
-          "maturity"
-        ],
-        "type": "object"
-      }
-    },
-    "get_dowjones_quote": {
-      "category": "market_us",
-      "description": "道琼斯指数行情查询工具",
-      "inputSchema": {
-        "properties": {
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_abnormal_movement": {
-      "category": "fund",
-      "description": "基金净值异动查询工具",
-      "inputSchema": {
-        "properties": {
           "fund_code": {
-            "type": "string"
-          },
-          "start_date": {
             "anyOf": [
               {
                 "type": "string"
@@ -923,215 +1628,53 @@
                 "type": "null"
               }
             ],
-            "default": null
-          },
-          "movement_type": {
-            "default": "异动",
-            "type": "string"
-          }
-        },
-        "required": [
-          "fund_code"
-        ],
-        "type": "object"
-      }
-    },
-    "get_fund_bk_view": {
-      "category": "_uncategorized",
-      "description": "基金关联板块观点查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "type": "string"
+            "default": null,
+            "title": "Fund Code"
           },
           "days": {
             "default": 7,
+            "title": "Days",
             "type": "integer"
           }
         },
         "required": [
-          "fund_code"
+          "view_type"
         ],
+        "title": "research_viewArguments",
         "type": "object"
       }
     },
-    "get_fund_campisi_indicator": {
-      "category": "fund",
-      "description": "获取基金债券持仓Campisi单期分析数据，包括收益分解效应。",
+    "sector_constituents": {
+      "category": "sector",
+      "description": "板块成分股（PIT，15:00 收盘后可见，L1+软提示）：取板块 <= T 最新一期全部成分股（代码+名称）。",
       "inputSchema": {
         "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "sec_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sec Codes",
+            "type": "array"
           }
         },
+        "required": [
+          "sec_codes"
+        ],
+        "title": "sector_constituentsArguments",
         "type": "object"
       }
     },
-    "get_fund_comprehensive_analysis": {
-      "category": "fund",
-      "description": "基金综合分析工具",
+    "sector_factor": {
+      "category": "sector",
+      "description": "板块因子分（PIT，15:00 收盘后可见）：动量 + 风险分（L1）+ 机会分（⚠️ L2）。",
       "inputSchema": {
         "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_ind_by_report": {
-      "category": "fund",
-      "description": "获取最新报告期，基金持有的申万行业占比。",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_index_return": {
-      "category": "fund",
-      "description": "基金指数超额收益指标查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_dt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "p_names": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_industry_holding": {
-      "category": "fund",
-      "description": "基金行业持仓查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_info": {
-      "category": "fund",
-      "description": "基金基本信息查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_manager_info": {
-      "category": "fund",
-      "description": "基金经理信息查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_nav_and_return": {
-      "category": "fund",
-      "description": "基金复权净值和收益率查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "sec_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sec Codes",
+            "type": "array"
           },
           "start_date": {
             "anyOf": [
@@ -1142,7 +1685,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -1153,127 +1697,33 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [
+          "sec_codes"
+        ],
+        "title": "sector_factorArguments",
         "type": "object"
       }
     },
-    "get_fund_performance": {
-      "category": "fund",
-      "description": "基金绩效数据查询工具",
+    "sector_factor_detail": {
+      "category": "sector",
+      "description": "板块子因子明细 / 拥挤度细分（PIT，15:00 收盘后可见，纯 L1）：把风险分拆成两个构成因子。",
       "inputSchema": {
         "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_sector": {
-      "category": "fund",
-      "description": "获取基金当前相关板块。",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_style_analysis": {
-      "category": "fund",
-      "description": "基金风格分析查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_top_stocks": {
-      "category": "fund",
-      "description": "基金重仓股查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_fund_turnover_rate": {
-      "category": "fund",
-      "description": "根据基金代码获取其最新报告期的换手率。",
-      "inputSchema": {
-        "properties": {
-          "fund_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_hshares_index_quote": {
-      "category": "market_hk",
-      "description": "H股指数行情数据查询工具",
-      "inputSchema": {
-        "properties": {
-          "symbol": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "sec_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sec Codes",
+            "type": "array"
+          },
+          "win": {
+            "default": 200,
+            "title": "Win",
+            "type": "integer"
           },
           "start_date": {
             "anyOf": [
@@ -1284,7 +1734,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -1295,179 +1746,74 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [
+          "sec_codes"
+        ],
+        "title": "sector_factor_detailArguments",
         "type": "object"
       }
     },
-    "get_hshares_market_overview": {
-      "category": "market_hk",
-      "description": "H股市场概览查询工具",
-      "inputSchema": {
-        "properties": {},
-        "type": "object"
-      }
-    },
-    "get_hshares_turnover": {
-      "category": "market_hk",
-      "description": "H股总成交额查询工具",
+    "sector_index_match": {
+      "category": "sector",
+      "description": "指数↔板块匹配（PIT，双向，L1）：板块映射到可交易指数/ETF，或指数拆到主题板块。",
       "inputSchema": {
         "properties": {
-          "start_date": {
+          "sec_codes": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Sec Codes"
           },
-          "end_date": {
+          "index_codes": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_hsi_quote": {
-      "category": "market_hk",
-      "description": "恒生指数行情简化查询工具",
-      "inputSchema": {
-        "properties": {
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+            "default": null,
+            "title": "Index Codes"
           },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "top_n": {
+            "default": 20,
+            "title": "Top N",
+            "type": "integer"
           }
         },
+        "required": [],
+        "title": "sector_index_matchArguments",
         "type": "object"
       }
     },
-    "get_hstech_quote": {
-      "category": "market_hk",
-      "description": "恒生科技指数行情简化查询工具",
+    "sector_market": {
+      "category": "sector",
+      "description": "板块行情（PIT，15:00 收盘后可见）：日收益率 + 估值(PE/PB) + 主力净流入（全 L1）。",
       "inputSchema": {
         "properties": {
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_market_temperature": {
-      "category": "market_ashares",
-      "description": "A股市场温度计查询工具",
-      "inputSchema": {
-        "properties": {
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_market_trading_stat": {
-      "category": "market_ashares",
-      "description": "证券市场成交概况统计查询工具",
-      "inputSchema": {
-        "properties": {
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_multiple_funds_nav": {
-      "category": "fund",
-      "description": "多只基金净值批量查询工具",
-      "inputSchema": {
-        "properties": {
-          "fund_codes": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "sec_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sec Codes",
+            "type": "array"
           },
           "start_date": {
             "anyOf": [
@@ -1478,7 +1824,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -1489,18 +1836,28 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "End Date"
+          },
+          "value_type": {
+            "default": "TTM",
+            "title": "Value Type",
+            "type": "string"
           }
         },
+        "required": [
+          "sec_codes"
+        ],
+        "title": "sector_marketArguments",
         "type": "object"
       }
     },
-    "get_nasdaq100_quote": {
-      "category": "market_us",
-      "description": "纳斯达克100指数行情查询工具",
+    "sector_search": {
+      "category": "sector",
+      "description": "板块检索（行业/主题，轻 PIT）：按名称模糊找板块代码 BKxxxxxx。",
       "inputSchema": {
         "properties": {
-          "start_date": {
+          "keyword": {
             "anyOf": [
               {
                 "type": "string"
@@ -1509,142 +1866,31 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Keyword"
           },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "sector_type": {
+            "default": "all",
+            "title": "Sector Type",
+            "type": "string"
           }
         },
-        "type": "object"
+        "title": "sector_searchArguments",
+        "type": "object",
+        "required": []
       }
     },
-    "get_southbound_hkd_turnover": {
-      "category": "market_hk",
-      "description": "港股通南向资金成交额查询工具",
-      "inputSchema": {
-        "properties": {
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_sp500_quote": {
-      "category": "market_us",
-      "description": "标普500指数行情查询工具",
-      "inputSchema": {
-        "properties": {
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_barra_attribution": {
+    "stock_alpha": {
       "category": "stock",
-      "description": "股票Barra收益归因查询工具",
+      "description": "Alpha 因子（PIT，15:00 约定）：一致预期 + Barra 暴露/归因。",
       "inputSchema": {
         "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_barra_exposure": {
-      "category": "stock",
-      "description": "股票Barra因子暴露查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stock Codes",
+            "type": "array"
           },
           "trade_date": {
             "anyOf": [
@@ -1655,17 +1901,138 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Trade Date"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
           }
         },
+        "required": [
+          "stock_codes"
+        ],
+        "title": "stock_alphaArguments",
         "type": "object"
       }
     },
-    "get_stock_capital_structure": {
+    "stock_capital_flow": {
       "category": "stock",
-      "description": "股票资本结构/资产质量因子查询工具",
+      "description": "股票资金流向（PIT，15:00 约定）：资金流 + 北向持股 + 超大单。",
       "inputSchema": {
         "properties": {
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stock Codes",
+            "type": "array"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "stock_codes"
+        ],
+        "title": "stock_capital_flowArguments",
+        "type": "object"
+      }
+    },
+    "stock_events": {
+      "category": "stock",
+      "description": "股票事件（PIT）：停复牌（suspendtime）+ SUE（15:00 约定）。",
+      "inputSchema": {
+        "properties": {
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stock Codes",
+            "type": "array"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          }
+        },
+        "required": [
+          "stock_codes"
+        ],
+        "title": "stock_eventsArguments",
+        "type": "object"
+      }
+    },
+    "stock_factor": {
+      "category": "stock",
+      "description": "个股技术/模型因子（PIT as-of，双模式：横截面选股 + 时间序列）。",
+      "inputSchema": {
+        "properties": {
+          "factor_category": {
+            "title": "Factor Category",
+            "type": "string"
+          },
           "stock_code": {
             "anyOf": [
               {
@@ -1675,7 +2042,88 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Stock Code"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "universe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Universe"
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Order By"
+          },
+          "top_n": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 50,
+            "title": "Top N"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 0,
+            "title": "Offset"
+          }
+        },
+        "required": [
+          "factor_category"
+        ],
+        "title": "stock_factorArguments",
+        "type": "object"
+      }
+    },
+    "stock_financial_quality": {
+      "category": "stock",
+      "description": "财务质量（PIT，15:00 约定）：盈利能力/收益质量/营运/资本结构 等 8 张表。",
+      "inputSchema": {
+        "properties": {
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stock Codes",
+            "type": "array"
           },
           "trade_date": {
             "anyOf": [
@@ -1686,184 +2134,33 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Trade Date"
           },
           "d_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": "TTM"
+            "default": "TTM",
+            "title": "D Type",
+            "type": "string"
           }
         },
+        "required": [
+          "stock_codes"
+        ],
+        "title": "stock_financial_qualityArguments",
         "type": "object"
       }
     },
-    "get_stock_cf_quality": {
+    "stock_market": {
       "category": "stock",
-      "description": "股票现金流质量因子查询工具",
+      "description": "股票行情（PIT，15:00 收盘约定）：行情/市值/估值/股息率。",
       "inputSchema": {
         "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "d_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": "TTM"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_consensus": {
-      "category": "stock",
-      "description": "股票一致预期数据查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_consensus_growth": {
-      "category": "stock",
-      "description": "股票一致预期成长查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "field_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_consensus_roe": {
-      "category": "stock",
-      "description": "股票一致预期ROE查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_daily_quote": {
-      "category": "stock",
-      "description": "股票日行情查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stock Codes",
+            "type": "array"
           },
           "start_date": {
             "anyOf": [
@@ -1874,7 +2171,8 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Start Date"
           },
           "end_date": {
             "anyOf": [
@@ -1885,27 +2183,8 @@
                 "type": "null"
               }
             ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_dividend": {
-      "category": "stock",
-      "description": "股票股息率查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+            "default": null,
+            "title": "End Date"
           },
           "trade_date": {
             "anyOf": [
@@ -1916,514 +2195,28 @@
                 "type": "null"
               }
             ],
-            "default": null
+            "default": null,
+            "title": "Trade Date"
           }
         },
+        "required": [
+          "stock_codes"
+        ],
+        "title": "stock_marketArguments",
         "type": "object"
       }
     },
-    "get_stock_earning_quality": {
+    "stock_ownership": {
       "category": "stock",
-      "description": "股票收益质量因子查询工具",
+      "description": "股权结构（PIT，noticedate 公告日闸门）：股东 + 股本结构 + 股权分配。",
       "inputSchema": {
         "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "d_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": "TTM"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_equity_distribution": {
-      "category": "stock",
-      "description": "股票股权分配方案查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_fund_flow": {
-      "category": "stock",
-      "description": "股票资金流向查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_growth": {
-      "category": "stock",
-      "description": "股票成长因子查询工具（价值成长风格判断核心指标）",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "field_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_income_derived": {
-      "category": "stock",
-      "description": "股票收入表衍生指标查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_industry": {
-      "category": "stock",
-      "description": "股票行业分类查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_industry_zx": {
-      "category": "stock",
-      "description": "股票中信行业分类查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_info": {
-      "category": "stock",
-      "description": "股票基本信息查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_market_value": {
-      "category": "stock",
-      "description": "股票市值查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_northbound_holding": {
-      "category": "stock",
-      "description": "股票北向资金持股查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_northflow": {
-      "category": "stock",
-      "description": "股票北向资金净流入查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_operating_capability": {
-      "category": "stock",
-      "description": "股票营运能力因子查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "d_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": "TTM"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_operating_stable": {
-      "category": "stock",
-      "description": "股票营运稳定性因子查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_profit_ability": {
-      "category": "stock",
-      "description": "股票盈利能力因子查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "d_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": "TTM"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_share_structure": {
-      "category": "stock",
-      "description": "股票股本结构查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_shareholder": {
-      "category": "stock",
-      "description": "股票流通股东查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stock Codes",
+            "type": "array"
           },
           "report_date": {
             "anyOf": [
@@ -2434,583 +2227,34 @@
                 "type": "null"
               }
             ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_sue": {
-      "category": "stock",
-      "description": "股票SUE因子查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_suspend_info": {
-      "category": "stock",
-      "description": "股票停复牌信息查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_valuation": {
-      "category": "stock",
-      "description": "股票估值因子查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "trade_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_stock_xlflow": {
-      "category": "stock",
-      "description": "股票超大单资金净流入查询工具",
-      "inputSchema": {
-        "properties": {
-          "stock_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_strategy_equity_analysis": {
-      "category": "_uncategorized",
-      "description": "投顾产品权益主题分析工具",
-      "inputSchema": {
-        "properties": {
-          "strategy": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "as_of_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_strategy_info": {
-      "category": "_uncategorized",
-      "description": "投顾产品基本信息查询工具",
-      "inputSchema": {
-        "properties": {
-          "strategy": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_strategy_nav": {
-      "category": "_uncategorized",
-      "description": "投顾产品最新净值查询工具",
-      "inputSchema": {
-        "properties": {
-          "strategy": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "as_of_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_strategy_performance": {
-      "category": "_uncategorized",
-      "description": "投顾产品绩效数据查询工具",
-      "inputSchema": {
-        "properties": {
-          "strategy": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "as_of_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_strategy_portfolio": {
-      "category": "_uncategorized",
-      "description": "投顾持仓基金查询工具",
-      "inputSchema": {
-        "properties": {
-          "strategy": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "as_of_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_tracking_funds_by_index": {
-      "category": "fund",
-      "description": "根据指数代码查找跟踪该指数的基金。",
-      "inputSchema": {
-        "properties": {
-          "index_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "get_us_bond_yield": {
-      "category": "bond",
-      "description": "美国国债收益率查询工具",
-      "inputSchema": {
-        "properties": {
-          "maturity": {
-            "type": "string"
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "required": [
-          "maturity"
-        ],
-        "type": "object"
-      }
-    },
-    "get_usstock_index_list": {
-      "category": "market_us",
-      "description": "美股指数列表查询工具",
-      "inputSchema": {
-        "properties": {},
-        "type": "object"
-      }
-    },
-    "get_usstock_index_quote": {
-      "category": "market_us",
-      "description": "美股指数行情数据查询工具",
-      "inputSchema": {
-        "properties": {
-          "symbol": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "start_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "end_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "type": "object"
-      }
-    },
-    "index_quote_simple": {
-      "category": "market_ashares",
-      "description": "简化版指数行情查询工具",
-      "inputSchema": {
-        "properties": {
-          "symbol": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "symbol"
-        ],
-        "type": "object"
-      }
-    },
-    "market_overview": {
-      "category": "market_ashares",
-      "description": "市场概览查询工具",
-      "inputSchema": {
-        "properties": {},
-        "type": "object"
-      }
-    },
-    "news_search": {
-      "category": "news_report",
-      "description": "新闻搜索简化版 - 专门用于新闻搜索",
-      "inputSchema": {
-        "properties": {
-          "query": {
-            "type": "string"
-          },
-          "top_k": {
-            "default": 3,
-            "type": "integer"
-          },
-          "search_day_ago": {
-            "default": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "type": "object"
-      }
-    },
-    "performance_periods": {
-      "category": "fund_screen",
-      "description": "获取业绩周期定义",
-      "inputSchema": {
-        "properties": {},
-        "type": "object"
-      }
-    },
-    "query_segment": {
-      "category": "news_report",
-      "description": "实体识别和代码提取接口",
-      "inputSchema": {
-        "properties": {
-          "user_inputs": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "user_inputs"
-        ],
-        "type": "object"
-      }
-    },
-    "research_search": {
-      "category": "news_report",
-      "description": "研报搜索简化版 - 专门用于研报搜索",
-      "inputSchema": {
-        "properties": {
-          "query": {
-            "type": "string"
-          },
-          "top_k": {
-            "default": 3,
-            "type": "integer"
-          },
-          "search_day_ago": {
-            "default": 7,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "type": "object"
-      }
-    },
-    "search_rerank": {
-      "category": "news_report",
-      "description": "天天基金网新闻与研报搜索。支持按关键词搜索所有新闻资讯与研报。",
-      "inputSchema": {
-        "properties": {
-          "query": {
-            "type": "string"
-          },
-          "search_type": {
-            "default": "news",
-            "type": "string"
-          },
-          "fields": {
             "default": null,
+            "title": "Report Date"
+          }
+        },
+        "required": [
+          "stock_codes"
+        ],
+        "title": "stock_ownershipArguments",
+        "type": "object"
+      }
+    },
+    "stock_profile": {
+      "category": "stock",
+      "description": "股票画像（PIT）：基础信息、申万行业、中信行业（按 T 时分类）。",
+      "inputSchema": {
+        "properties": {
+          "stock_codes": {
             "items": {
               "type": "string"
             },
+            "title": "Stock Codes",
             "type": "array"
-          },
-          "top_k": {
-            "default": 3,
-            "type": "integer"
-          },
-          "search_day_ago": {
-            "default": 1,
-            "type": "integer"
-          },
-          "score_threshold": {
-            "default": 0.001,
-            "type": "number"
           }
         },
         "required": [
-          "query"
+          "stock_codes"
         ],
-        "type": "object"
-      }
-    },
-    "simple_fund_search": {
-      "category": "fund_screen",
-      "description": "简化版基金搜索工具",
-      "inputSchema": {
-        "properties": {
-          "fund_type": {
-            "default": null,
-            "type": "string"
-          },
-          "min_return": {
-            "default": null,
-            "type": "number"
-          },
-          "max_drawdown": {
-            "default": null,
-            "type": "number"
-          },
-          "risk_level": {
-            "default": null,
-            "type": "string"
-          },
-          "limit": {
-            "default": 5,
-            "type": "integer"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "us_macro_data": {
-      "category": "macro",
-      "description": "获取美国宏观数据，返回宏观经济数据（时序）",
-      "inputSchema": {
-        "properties": {
-          "category": {
-            "default": "",
-            "type": "string"
-          },
-          "start_date": {
-            "default": "",
-            "type": "string"
-          },
-          "end_date": {
-            "default": "",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      }
-    },
-    "us_macro_simple": {
-      "category": "macro",
-      "description": "获取美国宏观数据（简化版）- 最近6个月所有数据",
-      "inputSchema": {
-        "properties": {},
+        "title": "stock_profileArguments",
         "type": "object"
       }
     }

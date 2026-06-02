@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
 """
-refresh-catalog.py — 从上游 research-mcp 刷新 tools-catalog.json
+refresh-catalog.py — 从 simworld-data（ttjj/天天基金）上游刷新 tools-catalog.json
 
-用法: cd workspace/skills/research-mcp && python refresh-catalog.py
+用法: cd skills/research-mcp && python refresh-catalog.py [--upstream URL]
 
 功能:
-1. 连上游 MCP，调 tools/list 获取最新工具列表
+1. 连上游 MCP（默认本地 simworld-mcp :18078），调 tools/list 获取最新工具
 2. 读现有 catalog 保留 category 分组
-3. 新增工具标记 _uncategorized
-4. 输出 diff（新增/删除/描述变更）
-5. 写入 tools-catalog.json
+3. 剥掉 proxy 自动注入的 simulated_datetime（对外 schema 里 bot 不传）
+4. 新增工具标记 _uncategorized
+5. 输出 diff 并写入 tools-catalog.json
+
+注：bot 运行时实际经 simworld-proxy 调这些工具（mcp__simworld_data__<name>），
+proxy 会自动注入 simulated_datetime；本 catalog 因此剥掉该参数。
 """
 
+import argparse
 import json
 import os
-import sys
 from datetime import datetime
 
 import httpx
 
-UPSTREAM_URL = "http://research-mcp.jijinmima.cn/mcp"
+DEFAULT_UPSTREAM = os.getenv("SIMWORLD_UPSTREAM_URL", "http://127.0.0.1:18078/mcp")
 CATALOG_PATH = os.path.join(os.path.dirname(__file__), "tools-catalog.json")
-EXCLUDED_TOOLS = {"system_info", "health", "reload_tools"}
+EXCLUDED_TOOLS = {"system_info", "reload_tools"}
+INJECTED_PARAM = "simulated_datetime"  # proxy 注入，对外剥掉
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -29,158 +33,89 @@ HEADERS = {
 }
 
 
-def fetch_upstream_tools() -> list[dict]:
-    """连上游 MCP，获取全部工具列表"""
+def fetch_upstream_tools(url: str) -> list[dict]:
     client = httpx.Client(timeout=30)
-
-    # Initialize session
-    init_body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "refresh-catalog", "version": "1.0"},
-        },
-    }
-    r = client.post(UPSTREAM_URL, headers=HEADERS, json=init_body)
-    session_id = r.headers.get("Mcp-Session-Id")
-
-    # List tools
-    list_body = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+    r = client.post(url, headers=HEADERS, json={
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "refresh-catalog", "version": "2.0"}},
+    })
+    sid = r.headers.get("Mcp-Session-Id")
     h = {**HEADERS}
-    if session_id:
-        h["Mcp-Session-Id"] = session_id
-    r = client.post(UPSTREAM_URL, headers=h, json=list_body)
-
-    # Parse SSE response
+    if sid:
+        h["Mcp-Session-Id"] = sid
+        client.post(url, headers=h, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+    r = client.post(url, headers=h, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
     for line in r.text.split("\n"):
         if line.startswith("data:"):
-            data = json.loads(line[5:].strip())
-            return data["result"]["tools"]
+            return json.loads(line[5:].strip())["result"]["tools"]
     return json.loads(r.text)["result"]["tools"]
 
 
-def load_existing_catalog() -> dict | None:
-    """读现有 catalog"""
-    if not os.path.exists(CATALOG_PATH):
-        return None
-    with open(CATALOG_PATH) as f:
-        return json.load(f)
-
-
-def build_category_lookup(catalog: dict) -> dict[str, str]:
-    """从现有 catalog 构建 tool_name → category 映射"""
-    lookup = {}
-    if catalog and "tools" in catalog:
-        for name, meta in catalog["tools"].items():
-            if "category" in meta:
-                lookup[name] = meta["category"]
-    return lookup
+def strip_injected(schema: dict) -> dict:
+    schema = dict(schema or {})
+    props = dict(schema.get("properties") or {})
+    props.pop(INJECTED_PARAM, None)
+    schema["properties"] = props
+    schema["required"] = [r for r in (schema.get("required") or []) if r != INJECTED_PARAM]
+    return schema
 
 
 def main():
-    print("Fetching tools from upstream MCP...")
-    upstream_tools = fetch_upstream_tools()
-    print(f"  Got {len(upstream_tools)} tools from upstream")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--upstream", default=DEFAULT_UPSTREAM)
+    args = ap.parse_args()
 
-    existing = load_existing_catalog()
-    existing_lookup = build_category_lookup(existing) if existing else {}
-    existing_names = set(existing_lookup.keys()) if existing else set()
+    print(f"Fetching tools from {args.upstream} ...")
+    upstream = fetch_upstream_tools(args.upstream)
+    print(f"  Got {len(upstream)} tools")
 
-    # Build new catalog
-    new_tools = {}
-    category_tools: dict[str, list[str]] = {}
-    uncategorized = []
+    existing = json.load(open(CATALOG_PATH)) if os.path.exists(CATALOG_PATH) else {}
+    lookup = {n: m.get("category") for n, m in (existing.get("tools") or {}).items()}
 
-    for tool in upstream_tools:
-        name = tool["name"]
+    new_tools, cat_tools, uncategorized = {}, {}, []
+    for t in upstream:
+        name = t["name"]
         if name in EXCLUDED_TOOLS:
             continue
-
-        desc_first = tool.get("description", "").split("\n")[0].strip()
-        cat = existing_lookup.get(name)
-
+        cat = lookup.get(name)
         if not cat:
             uncategorized.append(name)
             cat = "_uncategorized"
-
         new_tools[name] = {
             "category": cat,
-            "description": desc_first,
-            "inputSchema": tool.get("inputSchema", {}),
+            "description": (t.get("description") or "").split("\n")[0].strip(),
+            "inputSchema": strip_injected(t.get("inputSchema", {})),
         }
+        cat_tools.setdefault(cat, []).append(name)
 
-        category_tools.setdefault(cat, []).append(name)
-
-    new_names = set(new_tools.keys())
-
-    # Diff
-    added = new_names - existing_names
-    removed = existing_names - new_names
-    desc_changed = []
-    if existing and "tools" in existing:
-        for name in new_names & existing_names:
-            old_desc = existing["tools"].get(name, {}).get("description", "")
-            new_desc = new_tools[name]["description"]
-            if old_desc != new_desc:
-                desc_changed.append((name, old_desc, new_desc))
-
-    # Report diff
+    added = set(new_tools) - set(lookup)
+    removed = set(lookup) - set(new_tools)
     if added:
-        print(f"\n  + Added ({len(added)}):")
-        for n in sorted(added):
-            print(f"    + {n}")
+        print(f"  + Added: {sorted(added)}")
     if removed:
-        print(f"\n  - Removed ({len(removed)}):")
-        for n in sorted(removed):
-            print(f"    - {n}")
-    if desc_changed:
-        print(f"\n  ~ Description changed ({len(desc_changed)}):")
-        for name, old, new in desc_changed:
-            print(f"    ~ {name}")
-            print(f"      old: {old[:80]}")
-            print(f"      new: {new[:80]}")
-    if not added and not removed and not desc_changed:
-        print("\n  No changes detected.")
-
+        print(f"  - Removed: {sorted(removed)}")
     if uncategorized:
-        print(f"\n  ! Uncategorized ({len(uncategorized)}):")
-        for n in uncategorized:
-            print(f"    ? {n}")
-        print("  → Edit tools-catalog.json to assign categories")
+        print(f"  ! Uncategorized (assign in tools-catalog.json): {uncategorized}")
 
-    # Rebuild categories from existing catalog + new data
     categories = {}
-    if existing and "categories" in existing:
-        for cat_name, cat_data in existing["categories"].items():
-            if cat_name in category_tools:
-                categories[cat_name] = {
-                    "description": cat_data.get("description", ""),
-                    "tools": sorted(category_tools[cat_name]),
-                }
-    # Add _uncategorized if any
-    if "_uncategorized" in category_tools:
-        categories["_uncategorized"] = {
-            "description": "未分类工具",
-            "tools": category_tools["_uncategorized"],
-        }
+    for cn, cd in (existing.get("categories") or {}).items():
+        if cn in cat_tools:
+            categories[cn] = {"description": cd.get("description", ""), "tools": sorted(cat_tools[cn])}
+    if "_uncategorized" in cat_tools:
+        categories["_uncategorized"] = {"description": "未分类工具", "tools": cat_tools["_uncategorized"]}
 
-    # Write
     catalog = {
         "generated_at": datetime.now().isoformat(),
-        "upstream_url": UPSTREAM_URL,
+        "generated_from": f"simworld-data (ttjj / 天天基金, {args.upstream})",
+        "note": "时点参数 simulated_datetime 由 world simworld-proxy 自动注入，bot 调用时不要传。",
         "categories": categories,
         "tools": dict(sorted(new_tools.items())),
     }
-
-    with open(CATALOG_PATH, "w") as f:
-        json.dump(catalog, f, ensure_ascii=False, indent=2)
-
-    print(f"\nWritten {len(new_tools)} tools to {CATALOG_PATH}")
-    for cat_name, cat_data in categories.items():
-        print(f"  {cat_name}: {len(cat_data['tools'])} tools")
+    json.dump(catalog, open(CATALOG_PATH, "w"), ensure_ascii=False, indent=2)
+    print(f"Written {len(new_tools)} tools.")
+    for cn, cd in categories.items():
+        print(f"  {cn}: {len(cd['tools'])}")
 
 
 if __name__ == "__main__":

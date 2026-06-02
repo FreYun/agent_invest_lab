@@ -79,7 +79,7 @@ mem0_search(query: "黄金ETF写过哪些角度", scope: "self")
 ## Tool Priority
 
 1. **memory** → check history first, update incrementally
-2. **research-mcp** → financial data
+2. **simworld-data**（ttjj 研究数据）→ financial data
 3. **browser** → Xueqiu, EastMoney research reports, etc.
 4. **MCP search** → supplementary search, overseas data
 5. **xiaohongshu-mcp** → note management, interactions

@@ -79,7 +79,7 @@ mem0_search(query: "黄金ETF写过哪些角度", scope: "self")
 ## Tool Priority
 
 1. **memory** → check history first, update incrementally
-2. **research-mcp** → financial data
+2. **simworld-data**（ttjj 研究数据）→ financial data
 3. **browser** → Xueqiu, EastMoney research reports, etc.
 4. **MCP search** → supplementary search, overseas data
 5. **xiaohongshu-mcp** → note management, interactions
@@ -202,7 +202,7 @@ A 股量化数据优先用 Tushare 工具，不要去搜索：
 
 ### 铁律
 
-- 不要用 MDP 做通用 web 检索；通用热点/新闻用 `web_search` / `research-mcp`
+- 不要用 MDP 做通用 web 检索；通用热点/新闻用 `web_search` / `research_search`
 - 每次检索结果要落到 `.material.md`，脚本里引用要挂 INFOCODE
 
 详见：`skills/voiceover-pack/MDP-检索策略.md`

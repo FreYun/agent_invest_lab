@@ -86,7 +86,7 @@ WHERE bot_id = ? AND trade_date = ?;
 
 ### 市场宽度
 
-- 上涨家数 vs 下跌家数（来自 `get_stock_fund_flow` 或行情统计）
+- 上涨家数 vs 下跌家数（来自 `stock_capital_flow` 或行情统计）
 - 涨停/跌停家数；强势股占比；行业分化度
 - 没数据时也要写"今日市场宽度数据缺失，按 X 估计"
 
@@ -103,7 +103,7 @@ WHERE bot_id = ? AND trade_date = ?;
 
 ### 估值
 
-- 沪深300 / 中证500 / 创业板 PE/PB 百分位(`get_ashares_index_val` 默认窗口由工具返回,如需 1 年 / 3 年 / 多年价格百分位,bot 可从 K 线序列自算)
+- 沪深300 / 中证500 / 创业板 PE/PB 百分位(`market_index_val` 默认窗口由工具返回,如需 1 年 / 3 年 / 多年价格百分位,bot 可从 K 线序列自算)
 - 股债性价比（10Y 国债 vs 沪深300 股息率）
 
 ### 宏观
@@ -197,7 +197,7 @@ today_target:                                # 4 比例和必须 = 100，与 cen
 
 ## 数据采集
 
-使用 research-mcp 的以下工具采集数据,**所有工具调用完成后再做 regime 判定 + 写 Layer 3**。
+使用 simworld-data（ttjj）的以下工具采集数据,**所有工具调用完成后再做 regime 判定 + 写 Layer 3**。
 
 ### 起始日(建议拉满 5 年,bot 也可视需要自取)
 
@@ -216,25 +216,25 @@ bot 拿到 K 线序列后,**自行决定**要算 5 日 / 20 日 / 60 日 / 120 �
 
 | 步骤 | 工具 | 查什么 | 拿到序列后 bot 要算什么 |
 |------|------|--------|---------|
-| 1 | `get_ashares_index_quote(symbol="000001.SH,000300.SH,399006.SZ", start_date=START, end_date=END)` | 上证 / 沪深300 / 创业板指数历史 K 线 | 5/20/60/120/250 日 MA;近 5/20 日方向;沪指当前价 vs 多年中枢 |
-| 2 | `get_ashares_index_val(symbol="000300.SH")` | 沪深 300 PE/PB 百分位(工具默认窗口) | 估值水位;若工具默认 5 年,直接当 5 年百分位;1 年/3 年百分位见说明 |
-| 3 | `get_ashares_gvix(start_date=START, end_date=END)` | A 股隐含波动率历史 | 当前值 + 与近 1 月、近 1 年、近 5 年均值/极值对比 |
-| 4 | `get_ashares_turnover(start_date=START, end_date=END)` | 沪深两市总成交额历史 | 近 5 日 / 20 日 / 60 日 / 250 日均量;当前 vs 多年量能区间位置 |
-| 5 | `get_stock_northbound_holding(start_date=START, end_date=END)` | 北向资金持仓变化历史 | 近 20 日 / 60 日 / 250 日累计净流入 |
-| 6 | `get_cn_bond_yield(start_date=START, end_date=END)` | 10Y 国债利率历史 | 当前值 + 短/中/长期方向 |
-| 7 | `get_bond_yield_spread(start_date=START, end_date=END)` | 信用利差历史 | 当前 vs 20 日 / 60 日 / 多年均值 |
+| 1 | `market_index_quote(market="cn", symbols=["000001.SH","000300.SH","399006.SZ"], start_date=START, end_date=END)` | 上证 / 沪深300 / 创业板指数历史 K 线 | 5/20/60/120/250 日 MA;近 5/20 日方向;沪指当前价 vs 多年中枢 |
+| 2 | `market_index_val(symbols=["000300.SH"])` | 沪深 300 PE/PB 百分位(工具默认窗口) | 估值水位;若工具默认 5 年,直接当 5 年百分位;1 年/3 年百分位见说明 |
+| 3 | `option_vix(start_date=START, end_date=END)  ⚠️返回 VIX/GVIX/GVSpread` | A 股隐含波动率历史 | 当前值 + 与近 1 月、近 1 年、近 5 年均值/极值对比 |
+| 4 | `market_temperature(start_date=START, end_date=END)  ⚠️ttjj 无市场总成交额时点源，仅情绪量能近似（成交额阈值降级）` | 沪深两市总成交额历史 | 近 5 日 / 20 日 / 60 日 / 250 日均量;当前 vs 多年量能区间位置 |
+| 5 | `stock_capital_flow(stock_codes=[...], start_date=START, end_date=END)  ⚠️仅个股级，无市场级北向聚合（北向阈值降级）` | 北向资金持仓变化历史 | 近 20 日 / 60 日 / 250 日累计净流入 |
+| 6 | `bond_yield_curve(curve_type="cn", maturities=["10Y"], start_date=START, end_date=END)` | 10Y 国债利率历史 | 当前值 + 短/中/长期方向 |
+| 7 | `bond_yield_curve(curve_type="credit",…) − bond_yield_curve(curve_type="cn",…)  ⚠️ttjj 无现成信用利差，自算 10Y` | 信用利差历史 | 当前 vs 20 日 / 60 日 / 多年均值 |
 
 ### 选查(有条件时)
 
 | 步骤 | 工具 | 何时查 | 判断什么 |
 |------|------|--------|---------|
-| 8 | `get_usstock_index_quote(symbol="DJIA.GI,SPX.GI,NDX.GI", start_date=START, end_date=END)` | 美股有大波动时 | 海外映射 + 短中长周期位置 |
-| 9 | `get_stock_fund_flow` | 成交额异常时 | 主力资金方向(短期信号) |
-| 10 | `get_cn_macro_data` | 月初 PMI/CPI 发布时 | 宏观周期拐点 |
-| 11 | `get_southbound_hkd_turnover(start_date=START, end_date=END)` | 港股联动显著时 | 南向资金短中长热度 |
+| 8 | `market_index_quote 当前仅 market="cn" 真接入，hk/us 上游未实现 → 海外指数暂缺，可 web_search 兜底` | 美股有大波动时 | 海外映射 + 短中长周期位置 |
+| 9 | `stock_capital_flow` | 成交额异常时 | 主力资金方向(短期信号) |
+| 10 | `macro_data(region="cn")` | 月初 PMI/CPI 发布时 | 宏观周期拐点 |
+| 11 | `ttjj 未接入港股南向 → 暂缺，跳过` | 港股联动显著时 | 南向资金短中长热度 |
 
 **说明**:
-- 步骤 2 `get_ashares_index_val` 不支持 `start_date/end_date`,百分位窗口由后端默认(通常 5 年)。如需 1 年 / 3 年百分位,bot 可从步骤 1 拿到的 K 线序列里自算价格分位作为近似
+- 步骤 2 `market_index_val` 不支持 `start_date/end_date`,百分位窗口由后端默认(通常 5 年)。如需 1 年 / 3 年百分位,bot 可从步骤 1 拿到的 K 线序列里自算价格分位作为近似
 - 所有 K 线类工具拿到序列后,bot 自行决定算什么(MA / 均量 / 累计 / 历史分位 / 多年中枢距离…),skill 不规定
 - 数据缺失(工具超时/返回为空)→ 对应维度叙事写"缺失,按 X 处理",`regime` 降级 `range`
 
@@ -244,8 +244,8 @@ bot 拿到 K 线序列后,**自行决定**要算 5 日 / 20 日 / 60 日 / 120 �
 
 满足以下条件中的 **3 条以上**:
 - 沪指收盘价 > 60 日均线,且 20 日均线 > 60 日均线
-- 近 5 个交易日平均成交额 > 8000 亿
-- 北向资金近 20 日累计净流入 > 0
+- 近 5 个交易日平均成交额 > 8000 亿（⚠️成交额时点源缺失，无 `market_temperature` 佐证时本条不计入）
+- 北向资金近 20 日累计净流入 > 0（⚠️无市场级北向聚合，缺失时本条不计入）
 - GVIX(隐含波动率) < 20
 - 沪深 300 PE 百分位 < 80%(未到极端泡沫)
 
@@ -253,23 +253,23 @@ bot 拿到 K 线序列后,**自行决定**要算 5 日 / 20 日 / 60 日 / 120 �
 
 不满足 bull / bear / crisis 任何一个的条件,或:
 - 沪指在 60 日均线附近 ±3% 范围内
-- 成交额在 6000~9000 亿之间
+- 成交额在 6000~9000 亿之间（成交额缺失时本条不计入）
 - 无明确趋势方向(20 日均线走平)
 
 ### bear(熊市)
 
 满足以下条件中的 **3 条以上**:
 - 沪指收盘价 < 60 日均线,且 20 日均线 < 60 日均线
-- 近 5 个交易日平均成交额 < 6000 亿
-- 北向资金近 20 日累计净流出
-- 信用利差走阔(高于 20 日均值)
+- 近 5 个交易日平均成交额 < 6000 亿（⚠️成交额时点源缺失，无 `market_temperature` 佐证时本条不计入）
+- 北向资金近 20 日累计净流出（⚠️无市场级北向聚合，缺失时本条不计入）
+- 信用利差走阔(高于 20 日均值；用 `bond_yield_curve` credit−cn 自算)
 
 ### crisis(危机)
 
 满足以下条件中的 **2 条以上**:
 - 沪指单周跌幅 > 8%
 - GVIX > 30
-- 信用利差单周走阔幅度 > 20bp
+- 信用利差单周走阔幅度 > 20bp（用 `bond_yield_curve` credit−cn 自算）
 - 出现连续 3 日以上千股跌停
 
 > crisis 是极端状态,触发后投顾巡检进入"安全模式"——以保命为主,暂停所有加仓操作。
