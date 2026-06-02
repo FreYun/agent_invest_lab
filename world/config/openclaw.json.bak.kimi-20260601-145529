@@ -1,0 +1,1405 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.4.10",
+    "lastTouchedAt": "2026-04-27T03:09:17.930Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-03-13T05:23:39.068Z",
+    "lastRunVersion": "2026.2.26",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
+  "browser": {
+    "enabled": true,
+    "defaultProfile": "openclaw",
+    "ssrfPolicy": {
+      "dangerouslyAllowPrivateNetwork": true,
+      "hostnameAllowlist": [
+        "127.0.0.1",
+        "localhost",
+        "xueqiu.com",
+        "*.xueqiu.com",
+        "eastmoney.com",
+        "*.eastmoney.com",
+        "mp.weixin.qq.com",
+        "*.qq.com",
+        "zsxq.com",
+        "*.zsxq.com"
+      ]
+    },
+    "profiles": {
+      "openclaw": {
+        "cdpPort": 18800,
+        "color": "#FF4500",
+        "attachOnly": true
+      },
+      "bot1": {
+        "cdpPort": 18801,
+        "color": "#0066CC"
+      },
+      "bot2": {
+        "cdpPort": 18802,
+        "color": "#00AA00"
+      },
+      "bot3": {
+        "cdpPort": 18803,
+        "color": "#9933FF"
+      },
+      "bot4": {
+        "cdpPort": 18804,
+        "color": "#CC6600"
+      },
+      "bot5": {
+        "cdpPort": 18805,
+        "color": "#FF6699"
+      },
+      "bot6": {
+        "cdpPort": 18806,
+        "color": "#336699"
+      },
+      "bot7": {
+        "cdpPort": 18807,
+        "color": "#FF3333"
+      },
+      "bot8": {
+        "cdpPort": 18808,
+        "color": "#669933"
+      },
+      "bot9": {
+        "cdpPort": 18809,
+        "color": "#996633"
+      },
+      "bot10": {
+        "cdpPort": 18810,
+        "color": "#999999"
+      },
+      "bot11": {
+        "cdpPort": 18811,
+        "color": "#66CCFF"
+      },
+      "bot12": {
+        "cdpPort": 18812,
+        "color": "#888888"
+      },
+      "bot13": {
+        "cdpPort": 18813,
+        "color": "#888888"
+      },
+      "bot14": {
+        "cdpPort": 18814,
+        "color": "#888888"
+      },
+      "bot15": {
+        "cdpPort": 18815,
+        "color": "#888888"
+      },
+      "bot16": {
+        "cdpPort": 18816,
+        "color": "#888888"
+      },
+      "bot17": {
+        "cdpPort": 18817,
+        "color": "#888888"
+      },
+      "bot18": {
+        "cdpPort": 18818,
+        "color": "#888888"
+      },
+      "bot19": {
+        "cdpPort": 18819,
+        "color": "#888888"
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "kimi-coding:default": {
+        "provider": "kimi-coding",
+        "mode": "api_key"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "zai-coding-plan": {
+        "baseUrl": "https://sd7o0ricc19oldoovnj30.apigateway-cn-beijing.volceapi.com/v1",
+        "apiKey": "f9febb34-ae5f-4fc4-b244-5d8e56fd8bc5",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.5-plus",
+            "name": "qwen3.5-plus",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.6-plus",
+            "name": "qwen3.6-plus",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gpt-5.4",
+            "name": "gpt-5.4",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 32768
+          },
+          {
+            "id": "glm-5",
+            "name": "glm-5",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 202752,
+            "maxTokens": 131072
+          },
+          {
+            "id": "kimi-k2.5",
+            "name": "kimi-k2.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 32768
+          },
+          {
+            "id": "Kimi-K2.6",
+            "name": "Kimi-K2.6",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 98304
+          },
+          {
+            "id": "DeepSeek-V4-Pro",
+            "name": "deepseek-v4-pro",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 393216
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "zai-coding-plan/qwen3.6-plus"
+      },
+      "cliBackends": {
+        "claude-cli-glm": {
+          "command": "claude",
+          "args": [
+            "-p",
+            "--output-format",
+            "json",
+            "--max-turns",
+            "30",
+            "--settings",
+            "/home/rooot/.openclaw/.claude-cli-config/settings.json",
+            "--disallowedTools",
+            "Agent,AskUserQuestion,CronCreate,CronDelete,CronList,EnterPlanMode,EnterWorktree,ExitPlanMode,ExitWorktree,NotebookEdit,Skill,TaskOutput,TaskStop"
+          ],
+          "output": "json",
+          "input": "arg",
+          "modelArg": "--model",
+          "sessionArg": "--session-id",
+          "sessionMode": "always",
+          "systemPromptArg": "--append-system-prompt",
+          "systemPromptMode": "append",
+          "systemPromptWhen": "first",
+          "serialize": false,
+          "env": {
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "CLAUDE_CODE_SKIP_OAUTH": "1",
+            "DISABLE_TELEMETRY": "1",
+            "CLAUDE_CONFIG_DIR": "/home/rooot/.openclaw/.claude-cli-config"
+          },
+          "clearEnv": [
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL"
+          ]
+        }
+      },
+      "models": {
+        "zai-coding-plan/kimi-k2.5": {
+          "alias": "Kimi K2.5"
+        },
+        "zai-coding-plan/gpt-5.4": {
+          "alias": "GPT-5.4"
+        },
+        "zai-coding-plan/glm-5": {
+          "alias": "GLM-5"
+        },
+        "zai-coding-plan/qwen3.6-plus": {
+          "alias": "Qwen3.6-Plus"
+        },
+        "zai-coding-plan/qwen3.5-plus": {
+          "alias": "Qwen3.5-Plus"
+        }
+      },
+      "workspace": "/home/rooot/.openclaw/workspace",
+      "memorySearch": {
+        "provider": "openai",
+        "model": "Private-Qwen3-Embedding-4B",
+        "remote": {
+          "baseUrl": "https://dd-ai-api.eastmoney.com/v1/",
+          "apiKey": "7zaA3vI4BLLzESvF0b2c18F45c73492f98640255D435F8Bf"
+        },
+        "fallback": "none"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    },
+    "list": [
+      {
+        "id": "mag1",
+        "default": true,
+        "name": "魏忠贤",
+        "workspace": "/home/rooot/.openclaw/workspace-mag1",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus"
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "sys3",
+        "name": "研发驴人",
+        "model": {
+          "primary": "claude-cli-glm/glm-5-turbo"
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        },
+        "workspace": "/home/rooot/.openclaw/workspace-sys3"
+      },
+      {
+        "id": "bot1",
+        "name": "来财妹妹",
+        "workspace": "/home/rooot/.openclaw/workspace-bot1",
+        "agentDir": "/home/rooot/.openclaw/agents/bot1/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot2",
+        "name": "狗哥说财",
+        "workspace": "/home/rooot/.openclaw/workspace-bot2",
+        "agentDir": "/home/rooot/.openclaw/agents/bot2/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot3",
+        "name": "meme爱理财",
+        "workspace": "/home/rooot/.openclaw/workspace-bot3",
+        "agentDir": "/home/rooot/.openclaw/agents/bot3/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot4",
+        "name": "研报搬运工阿泽",
+        "workspace": "/home/rooot/.openclaw/workspace-bot4",
+        "agentDir": "/home/rooot/.openclaw/agents/bot4/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot5",
+        "name": "宣妈慢慢变富",
+        "workspace": "/home/rooot/.openclaw/workspace-bot5",
+        "agentDir": "/home/rooot/.openclaw/agents/bot5/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot6",
+        "name": "爱理财的James",
+        "workspace": "/home/rooot/.openclaw/workspace-bot6",
+        "agentDir": "/home/rooot/.openclaw/agents/bot6/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot7",
+        "name": "老K投资笔记",
+        "workspace": "/home/rooot/.openclaw/workspace-bot7",
+        "agentDir": "/home/rooot/.openclaw/agents/bot7/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot8",
+        "name": "星星",
+        "workspace": "/home/rooot/.openclaw/workspace-bot8",
+        "agentDir": "/home/rooot/.openclaw/agents/bot8/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        }
+      },
+      {
+        "id": "bot9",
+        "name": "公众号运营强哥",
+        "workspace": "/home/rooot/.openclaw/workspace-bot9",
+        "agentDir": "/home/rooot/.openclaw/agents/bot9/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        }
+      },
+      {
+        "id": "bot10",
+        "name": "测试君",
+        "workspace": "/home/rooot/.openclaw/workspace-bot10",
+        "agentDir": "/home/rooot/.openclaw/agents/bot10/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "runtime": {
+          "type": "research-loop"
+        }
+      },
+      {
+        "id": "bot11",
+        "name": "小奶龙",
+        "workspace": "/home/rooot/agent_invest_lab/bots/bot11",
+        "agentDir": "/home/rooot/agent_invest_lab/session/bot11/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "sys1",
+        "name": "印务局",
+        "workspace": "/home/rooot/.openclaw/workspace-sys1",
+        "agentDir": "/home/rooot/.openclaw/agents/sys1/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus"
+        }
+      },
+      {
+        "id": "sys2",
+        "name": "技能部",
+        "workspace": "/home/rooot/.openclaw/workspace-sys2",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus"
+        }
+      },
+      {
+        "id": "sys4",
+        "name": "运营部",
+        "workspace": "/home/rooot/.openclaw/workspace-sys4",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus"
+        }
+      },
+      {
+        "id": "bot12",
+        "name": "小天爱黄金",
+        "workspace": "/home/rooot/.openclaw/workspace-bot12",
+        "agentDir": "/home/rooot/.openclaw/agents/bot12/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot13",
+        "name": "美股学长 Alex",
+        "workspace": "/home/rooot/.openclaw/workspace-bot13",
+        "agentDir": "/home/rooot/.openclaw/agents/bot13/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot14",
+        "name": "捂紧小荷包",
+        "workspace": "/home/rooot/.openclaw/workspace-bot14",
+        "agentDir": "/home/rooot/.openclaw/agents/bot14/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot15",
+        "name": "搞钱小财迷",
+        "workspace": "/home/rooot/.openclaw/workspace-bot15",
+        "agentDir": "/home/rooot/.openclaw/agents/bot15/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot16",
+        "name": "小贝宏观笔记",
+        "workspace": "/home/rooot/.openclaw/workspace-bot16",
+        "agentDir": "/home/rooot/.openclaw/agents/bot16/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot17",
+        "name": "团子养基",
+        "workspace": "/home/rooot/.openclaw/workspace-bot17",
+        "agentDir": "/home/rooot/.openclaw/agents/bot17/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot18",
+        "name": "抄作业课代表",
+        "workspace": "/home/rooot/.openclaw/workspace-bot18",
+        "agentDir": "/home/rooot/.openclaw/agents/bot18/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      },
+      {
+        "id": "bot19",
+        "name": "招聘管理",
+        "workspace": "/home/rooot/.openclaw/workspace-bot19",
+        "agentDir": "/home/rooot/.openclaw/agents/bot19/agent",
+        "model": {
+          "primary": "zai-coding-plan/qwen3.6-plus",
+          "fallbacks": [
+            "zai-coding-plan/qwen3.6-plus"
+          ]
+        },
+        "tools": {
+          "alsoAllow": [
+            "tushare_stock_list",
+            "tushare_stock_daily",
+            "tushare_stock_weekly",
+            "tushare_stock_monthly",
+            "tushare_adj_factor",
+            "tushare_daily_basic",
+            "tushare_income",
+            "tushare_index_basic",
+            "tushare_index_daily",
+            "tushare_index_weight",
+            "tushare_index_monthly",
+            "tushare_fund_basic",
+            "tushare_fund_nav",
+            "tushare_fund_portfolio"
+          ]
+        }
+      }
+    ]
+  },
+  "tools": {
+    "profile": "full",
+    "deny": [
+      "sessions_spawn",
+      "sessions_send",
+      "sessions_list",
+      "sessions_history"
+    ],
+    "web": {}
+  },
+  "bindings": [
+    {
+      "agentId": "bot1",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot1"
+      }
+    },
+    {
+      "agentId": "bot2",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot2"
+      }
+    },
+    {
+      "agentId": "bot3",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot3"
+      }
+    },
+    {
+      "agentId": "bot4",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot4"
+      }
+    },
+    {
+      "agentId": "bot5",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot5"
+      }
+    },
+    {
+      "agentId": "bot6",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot6"
+      }
+    },
+    {
+      "agentId": "bot7",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot7"
+      }
+    },
+    {
+      "agentId": "bot8",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot8"
+      }
+    },
+    {
+      "agentId": "bot9",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot9"
+      }
+    },
+    {
+      "agentId": "bot10",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot10"
+      }
+    },
+    {
+      "agentId": "mag1",
+      "match": {
+        "channel": "feishu",
+        "accountId": "mag1"
+      }
+    },
+    {
+      "agentId": "bot11",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot11"
+      }
+    },
+    {
+      "agentId": "bot12",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot12"
+      }
+    },
+    {
+      "agentId": "bot13",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot13"
+      }
+    },
+    {
+      "agentId": "bot14",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot14"
+      }
+    },
+    {
+      "agentId": "bot15",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot15"
+      }
+    },
+    {
+      "agentId": "bot16",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot16"
+      }
+    },
+    {
+      "agentId": "bot17",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot17"
+      }
+    },
+    {
+      "agentId": "bot18",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot18"
+      }
+    },
+    {
+      "agentId": "bot19",
+      "match": {
+        "channel": "feishu",
+        "accountId": "bot19"
+      }
+    },
+    {
+      "agentId": "sys3",
+      "match": {
+        "channel": "feishu",
+        "accountId": "sys3"
+      }
+    }
+  ],
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "accounts": {
+        "bot1": {
+          "enabled": true,
+          "appId": "cli_a920c19cc7385cc6",
+          "appSecret": "OENZj8VeqBIsLJsgT0WBWeY2tf4FWKaL",
+          "name": "来财妹妹",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot2": {
+          "enabled": true,
+          "appId": "cli_a9203832dc78dcba",
+          "appSecret": "l1Rd52Qe8YLLKgrPSMVvybBSdakn8ARM",
+          "name": "狗哥说财",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot3": {
+          "enabled": true,
+          "appId": "cli_a920386b2d789ced",
+          "appSecret": "ftKIGajqJnMJSQuIRaE2kdtJ45Bt0PuO",
+          "name": "meme爱理财",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot4": {
+          "enabled": true,
+          "appId": "cli_a92038afba381cbd",
+          "appSecret": "9CNau7RnzXiZYgyoNLvz8gbY7gvfDax3",
+          "name": "研报搬运工阿泽",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot5": {
+          "enabled": true,
+          "appId": "cli_a927f8b8c0f89bd6",
+          "appSecret": "hIkwvrhohiewiaBcSSRihcNfdYHYcGz6",
+          "name": "宣妈慢慢变富",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot6": {
+          "enabled": true,
+          "appId": "cli_a920391733b8dbcb",
+          "appSecret": "QXhGf6XMFUs6bEbxsmAxIfkVF1l0XfFi",
+          "name": "爱理财的James",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot7": {
+          "enabled": true,
+          "appId": "cli_a9203a446f7b9cb1",
+          "appSecret": "4THFaQXtaZsAonPfXB146ekaMrwA8iGi",
+          "name": "老K投资笔记",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot8": {
+          "enabled": true,
+          "appId": "cli_a96b58d638a21cb1",
+          "appSecret": "2SwYDBUzWhKlVBHHq7yh1g3jNBjLg6SK",
+          "name": "星星",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot9": {
+          "enabled": true,
+          "appId": "cli_a948844fd77a1bd2",
+          "appSecret": "C5EahwxbHAaJvkDzJywFAhvOX82qTD2T",
+          "name": "公众号运营强哥",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot10": {
+          "enabled": true,
+          "appId": "cli_a93e6f5ea7799cd2",
+          "appSecret": "qCAmejJCYEW8fsLD8rZsxfGnylNkrNqS",
+          "name": "测试君",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "mag1": {
+          "enabled": true,
+          "appId": "cli_a938e7bb47a55ced",
+          "appSecret": "wY5UuhOqyDtQRrDLLemAEeqycioUS5d7",
+          "name": "管理员",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot11": {
+          "enabled": true,
+          "appId": "cli_a93d0637e8b89bc7",
+          "appSecret": "xqCetKREAqe4wAbKcODmQcqsdtFrcbr3",
+          "name": "小奶龙",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "default": {
+          "groupPolicy": "open"
+        },
+        "bot12": {
+          "enabled": true,
+          "appId": "cli_a94e1b14da36dbc7",
+          "appSecret": "hMnAIoHYAjhdYpk7zQB2DcDlAm0NjmyJ",
+          "name": "小天爱黄金",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot13": {
+          "enabled": true,
+          "appId": "cli_a94e7e72bd39dbd2",
+          "appSecret": "SNUPabVAb2WYC1eCQmgcYfVGc5Od8asR",
+          "name": "美股学长 Alex",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot14": {
+          "enabled": true,
+          "appId": "cli_a94e78bf543b9bd6",
+          "appSecret": "kjBH2l20LyM06u3nxkG0VhZjXqEH1qLp",
+          "name": "捂紧小荷包",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot15": {
+          "enabled": true,
+          "appId": "cli_a94e7977e0f81bca",
+          "appSecret": "BR2LdU89EVyXaPcxYjZKphxI3c2SGORH",
+          "name": "搞钱小财迷",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot16": {
+          "enabled": true,
+          "appId": "cli_a94e7a25c0b95bef",
+          "appSecret": "g12ADeou1v2Msv5GtYbLz8qRh0S3286U",
+          "name": "小贝宏观笔记",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot17": {
+          "enabled": true,
+          "appId": "cli_a94e7b507ab81bc3",
+          "appSecret": "QDtuspzDHO3lHB02Cylu6fV0DOwKhr0X",
+          "name": "团子养基",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "bot18": {
+          "enabled": true,
+          "appId": "cli_a94e7438d678dbc9",
+          "appSecret": "OGrPP73ubRyqJeBuqWBOKcZpAIVvFN4h",
+          "name": "抄作业课代表",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        },
+        "sys3": {
+          "enabled": true,
+          "appId": "cli_a9403d2000b85bdd",
+          "appSecret": "mDMOkKVYrSYmaHylDv7QJdILFu4g3BOX",
+          "name": "研发驴人",
+          "connectionMode": "websocket",
+          "dmPolicy": "open",
+          "groupPolicy": "open",
+          "allowFrom": [
+            "*"
+          ]
+        }
+      }
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "aaa71a56f0fc574b2bc03fc913320cd2239cab7bc61d1bde"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "remote": {
+      "url": "ws://127.0.0.1:18789"
+    }
+  },
+  "skills": {
+    "install": {
+      "nodeManager": "npm"
+    }
+  },
+  "plugins": {
+    "allow": [
+      "feishu",
+      "agent-messaging",
+      "skill-gate",
+      "memory-mem0",
+      "kimi",
+      "browser",
+      "memory-core"
+    ],
+    "load": {
+      "paths": [
+        "~/.openclaw/openclaw/extensions/agent-messaging",
+        "~/.openclaw/extensions/skill-gate"
+      ]
+    },
+    "entries": {
+      "feishu": {
+        "enabled": true
+      },
+      "agent-messaging": {
+        "enabled": true
+      },
+      "skill-gate": {
+        "enabled": true
+      },
+      "memory-mem0": {
+        "enabled": true
+      },
+      "kimi": {
+        "enabled": true
+      },
+      "browser": {
+        "enabled": true
+      }
+    }
+  }
+}

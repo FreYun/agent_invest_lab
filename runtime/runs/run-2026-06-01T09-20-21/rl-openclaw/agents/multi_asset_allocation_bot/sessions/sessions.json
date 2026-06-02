@@ -1,0 +1,13 @@
+{
+  "agent:multi_asset_allocation_bot:trading-run-2026-06-01T09-20-21-2024-03-14": {
+    "origin": {
+      "channel": null,
+      "provider": "research-loop-rust2",
+      "sender_id": null,
+      "sender_name": null
+    },
+    "sessionFile": "/home/rooot/agent_invest_lab/runtime/runs/run-2026-06-01T09-20-21/rl-openclaw/agents/multi_asset_allocation_bot/sessions/206a4c56-80ea-40d6-aa46-c98d9641a87c.jsonl",
+    "sessionId": "206a4c56-80ea-40d6-aa46-c98d9641a87c",
+    "updatedAt": 1780305623021
+  }
+}

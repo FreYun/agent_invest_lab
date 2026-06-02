@@ -1,0 +1,76 @@
+{
+  "model": {
+    "primary": {
+      "provider": "openai_compatible",
+      "base_url": "https://dd-ai-api.eastmoney.com/v1",
+      "model": "qwen3.6-plus",
+      "api_key_from_openclaw": "zai-coding-plan"
+    }
+  },
+  "llm": {
+    "chat_max_tokens": 8000,
+    "chat_temperature": 0.3,
+    "chat_max_tool_iterations": 500,
+    "skill_max_tokens": 4000,
+    "skill_temperature": 0.3,
+    "compact_max_tokens": 2000,
+    "compact_temperature": 0.1
+  },
+  "timeouts": {
+    "chat_llm": 180,
+    "compact_llm": 60,
+    "skill_llm": 60
+  },
+  "tools": {
+    "deny": [
+      "bash",
+      "ls",
+      "glob",
+      "grep",
+      "read_file",
+      "write_file",
+      "web_search",
+      "web_fetch",
+      "spawn_skill_agent",
+      "check_task",
+      "wait_task",
+      "kill_task",
+      "start_research",
+      "enter_phase",
+      "ask_user",
+      "finish_research",
+      "expand_research_evidence",
+      "expand_research_phase",
+      "submit_post"
+    ],
+    "chat_auto_activate_deferred": true
+  },
+  "mcp": {
+    "servers": {},
+    "mem0": "http://127.0.0.1:37815"
+  },
+  "plugins": {
+    "browser": {
+      "enabled": false
+    },
+    "memory-mem0": {
+      "enabled": true
+    }
+  },
+  "limits": {
+    "max_total_turns": 12,
+    "max_time_minutes": 30,
+    "token_budget": 900000,
+    "compact_threshold_pct": 60,
+    "min_sources_for_dig": 3,
+    "context_window": 1000000
+  },
+  "dashboard": {
+    "enabled": false
+  },
+  "openclaw_dir": "/home/rooot/agent_invest_lab/runtime/runs/run-2026-06-01T09-20-21/rl-openclaw",
+  "extra_roots": [
+    "/home/rooot/agent_invest_lab/skills"
+  ],
+  "openclaw_json_path": "/home/rooot/agent_invest_lab/runtime/runs/run-2026-06-01T09-20-21/rl-openclaw/openclaw.json"
+}

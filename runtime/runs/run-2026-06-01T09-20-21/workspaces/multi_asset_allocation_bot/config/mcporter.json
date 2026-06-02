@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "fund-portfolio-mcp": {
+      "url": "http://127.0.0.1:44239/mcp",
+      "transport": "streamable-http"
+    },
+    "simworld-data": {
+      "url": "http://127.0.0.1:37135/mcp",
+      "transport": "streamable-http"
+    },
+    "strategy-mcp": {
+      "url": "http://127.0.0.1:45183/mcp",
+      "transport": "streamable-http"
+    }
+  },
+  "imports": []
+}

@@ -1,0 +1,6 @@
+{
+  "port": 44239,
+  "url": "http://127.0.0.1:44239/mcp",
+  "upstream": "http://localhost:28172/mcp",
+  "runId": "run-2026-06-01T09-20-21"
+}

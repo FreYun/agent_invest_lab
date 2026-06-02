@@ -1,0 +1,20 @@
+{
+  "run_id": "run-2026-06-01T09-20-21",
+  "status": "done",
+  "days": [
+    {
+      "date": "2024-03-14",
+      "bots": [
+        {
+          "bot": "multi_asset_allocation_bot",
+          "status": "ok",
+          "iterations": 10,
+          "usage": 572723,
+          "ms": 232619,
+          "toolCalls": 54
+        }
+      ]
+    }
+  ],
+  "finished_at": "2026-06-01T09:24:16.127Z"
+}
