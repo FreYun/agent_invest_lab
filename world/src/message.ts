@@ -10,7 +10,7 @@ export interface DailyMessageContext {
   // 整天的下单全打空（2026-05-26 dash-2026-05-26T06-34-04 bot2 实测过）。
   botId: string
   quotesPath: string        // 绝对路径，保留 forward-compat（未来 quotes-MCP 可能按路径暴露）
-  // 本轮 user 选定的可买基金白名单。每天都显式播报（含仓位调整指引：单只 → 纯单指数
+  // 本 bot 当前产品可买基金白名单。每天都显式播报（含仓位调整指引：单只 → 纯单指数
   // 择时，多只 → 可在池内配置/轮动）；server 端 place_buy_order 也按同一份 curated 校验。
   buyableFundCodes?: string[]
   // simworld-data 的全部工具（name + 一句话描述）。每天都注入，bot 看到全貌再
@@ -47,10 +47,14 @@ export function weekdayOf(isoDate: string): string {
 // 即使 user 在新建回测时给单基 bot 勾了 10 只池子，单基 bot 的决策风格也不变（它只盯自己的标的择时）；
 // 反之 multi-fund bot 即使只勾了 1 只，文案也不再退化成"纯择时"。决策风格本来就是 bot 的内在属性。
 //
-// 命名约定：bot1..bot20 = 单基金；bot101+（三位数）= 多基金。新增风格 bot 时扩展这个规则。
-export type BotKind = 'single-fund' | 'multi-fund'
+// 命名约定：
+// - bot1..bot20 = 单基金
+// - bot101+（三位数）= 多基金权益组合
+// - bot_multi = 大类资产配置
+export type BotKind = 'single-fund' | 'multi-fund' | 'multi-asset'
 
 export function botKindOf(botId: string): BotKind {
+  if (botId === 'bot_multi') return 'multi-asset'
   return /^bot1\d{2}$/.test(botId) ? 'multi-fund' : 'single-fund'
 }
 
@@ -67,7 +71,7 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
 
 【你的任务】追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
 
-【决策框架】请参考你的 **AGENTS.md**（已注入到 system prompt 的 \`## AGENTS.md\` section）——这是你的角色定位、决策风格和操作边界的总纲。和 METHODOLOGY.md 配合使用：AGENTS.md 定"你是谁、怎么想"，METHODOLOGY.md 定"看什么信号、按什么规则下单"。
+【决策框架】请参考你的 **AGENTS.md**（已注入到 system prompt 的 \`## AGENTS.md\` section）——这是你的角色定位、决策风格和操作边界的总纲；再参考 **METHODOLOGY.md**（\`## METHODOLOGY.md\` section）——这是本轮 assignment 绑定的 active 产品策略，定义当前产品看什么信号、按什么规则下单。
 
 【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。
 
@@ -90,7 +94,7 @@ function briefRules(date: string, weekday: string, botId: string): string {
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
   ② **调至少 1 个非 mem0 工具拉今日新数据**：工具从simworld-data 全部工具里选择，你需要按实际市场情况来选择工具调用，你 methodology 五视角里今天还没覆盖的那个——估值 / 趋势 / 景气度 / 资金面 / 证伪 **这一步缺，整天等于没做。**
   ③ mem0_search 拉过去 thesis / 决策，与今天的数据对比是 still valid 还是已破。**默认会按"最近优先"衰减打分（τ=30 天），近一周的记录天然浮在前面**；想只看最近几天就传 \`start_date=YYYY-MM-DD\`（比如今天往前 7 天），想关掉衰减拉全历史就传 \`recency_tau_days=0\`。
-  ④ 决策（**请参考你的 AGENTS.md**——角色与决策风格总纲；以及 METHODOLOGY.md——仓位管理方法论） + 下单（如有）。
+  ④ 决策（**请参考你的 AGENTS.md**——角色与决策风格总纲；以及 METHODOLOGY.md——本轮 active 产品策略与仓位管理方法论） + 下单（如有）。
   ⑤ mem0_add 落库今天的判断 + 明天要带进来的事。
 
  铁律：严禁每天都进行一样的工具调用和决策流程——比如每天都只调同一个工具、每天都只看行情不研究、每天都只按技术面决策不考虑估值和资金面……**要根据实际市场情况和账户状态灵活调整**，不能变成机械的"每天都做一样的事"。
@@ -149,8 +153,8 @@ function simworldToolsBlock(tools: { name: string; description: string }[]): str
 ${lines}`
 }
 
-// 每天都显式播报本轮可买池 + 仓位调整指引。指引文案**按 bot 类型决定**（不是按池子大小）：
-// - single-fund bot：只做单指数择时（调仓位高低、无标的轮动），即便池子里有多只也只盯自己 methodology 指定的那只
+// 每天都显式播报本 bot 当前产品可买池 + 仓位调整指引。指引文案**按 bot 类型决定**（不是按池子大小）：
+// - single-fund bot：只做单指数择时（调仓位高低、无标的轮动），即便池子里有多只也只盯本轮 assignment 指定的产品/基金
 //                    池子用扁平代码列表渲染（小，bot 看名字就够）。
 // - multi-fund bot：组合配置 + 仓位 + 池内轮动 三件事。**按 theme 聚合 + top-K 候选** 视图渲染，
 //                    bot 一眼能看到主题分布，不用 N 次 RPC 自己探索。
@@ -160,15 +164,17 @@ function buyableFundsBlock(codes: string[], botKind: BotKind, poolMeta?: Buyable
     return multiFundPoolBlock(codes, poolMeta)
   }
   const guidance = botKind === 'single-fund'
-    ? `**你是单基金 bot** —— 不论池子里有几只，你只做单指数择时：盯你 METHODOLOGY 里指定的那一只，决策就是调整它的仓位高低（空仓 ↔ 满仓之间），不要做标的轮动、不要把仓位分散到多只。`
-    : `**你是多基金 bot** —— 在池内做三件事：① 组合配置（各基金目标权重）② 总仓位高低 ③ 池内轮动（换标的）。决策时考虑相关性、行业暴露、单基上限，不要把全部仓位押在一只上。`
+    ? `**你是单基金 bot** —— 不论池子里有几只，你只做单指数择时：盯本轮 assignment / 当前 active 产品策略指定的产品或基金，决策就是调整它的仓位高低（空仓 ↔ 满仓之间），不要做标的轮动、不要把仓位分散到多只。`
+    : botKind === 'multi-asset'
+      ? `**你是大类资产配置 bot** —— 先在 A股基金 / 债券基金 / 黄金基金 / 货币或现金 四类资产之间决定目标权重，再在每类资产里挑 1-2 只代表基金表达。先做资产配置，再做基金选择；如果可买池里没有货币基金，账户现金直接承担现金角色。不要把自己退化成单指数择时，也不要只做权益主题轮动。`
+      : `**你是多基金 bot** —— 在池内做三件事：① 组合配置（各基金目标权重）② 总仓位高低 ③ 池内轮动（换标的）。决策时考虑相关性、行业暴露、单基上限，不要把全部仓位押在一只上。`
   return `
 
-【当前可买池（${codes.length} 只）】
+【本 bot 当前产品可买池（${codes.length} 只）】
 ${codes.join(', ')}
 
 ${guidance}
-下单时 fund_code 必须从这份里选；不在这份里的会被 mcp__fund_portfolio_mcp__portfolio_place_buy_order 直接拒。`
+下单时 fund_code 必须从这份本 bot 产品池里选；不在这份里的会被 mcp__fund_portfolio_mcp__portfolio_place_buy_order 直接拒。`
 }
 
 // multi-fund bot 的可买池视图：按 theme 聚合 + 每 theme 显示 top-K 候选（按 1y rank 升序，rank 缺失放底）。
@@ -225,7 +231,7 @@ function multiFundPoolBlock(codes: string[], meta: BuyablePoolMeta): string {
     ? `1y 业绩快照截至 ${meta.perf1yAsOf}（同类百分位 rank_pct 低 = 排名靠前）；style 截至 ${meta.styleAsOf ?? 'n/a'}。`
     : `style 截至 ${meta.styleAsOf ?? 'n/a'}；本回测日早于 fund_performance 最早日，1y 排名暂无（业绩深拉需要时调 get_fund_detail 看 since_inception 区间）。`
 
-  lines.push(`【可买池主题分布（共 ${codes.length} 只）｜ ${piteline}】`)
+  lines.push(`【本 bot 当前产品可买池主题分布（共 ${codes.length} 只）｜ ${piteline}】`)
   lines.push(...singleThemeRows)
   if (comboLines.length) {
     lines.push('')
@@ -238,7 +244,7 @@ function multiFundPoolBlock(codes: string[], meta: BuyablePoolMeta): string {
 ${lines.join('\n')}
 
 **你是多基金 bot**——按 METHODOLOGY 的"主线 → 候选 → 选品"三步收敛：先看上面的主题分布锁定主题（步 1），再按 size_style/invest_style 因子收敛（步 2），最后对剩 1-3 只候选调 \`get_fund_detail\` 拉 3y/5y 业绩深查（步 3）。**别再只看宽基相对强弱、PE 分位就下单——那是单基金 bot 的玩法。**
-下单时 fund_code 必须从可买池里选（实际校验的是完整 ${codes.length} 只池子，不限于上面展示的 top-K）；不在池里的会被 mcp__fund_portfolio_mcp__portfolio_place_buy_order 直接拒。`
+下单时 fund_code 必须从本 bot 当前产品可买池里选（实际校验的是完整 ${codes.length} 只池子，不限于上面展示的 top-K）；不在池里的会被 mcp__fund_portfolio_mcp__portfolio_place_buy_order 直接拒。`
 }
 
 function formatPoolRow(r: BuyablePoolMetaRow): string {
@@ -467,14 +473,72 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
 // Day N 只一行 reminder。
 const METHODOLOGY_DAY1_HINT = `
 
-【你的 methodology 已就位】你的 system prompt 里的 \`## METHODOLOGY.md\` section 就是你的投资框架。
+【你的 active methodology 已就位】你的 system prompt 里的 \`## METHODOLOGY.md\` section 是本轮 assignment 绑定的 active 产品策略，不是你的固定人设。
 
-如果跑了一段时间发现 methodology 哪里失效 / 有漏洞，可以调 \`mcp__strategy_mcp__update_my_strategy(bot_id, strategy, reason)\` 工具完整重写 METHODOLOGY.md（不是 diff，是完整新版本）。reason 写清为什么改（会进审计日志）。修改下一交易日的 system prompt 生效。不轻易改——但发现 thesis 失效或风控漏洞，该改就改。`
+如果跑了一段时间发现 active methodology 哪里失效 / 有漏洞，可以调 \`mcp__strategy_mcp__update_my_strategy(bot_id, strategy, reason)\` 工具完整重写当前 METHODOLOGY.md（不是 diff，是完整新版本）。reason 写清为什么改（会进审计日志）。修改下一交易日的 system prompt 生效。不轻易改——但发现 thesis 失效或风控漏洞，该改就改。`
 
 const METHODOLOGY_DAYN_HINT = `
 
-【你的 methodology】已在 system prompt 的 \`## METHODOLOGY.md\` section 里——按它决策。
+【你的 active methodology】已在 system prompt 的 \`## METHODOLOGY.md\` section 里——这是本轮 assignment 绑定的当前产品策略，按它决策。
 发现 thesis 失效 / 风控漏洞 → \`mcp__strategy_mcp__update_my_strategy(bot_id, strategy, reason)\` 完整重写（不是 diff，整篇新版本），reason 写清为什么改，下一日 system prompt 注入新版。不轻易改——但该改就改。`
+
+// ============================================================================
+// 策略强制复盘条款（每 REVIEW_CADENCE_DAYS 个交易日触发一次）
+// ----------------------------------------------------------------------------
+// 背景：bot 几乎从不调 update_my_strategy（全历史仅 32 次，最近 8 个 run 里 7 个为 0、最新 run 为 0）。
+// 根因——每日 FOOTER_BRIEF 的 termination contract 只约束"调研/下单/mem0_add"，从不要求 bot 审视
+// 方法论本身是否失效；METHODOLOGY_DAYN_HINT 又用"不轻易改"把 update_my_strategy 劝退。于是 bot 走完
+// checklist 就合法收工，策略漂了也没人改。
+//
+// 这块按 bot 自己的累计交易日数周期性（每 5 日）强制 bot：① 先对当前市场大趋势做定性判断（上行/下行/
+// 震荡，依据长均线排列），作为"方法论是否还匹配当前 regime"的锚；② 看"你 vs 不择时躺平基准"的硬对照
+// （累计收益 + 最大回撤——两个口径直接可比的数，刻意不放 Sharpe 避免 rf/年化口径错配误导）；③ 诚实判断
+// 方法论是否失效，失效 → update_my_strategy 重写 OR mem0 书面论证为何维持（二选一，不允许沉默跳过）。
+// 触发纯按周期（产品决定：到复盘日即视为需审视，不做 off-cadence 硬触发）；trading_days 直接取
+// performance.summary，无需 caller 额外传参。summary 缺（Day 1 / 无历史）或非复盘日 → 返回空串跳过。
+const REVIEW_CADENCE_DAYS = 5
+
+function isReviewDay(dc: DailyContextData | undefined): boolean {
+  const td = dc?.performance?.summary?.trading_days
+  return typeof td === 'number' && td > 0 && td % REVIEW_CADENCE_DAYS === 0
+}
+
+// pct 差（百分点口径，带符号），用于"超额收益"这种 a-b 的差值——和 fmtPct 的"这是个百分比"语义区分开。
+function fmtSignedPP(n: number): string {
+  if (!Number.isFinite(n)) return 'n/a'
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}pct`
+}
+
+function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): string {
+  if (!isReviewDay(dc)) return ''
+  const s = dc!.performance!.summary!
+  const bm = dc!.benchmark
+  const m = bm?.metrics
+  const lines: string[] = []
+  lines.push(`【⚠ 第 ${s.trading_days} 个交易日 · 策略强制复盘（每 ${REVIEW_CADENCE_DAYS} 个交易日一次，今天不可跳过）】`)
+  lines.push('这是硬契约。按【第一步 定性大趋势 → 第二步 业绩对照 → 第三步 二选一】走完，诚实判断：你的方法论现在还成立吗，还是已经失效（跑输躺平 / 回撤失控 / thesis 被市场证伪）？')
+  lines.push('')
+  lines.push('▍ 第一步 · 先对当前市场大趋势做一句话定性判断：上行（牛市 / 主升段）｜ 下行（熊市 / 主跌段）｜ 震荡（盘整 / 磨底 / 筑顶）。依据已注入的主要指数长均线排列（MA60/120/200 多空）+ 你持仓标的所处位置，别用单日涨跌代替趋势。趋势 regime 变了而方法论没跟上，是最典型的失效——先锚定它，再看下面的业绩对照。')
+  lines.push('')
+  if (m) {
+    const alpha = s.total_return_pct - m.return_pct
+    const ddGap = s.max_drawdown_pct - m.max_drawdown_pct  // 回撤都是负数；你的更负=回撤更深=ddGap<0
+    const verdict = alpha < 0 ? `你已跑输躺平 ${Math.abs(alpha).toFixed(2)}pct` : `你领先躺平 ${alpha.toFixed(2)}pct`
+    lines.push(`▍ 第二步 · 你 vs ${bm!.name}（不择时买入持有）· 自 Day 1 起累计`)
+    lines.push(`  累计收益：你 ${fmtPct(s.total_return_pct)} ｜ 躺平 ${fmtPct(m.return_pct)} ｜ 超额 ${fmtSignedPP(alpha)}（${verdict}）`)
+    lines.push(`  最大回撤：你 ${fmtPct(s.max_drawdown_pct)} ｜ 躺平 ${fmtPct(m.max_drawdown_pct)} ｜ 差 ${fmtSignedPP(ddGap)}（负=你回撤更深）`)
+    lines.push('  → 你做了一通择时/选品，结果若既没跑赢躺平、回撤又更深，方法论大概率已失效。')
+  } else {
+    lines.push(`▍ 第二步 · 你 · 自 Day 1 起累计：收益 ${fmtPct(s.total_return_pct)} ｜ 最大回撤 ${fmtPct(s.max_drawdown_pct)}`)
+    lines.push('  （本轮无躺平基准对照，按绝对收益是否达标、回撤是否失控自判方法论有效性。）')
+  }
+  lines.push('')
+  lines.push('▍ 第三步 · 今天必须二选一（不允许沉默跳过——既不改也不论证 = 违约）：')
+  lines.push(`  ① 判断方法论已失效 → 调 \`mcp__strategy_mcp__update_my_strategy(bot_id="${botId}", strategy, reason)\` 完整重写 METHODOLOGY.md（整篇新版本，不是 diff）。reason 写清：哪条 thesis 破了、被什么数据证伪、新版怎么改。`)
+  lines.push('  ② 判断方法论仍成立 → mem0_add 写下"复盘结论：方法论仍有效"，并逐条反驳上面每个负面信号（为什么跑输只是暂时、回撤在容忍内、thesis 仍未破），给出数据依据——不是空喊"再观察"。')
+  lines.push('判据别只盯一天涨跌：结合上方【信念校准】块的 Brier / 活性 + 第一步的趋势定性 + 第二步的累计对照一起判。该改就改，别用"不轻易改"麻痹自己。')
+  return `\n\n${lines.join('\n')}`
+}
 
 export function renderDailyMessage(ctx: DailyMessageContext): string {
   const weekday = weekdayOf(ctx.date)
@@ -496,7 +560,10 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
     return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${toolsBlock}${buyable}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
   }
-  // Day N：briefRules + 工具/可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）。
+  // Day N：briefRules + 工具/可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
+  //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
+  //        让"先定性大趋势 → 业绩对照 → 改策略 or 书面论证维持"成为 bot 收工前读到的最后一条硬约束。
   // FOOTER_BRIEF 的"列了 todo 就要做 + 结束前 mem0_add"对所有 bot 都适用。
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${toolsBlock}${buyable}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}\n`
+  const review = strategyReviewBlock(ctx.dailyContext, ctx.botId)
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${toolsBlock}${buyable}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${review}\n`
 }

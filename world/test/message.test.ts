@@ -83,7 +83,7 @@ test('every day broadcasts the per-run curated buyable pool; guidance is keyed o
   const singleFirst = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot1', quotesPath: '/q.json', buyableFundCodes: codes })
   const singleBrief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot1', quotesPath: '/q.json', buyableFundCodes: codes })
   for (const msg of [singleFirst, singleBrief]) {
-    assert.match(msg, /当前可买池/)
+    assert.match(msg, /本 bot 当前产品可买池/)
     for (const c of codes) assert.match(msg, new RegExp(c))
     assert.match(msg, /你是单基金 bot/)
     assert.match(msg, /单指数择时/)
@@ -97,7 +97,7 @@ test('every day broadcasts the per-run curated buyable pool; guidance is keyed o
   const multiFirst = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot101', quotesPath: '/q.json', buyableFundCodes: codes })
   const multiBrief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json', buyableFundCodes: codes })
   for (const msg of [multiFirst, multiBrief]) {
-    assert.match(msg, /当前可买池/)
+    assert.match(msg, /本 bot 当前产品可买池/)
     assert.match(msg, /你是多基金 bot/)
     assert.match(msg, /组合配置（各基金目标权重）/)
     assert.match(msg, /池内轮动/)
@@ -110,9 +110,19 @@ test('every day broadcasts the per-run curated buyable pool; guidance is keyed o
   assert.match(multiOneCode, /你是多基金 bot/)
   assert.doesNotMatch(multiOneCode, /单指数择时/)
 
+  // multi-asset bot (bot_multi) — must not be mistaken for single-fund or equity-only multi-fund rotation
+  const multiAsset = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot_multi', quotesPath: '/q.json', buyableFundCodes: codes })
+  assert.match(multiAsset, /你是大类资产配置 bot/)
+  assert.match(multiAsset, /A股基金 \/ 债券基金 \/ 黄金基金 \/ 货币或现金/)
+  assert.match(multiAsset, /先做资产配置，再做基金选择/)
+  assert.match(multiAsset, /账户现金直接承担现金角色/)
+  assert.doesNotMatch(multiAsset, /你是单基金 bot/)
+  assert.doesNotMatch(multiAsset, /你是多基金 bot/)
+  assert.doesNotMatch(multiAsset, /池内轮动（换标的）/)
+
   // No list provided (world.yaml didn't set buyable_fund_codes): block omitted
   const firstNoList = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot1', quotesPath: '/q.json' })
-  assert.doesNotMatch(firstNoList, /当前可买池/)
+  assert.doesNotMatch(firstNoList, /本 bot 当前产品可买池/)
   rmSync(w, { recursive: true, force: true })
 })
 
@@ -386,7 +396,7 @@ test('Day 1 always injects methodology hint (system prompt has the actual conten
   })
   // hint 指向 system prompt 的 ## METHODOLOGY.md section
   assert.match(first, /## METHODOLOGY\.md/)
-  assert.match(first, /你的 methodology 已就位/)
+  assert.match(first, /你的 active methodology 已就位/)
   // update_my_strategy 工具可以改 methodology
   assert.match(first, /update_my_strategy\(bot_id, strategy, reason\)/)
   // 不再有"写策略文档"的指令
@@ -413,5 +423,55 @@ test('Day N always injects methodology hint (no strategy block, system prompt ha
   assert.doesNotMatch(brief, /# MY_STRATEGY/)
   // briefRules 头部仍然在
   assert.match(brief, /当前世界日期：2024-03-19/)
+  rmSync(w, { recursive: true, force: true })
+})
+
+test('Day N 复盘日（trading_days % 5 === 0）注入策略强制复盘硬契约：第一步定性大趋势 → 第二步业绩对照 → 第三步二选一；非复盘日不注入', () => {
+  // 这个 hook 历史上被悄悄从 message.ts 删过一次（dash-2026-06-01 run 带着它跑，之后 working tree 丢了）。
+  // 这条测试是 guard：① 复盘日（每 5 个交易日）必须注入硬契约；② 三步结构齐全（用户要求"先定性大趋势"）；
+  // ③ 你 vs 躺平的 alpha / 回撤差口径正确；④ 非复盘日（trading_days=4）返回空、不注入。
+  const w = tmpWorldWithOverview('2024-03-25', 'overview')
+  const perf = {
+    asOfDate: '2024-03-25',
+    summary: {
+      first_date: '2024-03-15', last_date: '2024-03-25', trading_days: 5,
+      initial_capital: 1_000_000, latest_total_value: 1_030_000, latest_net_value: 1.03,
+      total_return_pct: 3.0, annualized_return_pct: 9.0, max_drawdown_pct: -8.0, max_drawdown_date: '2024-03-20',
+      volatility_pct_annualized: 5.0, sharpe_ratio_rf0: 0.5,
+      win_days: 3, loss_days: 2, flat_days: 0,
+      best_day: null, worst_day: null,
+    },
+    trades: { buy_count: 0, sell_count: 0, total_buy_amount: 0, total_sell_proceeds: 0, total_fees: 0, round_trips_count: 0 },
+    intervals: null,
+    completedPositions: [],
+  }
+  const benchmark = {
+    code: '000300.SH', name: '沪深300', pointsByDate: {}, latestCumulativePct: 10.0,
+    metrics: { return_pct: 10.0, max_drawdown_pct: -5.0, volatility_pct: 6.0, sharpe_ratio: 0.6, calmar_ratio: 2.0, data_points: 5 },
+  }
+  const review = renderDailyMessage({
+    worldRoot: w, date: '2024-03-25', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { performance: perf, benchmark },
+  })
+  // 硬契约标题 + 三步结构
+  assert.match(review, /【⚠ 第 5 个交易日 · 策略强制复盘（每 5 个交易日一次，今天不可跳过）】/)
+  assert.match(review, /▍ 第一步 · 先对当前市场大趋势做一句话定性判断/)
+  assert.match(review, /▍ 第二步 · 你 vs 沪深300（不择时买入持有）/)
+  assert.match(review, /▍ 第三步 · 今天必须二选一/)
+  // alpha = 3.0 - 10.0 = -7.00pct（跑输）；ddGap = -8.0 - (-5.0) = -3.00pct（你回撤更深）
+  assert.match(review, /超额 -7\.00pct（你已跑输躺平 7\.00pct）/)
+  assert.match(review, /差 -3\.00pct（负=你回撤更深）/)
+  // 二选一里的 update_my_strategy 带上字面 bot_id
+  assert.match(review, /update_my_strategy\(bot_id="bot7"/)
+  // 复盘块在最末尾（recency 最高）
+  assert.match(review.trimEnd(), /该改就改，别用"不轻易改"麻痹自己。$/)
+
+  // 非复盘日（trading_days=4）→ 不注入
+  const perf4 = { ...perf, summary: { ...perf.summary, trading_days: 4 } }
+  const noReview = renderDailyMessage({
+    worldRoot: w, date: '2024-03-25', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { performance: perf4, benchmark },
+  })
+  assert.doesNotMatch(noReview, /策略强制复盘/)
   rmSync(w, { recursive: true, force: true })
 })
