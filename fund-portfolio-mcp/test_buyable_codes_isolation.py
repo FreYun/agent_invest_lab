@@ -53,6 +53,11 @@ def _write_codes(d, run_id: str, codes: list[str]) -> None:
     (d / f"{run_id}.json").write_text(json.dumps({"fund_codes": codes}) + "\n")
 
 
+def _write_by_bot(d, run_id: str, by_bot: dict[str, list[str]]) -> None:
+    union = sorted({code for codes in by_bot.values() for code in codes})
+    (d / f"{run_id}.json").write_text(json.dumps({"fund_codes": union, "by_bot": by_bot}) + "\n")
+
+
 def _seed_fund_nav(db_path: str, codes: list[str]) -> None:
     """fund_nav 需要至少一行净值数据；portfolio_get_buyable_funds 从 DISTINCT fund_code 取全集。"""
     conn = sqlite3.connect(db_path)
@@ -177,17 +182,58 @@ def test_place_buy_order_respects_per_run_curated(reload_server, tmp_db, tmp_buy
     _write_codes(tmp_buyable_dir, "runB", ["B1"])
     s = reload_server
 
-    # runA 下 A1 → 不被白名单拒（白名单允许）；至少不会出 "不在本轮可买池"
+    # runA 下 A1 → 不被白名单拒（白名单允许）；至少不会出 "不在本 bot 当前产品可买池"
     payload = asyncio.run(s.portfolio_place_buy_order(
-        bot_id="botX", fund_code="A1", amount=1000, trade_date="2026-01-02", run_id="runA"
+        bot_id="botX", fund_code="A1", amount=1000, trade_date="2026-01-02", reason="allowed", run_id="runA"
     ))
     data = json.loads(payload)
-    assert "不在本轮可买池" not in (data.get("message") or ""), data
+    assert "不在本 bot 当前产品可买池" not in (data.get("message") or ""), data
 
     # runA 下 B1 → 应被白名单拒
     payload = asyncio.run(s.portfolio_place_buy_order(
-        bot_id="botX", fund_code="B1", amount=1000, trade_date="2026-01-02", run_id="runA"
+        bot_id="botX", fund_code="B1", amount=1000, trade_date="2026-01-02", reason="denied", run_id="runA"
     ))
     data = json.loads(payload)
     assert data["success"] is False
-    assert "不在本轮可买池" in data["message"], data
+    assert "不在本 bot 当前产品可买池" in data["message"], data
+
+
+def test_load_by_bot_prefers_bot_specific_pool(reload_server, tmp_buyable_dir):
+    _write_by_bot(tmp_buyable_dir, "runC", {"bot7": ["A1"], "bot11": ["B1"]})
+    assert reload_server._load_curated_buyable_codes("runC") == ["A1", "B1"]
+    assert reload_server._load_curated_buyable_codes("runC", "bot7") == ["A1"]
+    assert reload_server._load_curated_buyable_codes("runC", "bot11") == ["B1"]
+    assert reload_server._load_curated_buyable_codes("runC", "botMissing") == []
+
+
+def test_get_buyable_funds_with_bot_id_returns_bot_pool(reload_server, tmp_db, tmp_buyable_dir):
+    _seed_fund_nav(tmp_db, ["A1", "B1", "C1"])
+    _write_by_bot(tmp_buyable_dir, "runC", {"bot7": ["A1"], "bot11": ["B1"]})
+
+    data = json.loads(asyncio.run(reload_server.portfolio_get_buyable_funds(run_id="runC", bot_id="bot7")))
+    assert data["fund_codes"] == ["A1"], data
+    assert data["bot_id"] == "bot7"
+    assert data["curated"] is True
+
+    union = json.loads(asyncio.run(reload_server.portfolio_get_buyable_funds(run_id="runC")))
+    assert union["fund_codes"] == ["A1", "B1"], union
+
+
+def test_place_buy_order_respects_per_bot_curated_pool(reload_server, tmp_db, tmp_buyable_dir):
+    _seed_fund_nav(tmp_db, ["A1", "B1"])
+    _seed_account(tmp_db, bot_id="bot7")
+    _seed_account(tmp_db, bot_id="bot11")
+    _write_by_bot(tmp_buyable_dir, "runC", {"bot7": ["A1"], "bot11": ["B1"]})
+    s = reload_server
+
+    ok = json.loads(asyncio.run(s.portfolio_place_buy_order(
+        bot_id="bot7", fund_code="A1", amount=1000, trade_date="2026-01-02", reason="own pool", run_id="runC"
+    )))
+    assert ok.get("success") is True, ok
+
+    denied = json.loads(asyncio.run(s.portfolio_place_buy_order(
+        bot_id="bot7", fund_code="B1", amount=1000, trade_date="2026-01-02", reason="other pool", run_id="runC"
+    )))
+    assert denied["success"] is False
+    assert "不在本 bot 当前产品可买池" in denied["message"], denied
+    assert denied["bot_id"] == "bot7"

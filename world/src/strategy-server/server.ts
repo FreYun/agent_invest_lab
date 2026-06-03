@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { shadowWorkspaceDir, strategiesDir, strategyRevisionsFile } from '../paths.ts'
+import { loadStrategyLibrary } from '../strategy-library.ts'
 
 // 进程内 MCP 服务，承载两个工具让 bot 自己管理"投资策略文档"：
 //   - update_my_strategy(bot_id, strategy, reason): 完整替换 shadow METHODOLOGY.md，追加修订审计
@@ -62,13 +63,18 @@ const PROTOCOL_VERSION = '2024-11-05'
 const SERVER_NAME = 'strategy-server'
 const SERVER_VERSION = '0.1.0'
 const SERVER_INSTRUCTIONS =
-  '策略文档自管理服务。每个 bot 的策略 = shadow workspace 下的 METHODOLOGY.md（research-loop ' +
+  '策略文档服务。每个 bot 当前 active methodology = shadow workspace 下的 METHODOLOGY.md（research-loop ' +
   '每次 chat 都把它 splice 进 system prompt 的 ## METHODOLOGY.md section）。' +
-  'update_my_strategy 完整重写该文件，下一交易日 system prompt 自动注入新版。' +
+  '共享策略库在 shadow workspace 的 strategies/index-products 下，可通过 list_strategies/get_strategy 查看；' +
+  'update_my_strategy 完整重写当前 active methodology，下一交易日 system prompt 自动注入新版。' +
   '修订原因强制传入，全程审计可回放。'
 
 function methodologyPathOf(worldRoot: string, runId: string, botId: string): string {
   return join(shadowWorkspaceDir(worldRoot, runId, botId), 'METHODOLOGY.md')
+}
+
+function strategyLibraryRootOf(worldRoot: string, runId: string, botId: string): string {
+  return join(shadowWorkspaceDir(worldRoot, runId, botId), 'strategies', 'index-products')
 }
 
 // MCP 工具声明：对齐 FastMCP 实际输出（properties.title + inputSchema.title + outputSchema）。
@@ -77,7 +83,7 @@ const TOOLS = [
   {
     name: 'update_my_strategy',
     description:
-      '更新（完整替换）你当前的投资策略文档 METHODOLOGY.md（investment strategy revise update revision）。' +
+      '更新（完整替换）你当前 active methodology 文档 METHODOLOGY.md（investment strategy revise update revision）。' +
       '传入的 strategy 必须是完整的 markdown（不是 diff），会覆盖旧版本；下一交易日的 system prompt ' +
       '自动注入这一新版本（## METHODOLOGY.md section）。reason 一句话说清楚为什么调整——会写进审计日志' +
       '（revisions.jsonl）供事后回看。每次调用都视作一次正式 portfolio strategy revision。',
@@ -115,9 +121,66 @@ const TOOLS = [
     },
   },
   {
+    name: 'list_strategies',
+    description:
+      '列出本 run 对该 bot 可见的共享指数产品策略 catalog（只列 strategy_id/title/target_index/default fund codes，不注入全文）。',
+    inputSchema: {
+      type: 'object',
+      title: 'list_strategiesArguments',
+      properties: {
+        bot_id: { type: 'string', title: 'Bot Id', description: '你的 bot id（比如 bot7）。' },
+      },
+      required: ['bot_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      title: 'list_strategiesOutput',
+      properties: { result: { type: 'string', title: 'Result' } },
+      required: ['result'],
+    },
+  },
+  {
+    name: 'get_strategy',
+    description:
+      '读取某个共享策略库策略全文。注意：这只是查看其它产品策略；交易执行仍应遵循当前 active METHODOLOGY.md。',
+    inputSchema: {
+      type: 'object',
+      title: 'get_strategyArguments',
+      properties: {
+        bot_id: { type: 'string', title: 'Bot Id', description: '你的 bot id（比如 bot7）。' },
+        strategy_id: { type: 'string', title: 'Strategy Id', description: '共享策略库里的 strategy_id，例如 hs300。' },
+      },
+      required: ['bot_id', 'strategy_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      title: 'get_strategyOutput',
+      properties: { result: { type: 'string', title: 'Result' } },
+      required: ['result'],
+    },
+  },
+  {
+    name: 'get_active_strategy',
+    description: '读取当前 active METHODOLOGY.md；等价于 get_my_strategy，但名称更明确。',
+    inputSchema: {
+      type: 'object',
+      title: 'get_active_strategyArguments',
+      properties: {
+        bot_id: { type: 'string', title: 'Bot Id', description: '你的 bot id（比如 bot7）。' },
+      },
+      required: ['bot_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      title: 'get_active_strategyOutput',
+      properties: { result: { type: 'string', title: 'Result' } },
+      required: ['result'],
+    },
+  },
+  {
     name: 'get_my_strategy',
     description:
-      '读取你当前的投资策略文档 METHODOLOGY.md（与每日 system prompt 注入的内容一致，investment strategy review）。' +
+      '读取你当前 active methodology 文档 METHODOLOGY.md（与每日 system prompt 注入的内容一致，investment strategy review）。' +
       '日常不必显式调用——methodology 每天会被自动 splice 进 system prompt——但如果你想中途重新审视、' +
       '或者想确认刚刚 update_my_strategy 的写入是否生效，可以调一次。',
     inputSchema: {
@@ -206,12 +269,41 @@ export async function createStrategyServer(opts: StrategyServerOptions): Promise
       )
     }
 
-    if (name === 'get_my_strategy') {
+    if (name === 'list_strategies') {
+      try {
+        const lib = loadStrategyLibrary(strategyLibraryRootOf(worldRoot, runId, botId))
+        const strategies = [...lib.strategies.values()].sort((a, b) => a.id.localeCompare(b.id)).map(strategy => ({
+          strategy_id: strategy.id,
+          title: strategy.title,
+          target_index: strategy.targetIndex,
+          default_buyable_fund_codes: strategy.defaultBuyableFundCodes,
+        }))
+        return ok(JSON.stringify({ success: true, strategies }, null, 2))
+      } catch (e) {
+        return err(`读取共享策略库失败：${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    if (name === 'get_strategy') {
+      const strategyId = typeof args.strategy_id === 'string' ? args.strategy_id.trim() : ''
+      if (!strategyId) return err('strategy_id 必填且非空')
+      if (!/^[A-Za-z0-9_-]+$/.test(strategyId)) return err(`strategy_id "${strategyId}" 含非法字符：只允许字母/数字/_/-`)
+      try {
+        const lib = loadStrategyLibrary(strategyLibraryRootOf(worldRoot, runId, botId))
+        const strategy = lib.strategies.get(strategyId)
+        if (!strategy) return err(`strategy_id "${strategyId}" 不存在`)
+        return ok(readFileSync(strategy.methodologyPath, 'utf8'))
+      } catch (e) {
+        return err(`读取共享策略失败：${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    if (name === 'get_my_strategy' || name === 'get_active_strategy') {
       if (!existsSync(targetPath)) {
         return err(`找不到 ${botId} 的 METHODOLOGY.md——这通常意味着 shadow workspace 没拷贝成功，请联系 world 维护者。`)
       }
       try { return ok(readFileSync(targetPath, 'utf8')) }
-      catch (e) { return err(`读取策略失败：${e instanceof Error ? e.message : String(e)}`) }
+      catch (e) { return err(`读取 active methodology 失败：${e instanceof Error ? e.message : String(e)}`) }
     }
 
     return err(`unknown tool: ${name}`)

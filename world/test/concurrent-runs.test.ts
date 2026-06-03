@@ -81,3 +81,16 @@ test('two runs write independent buyable code files; neither overwrites the othe
 
   rmSync(w, { recursive: true, force: true })
 })
+
+
+test('buyable code file can include per-bot pools plus run union', () => {
+  const w = tmpWorldRoot()
+  const p = writeBuyableCodesFile(w, 'runC', {
+    bot7: ['000051', '000051'],
+    bot11: ['014854'],
+  })
+  const payload = JSON.parse(readFileSync(p, 'utf8'))
+  assert.deepEqual(payload.fund_codes, ['000051', '014854'])
+  assert.deepEqual(payload.by_bot, { bot7: ['000051'], bot11: ['014854'] })
+  rmSync(w, { recursive: true, force: true })
+})

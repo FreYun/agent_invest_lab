@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { WorldConfig } from './config.ts'
+import { copyStrategyLibraryToWorkspace, loadStrategyLibrary, renderActiveMethodology, renderStrategyCatalog, type StrategyLibrary } from './strategy-library.ts'
 import { loadCalendar, computeTradingDates } from './calendar.ts'
 import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
@@ -152,6 +153,57 @@ function log(worldRoot: string, runId: string, msg: string): void {
   process.stdout.write(`[world ${runId}] ${msg}\n`)
 }
 
+interface StrategyAssignmentAuditEntry {
+  strategy_id: string
+  strategy_title: string
+  target_index: string
+  buyable_fund_codes: string[]
+}
+
+type BuyableCodesByBot = Record<string, string[]>
+
+function buyableCodesForBot(config: WorldConfig, lib: StrategyLibrary | null, botId: string): string[] | undefined {
+  const assignment = config.botAssignments?.[botId]
+  if (assignment?.buyableFundCodes?.length) return assignment.buyableFundCodes
+  if (assignment && lib) return lib.strategies.get(assignment.strategyId)?.defaultBuyableFundCodes
+  return config.buyableFundCodes
+}
+
+function buildBuyableCodesByBot(config: WorldConfig, lib: StrategyLibrary | null): BuyableCodesByBot {
+  const out: BuyableCodesByBot = {}
+  for (const botId of config.bots) {
+    const codes = buyableCodesForBot(config, lib, botId)
+    if (codes && codes.length) out[botId] = [...new Set(codes)].sort()
+  }
+  return out
+}
+
+function installStrategyLibraryInShadow(opts: {
+  config: WorldConfig
+  lib: StrategyLibrary | null
+  shadow: string
+  botId: string
+  buyableCodes: string[] | undefined
+}): StrategyAssignmentAuditEntry | null {
+  const { config, lib, shadow, botId, buyableCodes } = opts
+  if (!lib) return null
+  copyStrategyLibraryToWorkspace(lib, shadow)
+  writeFileSync(join(shadow, 'STRATEGY_LIBRARY.md'), renderStrategyCatalog(lib))
+  const assignment = config.botAssignments?.[botId]
+  if (!assignment) return null
+  const strategy = lib.strategies.get(assignment.strategyId)
+  if (!strategy) throw new Error('bot ' + botId + ' strategy "' + assignment.strategyId + '" not found in strategy library')
+  const codes = buyableCodes ?? strategy.defaultBuyableFundCodes
+  if (!codes.length) throw new Error('bot ' + botId + ' strategy "' + assignment.strategyId + '" resolved empty buyable fund pool')
+  writeFileSync(join(shadow, 'METHODOLOGY.md'), renderActiveMethodology({ botId, strategy, buyableFundCodes: codes }))
+  return {
+    strategy_id: strategy.id,
+    strategy_title: strategy.title,
+    target_index: strategy.targetIndex,
+    buyable_fund_codes: codes,
+  }
+}
+
 function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string, memoryUrl: string, openclawDir: string): void {
   let base: Record<string, unknown>
   try { base = JSON.parse(readFileSync(config.rlConfigBase, 'utf8')) as Record<string, unknown> }
@@ -175,6 +227,7 @@ interface SetupResult {
   strategyServer: StrategyServerHandle
   bots: { botId: string; server: BotServer }[]
   currentDateRef: { value: string }
+  buyableCodesByBot: BuyableCodesByBot
   // 进程内共享的 MemoryStore 实例；与 memory-server 是同一份。
   memoryStore: MemoryStore
   // Kill the named bot's server and spawn a fresh one in its slot. Used by runLoop
@@ -314,6 +367,8 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     log(worldRoot, runId, `simworld_tools whitelist active (${config.simworldTools.length} entries); daily prompt will list only these${missing.length ? ` — bare-name (no probe desc, no config desc): ${missing.join(', ')}` : ''}`)
   }
   const templateVars: Record<string, string> = { SIMWORLD_PROXY_URL: simworldProxy.url }
+  const strategyLibrary = config.strategyLibraryRoot ? loadStrategyLibrary(config.strategyLibraryRoot) : null
+  const buyableCodesByBot = buildBuyableCodesByBot(config, strategyLibrary)
 
   // fund-portfolio-mcp 代理（仅当 fundMcpCli 配置时启用——基金 run 才需要）：
   //   - 强制注入 run_id 到所有 writer 工具的 arguments
@@ -354,11 +409,20 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
 
   // 影子 workspace + bot server
   const bots: { botId: string; server: BotServer }[] = []
+  const strategyAssignmentAudit: Record<string, StrategyAssignmentAuditEntry> = {}
   const spawnBotServer = async (botId: string): Promise<BotServer> => {
     const srcWs = isAbsolute(botId) ? botId : join(config.botsRoot, botId)
     if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
     const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
     buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars })
+    const audit = installStrategyLibraryInShadow({
+      config,
+      lib: strategyLibrary,
+      shadow,
+      botId,
+      buyableCodes: buyableCodesByBot[botId],
+    })
+    if (audit) strategyAssignmentAudit[botId] = audit
     const argv = botServerArgv(config, botId, shadow, loopConfigPath(config, worldRoot, runId))
     return startBotServer(botId, argv)
   }
@@ -374,6 +438,13 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
       const server = await spawnBotServer(botId)
       bots.push({ botId, server })
       log(worldRoot, runId, `bot ${botId}: server ready`)
+    }
+    if (Object.keys(strategyAssignmentAudit).length > 0) {
+      writeFileSync(
+        join(P.runDir(worldRoot, runId), 'strategy-assignments.json'),
+        JSON.stringify({ run_id: runId, bots: strategyAssignmentAudit }, null, 2) + '\n',
+      )
+      log(worldRoot, runId, `strategy assignments written for ${Object.keys(strategyAssignmentAudit).length} bot(s)`)
     }
   } catch (err) {
     // 启动阶段失败：关掉已起的 bot server + 记忆服务 + 代理 + strategy-server
@@ -392,10 +463,12 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     // FUND_BUYABLE_CODES_DIR env 读这个目录，按调用方传入的 run_id 选文件。
     // 路径相对关系由 paths.ts 单点维护，必须和 lab-fund-{bot-only,readonly}.service 的
     // FUND_BUYABLE_CODES_DIR env 保持一致。
-    if (config.buyableFundCodes) {
+    if (Object.keys(buyableCodesByBot).length > 0) {
       try {
-        writeBuyableCodesFile(worldRoot, runId, config.buyableFundCodes)
-        log(worldRoot, runId, `fund buyable codes pinned (${config.buyableFundCodes.length}): ${config.buyableFundCodes.slice(0, 8).join(',')}${config.buyableFundCodes.length > 8 ? ',…' : ''}`)
+        const writePayload = config.botAssignments ? buyableCodesByBot : (config.buyableFundCodes ?? buyableCodesByBot)
+        const written = writeBuyableCodesFile(worldRoot, runId, writePayload)
+        const union = [...new Set(Object.values(buyableCodesByBot).flat())].sort()
+        log(worldRoot, runId, `fund buyable codes pinned (${union.length} union): ${union.slice(0, 8).join(',')}${union.length > 8 ? ',…' : ''} -> ${written}`)
       } catch (err) {
         log(worldRoot, runId, `fund buyable codes write FAILED: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -414,17 +487,25 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     }
   }
 
-  return { tradingDates, memory, simworldProxy, fundPortfolioProxy, strategyServer, bots, currentDateRef, memoryStore: store, restartBot }
+  return { tradingDates, memory, simworldProxy, fundPortfolioProxy, strategyServer, bots, currentDateRef, buyableCodesByBot, memoryStore: store, restartBot }
 }
 
 /** 写当前 run 的可买基金白名单文件。落点 = paths.buyableCodesFile(worldRoot, runId)；
  *  fund-portfolio-mcp 通过 FUND_BUYABLE_CODES_DIR 读同一目录。
  *  抽出来 named export 是为了 concurrent-runs.test.ts 能直接测"两 run 各自写、互不覆盖"，
  *  不用跑整个 setup()。返回写入的绝对路径，便于调用方 log 或测试 assert。 */
-export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: string[]): string {
+export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: string[] | BuyableCodesByBot): string {
   const p = P.buyableCodesFile(worldRoot, runId)
   mkdirSync(dirname(p), { recursive: true })
-  writeFileSync(p, JSON.stringify({ fund_codes: codes }) + '\n')
+  if (Array.isArray(codes)) {
+    writeFileSync(p, JSON.stringify({ fund_codes: [...new Set(codes)].sort() }) + '\n')
+    return p
+  }
+  const byBot = Object.fromEntries(
+    Object.entries(codes).map(([botId, botCodes]) => [botId, [...new Set(botCodes)].sort()]),
+  )
+  const union = [...new Set(Object.values(byBot).flat())].sort()
+  writeFileSync(p, JSON.stringify({ fund_codes: union, by_bot: byBot }) + '\n')
   return p
 }
 
@@ -705,6 +786,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
+        const botBuyableFundCodes = setupRes.buyableCodesByBot[b.botId] ?? config.buyableFundCodes
         // Prefetch the per-bot daily context (account snapshot, recent PnL,
         // held-fund NAV, major indices) so the bot doesn't have to spend
         // round-trips re-discovering routine inputs every morning. Talks to
@@ -722,7 +804,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           runStartDate: dates[0],
           // 单标的择时基准：用本轮买池的 NAV B&H 当对照（单只 → 该基金 B&H；多只 → 等权篮子）。
           // 也驱动 daily fee block——不传费率拉不到，bot 看不到申购/赎回阶梯。
-          buyableFundCodes: config.buyableFundCodes,
+          buyableFundCodes: botBuyableFundCodes,
         })
         // 滚动 history window：从前几个交易日的 session jsonl 抽 digest（去掉工具结果原文），
         // 按 20000 字符预算切割。超 budget 时用主模型（openclaw.json 的 default route）按 4 维度
@@ -756,7 +838,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           worldRoot, date, isFirstDay,
           botId: b.botId,
           quotesPath: quotesAbs,
-          buyableFundCodes: config.buyableFundCodes,
+          buyableFundCodes: botBuyableFundCodes,
           simworldTools: resolveSimworldTools(config.simworldTools, setupRes.simworldProxy.tools),
           dailyContext,
           historyWindow,

@@ -145,7 +145,7 @@ def _require_reason(reason: str, action: str) -> str | None:
 _BUYABLE_CODES_DIR = os.getenv("FUND_BUYABLE_CODES_DIR", "")
 
 
-def _load_curated_buyable_codes(run_id: str) -> list[str] | None:
+def _load_curated_buyable_codes(run_id: str, bot_id: str = "") -> list[str] | None:
     if not _BUYABLE_CODES_DIR or not run_id:
         return None
     # 防 path-traversal：run_id 只能当单段 basename 用。world 现有命名是 dash-<ts>，本来
@@ -158,10 +158,26 @@ def _load_curated_buyable_codes(run_id: str) -> list[str] | None:
             payload = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
-    codes = payload.get("fund_codes") if isinstance(payload, dict) else payload
+
+    # New format written by world v2:
+    # {"fund_codes": [...run union...], "by_bot": {"bot7": ["000051"]}}
+    # When bot_id is provided, use the bot-specific pool for enforcement. Missing
+    # bot entries intentionally resolve to an empty curated list instead of the
+    # run union, so a malformed assignment file cannot broaden a bot's product scope.
+    if isinstance(payload, dict):
+        by_bot = payload.get("by_bot")
+        if bot_id and isinstance(by_bot, dict):
+            bot_codes = by_bot.get(bot_id)
+            if not isinstance(bot_codes, list):
+                return []
+            return sorted({c for c in bot_codes if isinstance(c, str) and c})
+        codes = payload.get("fund_codes")
+    else:
+        codes = payload
+
     if not isinstance(codes, list):
         return None
-    out = [c for c in codes if isinstance(c, str) and c]
+    out = sorted({c for c in codes if isinstance(c, str) and c})
     return out or None
 
 
@@ -1515,15 +1531,16 @@ async def portfolio_place_buy_order(
         return err
     if amount <= 0:
         return json.dumps({"success": False, "message": f"amount 必须 > 0，传入 {amount}"}, ensure_ascii=False)
-    # Per-run curated 池：<FUND_BUYABLE_CODES_DIR>/<run_id>.json 存在且包含合法 fund_codes 时，
-    # bot 必须从这份白名单里选——拒绝任何不在 curated 中的 fund_code。
+    # Per-run/per-bot curated 池：<FUND_BUYABLE_CODES_DIR>/<run_id>.json 存在且包含
+    # by_bot[bot_id] 时，bot 必须从自己的产品可买池里选——拒绝任何不在池中的 fund_code。
     # 文件不存在 → curated=None → 不限制（lab 没启用 world replay 的安全回落）。
-    curated = _load_curated_buyable_codes(run_id)
+    curated = _load_curated_buyable_codes(run_id, bot_id)
     if curated is not None and fund_code not in curated:
         return json.dumps({
             "success": False,
-            "message": f"基金 {fund_code} 不在本轮可买池；调 portfolio_get_buyable_funds 看 curated 列表",
+            "message": f"基金 {fund_code} 不在本 bot 当前产品可买池；调 portfolio_get_buyable_funds(bot_id=...) 看 curated 列表",
             "curated_count": len(curated),
+            "bot_id": bot_id,
         }, ensure_ascii=False)
     trade_date = _normalize_trade_date(trade_date)
     with get_conn() as conn:
@@ -2253,13 +2270,13 @@ async def portfolio_get_my_performance(
 
 
 @mcp.tool()
-async def portfolio_get_buyable_funds(run_id: str = "") -> str:
+async def portfolio_get_buyable_funds(run_id: str = "", bot_id: str = "") -> str:
     """Bot 查看当前 lab 里可下单的基金代码列表。
 
     默认数据源：fund_nav（基金净值底表）的 fund_code 去重升序。
     如果 <FUND_BUYABLE_CODES_DIR>/<run_id>.json 存在并解出 curated 列表（world replay 每轮
-    在 setup 时按 run_id 写入），结果会**收窄成 curated ∩ fund_nav**——这就是 user 本轮回测
-    显式选定的可买池，bot 拿这个传给 portfolio_place_buy_order。
+    在 setup 时按 run_id 写入），结果会**收窄成 curated ∩ fund_nav**。传 bot_id 时优先
+    使用 by_bot[bot_id] 的本 bot 当前产品可买池；不传 bot_id 时返回 run union。
 
     run_id 由 fund-portfolio-proxy 注入（bot 看不见、改不了）；空 run_id（CLI 直接调或
     lab 没启用 world replay）→ curated=False，返回全部 fund_nav 代码。
@@ -2268,14 +2285,15 @@ async def portfolio_get_buyable_funds(run_id: str = "") -> str:
       success    True
       count      可买基金数
       fund_codes [str, ...]  纯代码列表，按字典序升序
-      curated    bool        当前是否在 curated 模式（被 per-run 白名单收窄）
+      curated    bool        当前是否在 curated 模式（被 per-run/per-bot 白名单收窄）
+      bot_id     str         调用方传入的 bot_id（可空）
     """
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT DISTINCT fund_code FROM fund_nav ORDER BY fund_code"
         ).fetchall()
         all_codes = {r["fund_code"] for r in rows}
-    curated = _load_curated_buyable_codes(run_id)
+    curated = _load_curated_buyable_codes(run_id, bot_id)
     if curated is not None:
         codes = sorted(c for c in curated if c in all_codes)
         is_curated = True
@@ -2287,6 +2305,7 @@ async def portfolio_get_buyable_funds(run_id: str = "") -> str:
         "count": len(codes),
         "fund_codes": codes,
         "curated": is_curated,
+        "bot_id": bot_id,
     }, ensure_ascii=False)
 
 

@@ -8,7 +8,7 @@ Usage:
   python cli_tools.py init_fund_account     --bot-id bot1 --run-id <runid> --initial-capital 1000000 [--reset]
   python cli_tools.py settle_pending_orders --bot-id bot1 --run-id <runid> --as-of-date 2024-03-15
   python cli_tools.py close_my_day          --bot-id bot1 --run-id <runid> --trade-date 2024-03-14
-  python cli_tools.py get_buyable_funds                # 列出 lab 里 fund_nav 覆盖到的全部可交易代码
+  python cli_tools.py get_buyable_funds [--run-id <runid>] [--bot-id bot1]  # 列出可交易代码；传 bot-id 时按 bot 池收窄
   python cli_tools.py get_my_history        --bot-id bot1 --run-id <runid> [--limit 30] [--fund-code 510300]
   python cli_tools.py get_my_performance    --bot-id bot1 --run-id <runid> --as-of-date 2024-03-15 [--daily-series-limit 120]
 
@@ -84,6 +84,8 @@ async def _amain() -> str:
     p_buy = sub.add_parser("get_buyable_funds")
     p_buy.add_argument("--run-id", default="",
                        help="本轮 run id。传则按 per-run 白名单收窄；不传返全集。")
+    p_buy.add_argument("--bot-id", default="",
+                       help="可选 bot id。传则优先按 by_bot[bot_id] 返回该 bot 专属可买池。")
 
     # World daily-prompt 注入用：读账户/持仓/订单快照 + 历史业绩，避免 bot 每天
     # 都自己调 portfolio_get_my_history / portfolio_get_my_performance。底层调
@@ -134,7 +136,7 @@ async def _amain() -> str:
     if args.cmd == "close_my_day":
         return await portfolio_close_my_day(args.bot_id, args.trade_date, args.run_id)
     if args.cmd == "get_buyable_funds":
-        return await portfolio_get_buyable_funds(args.run_id)
+        return await portfolio_get_buyable_funds(args.run_id, args.bot_id)
     if args.cmd == "get_my_history":
         return await portfolio_get_my_history(args.bot_id, args.limit, args.fund_code, args.run_id)
     if args.cmd == "get_my_performance":

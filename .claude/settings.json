@@ -83,7 +83,19 @@
       "Bash(python3 /tmp/recover_bot11.py --apply)",
       "Bash(python3 /tmp/rewind_bot11.py)",
       "Bash(fund-portfolio-mcp/.venv/bin/python3 -)",
-      "Bash(python3 /tmp/rewind_bot11.py --apply)"
+      "Bash(python3 /tmp/rewind_bot11.py --apply)",
+      "Bash(sed -i \"s#'./src/backtest-dashboard/positions.ts'#'/home/rooot/agent_invest_lab/world/src/backtest-dashboard/positions.ts'#\" /tmp/verify_weights.mjs)",
+      "Bash(node --experimental-strip-types /tmp/verify_weights.mjs)",
+      "Bash(claude --version)",
+      "Bash(npm ls *)",
+      "Bash(grep -aoE \"claude-code-releases/[a-zA-Z0-9._{}/\\\\$\\(\\)-]*\")",
+      "WebFetch(domain:claude.ai)",
+      "Bash(curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh)",
+      "Bash(curl -fsS --max-time 15 \"https://registry.npmmirror.com/@anthropic-ai/claude-code/latest\")",
+      "Bash(curl -fsS --max-time 10 \"https://registry.npmjs.org/@anthropic-ai/claude-code/latest\")",
+      "Bash(curl -fsS --max-time 10 -o /dev/null -w \"%{http_code}\\\\n\" \"https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/stable\")",
+      "Bash(npm config *)",
+      "Bash(/usr/bin/claude --version)"
     ]
   }
 }

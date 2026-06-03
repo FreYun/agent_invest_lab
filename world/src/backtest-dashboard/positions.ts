@@ -32,11 +32,13 @@ export interface ActionWeights {
 }
 
 /**
- * Look up the per-fund weight on `action_date` and on the latest snapshot date
- * strictly before it. If `action_date` itself has no snapshot row, fall back to
- * the latest snapshot ≤ action_date (handles weekend / between-snapshot actions).
- *
- * Missing fund on a given day → weight=0 (covers first-buy / sell-all).
+ * 估算一笔动作前后的该基金权重。注意基金申赎是 T+1 结算：动作记在下单日（T，
+ * = action_date），但这笔成交要到 T+1 的快照才反映出来。因此：
+ *   weight_before = action_date 当日及之前最近一张快照的权重（结算前 / 下单前的仓位）
+ *   weight_after  = 严格晚于 action_date 的第一张快照的权重（T+1 结算后的真实仓位）
+ * 若取锚点在 ≤ action_date（旧逻辑），买入行会显示“下单前”的仓位而非调仓后的仓位
+ * （例如空仓→买入却显示成买入前某个旧仓权重）。数据末尾没有更晚快照时，after 回退
+ * 到 before，避免误显 0。某基金在某日无快照行 → 权重按 0（覆盖首次建仓 / 清仓）。
  */
 export function computeActionWeights(
   holdingsByDate: Record<string, { fund_code: string; weight: number | null }[]>,
@@ -44,20 +46,18 @@ export function computeActionWeights(
   fund_code: string,
 ): ActionWeights {
   const dates = Object.keys(holdingsByDate).sort()
-  // anchor: latest snapshot ≤ action_date
-  let anchorIdx = -1
+  const weightOn = (d: string | undefined): number =>
+    d == null ? 0 : Number((holdingsByDate[d] || []).find(h => h.fund_code === fund_code)?.weight ?? 0)
+  // beforeIdx: 最近一张 ≤ action_date 的快照
+  let beforeIdx = -1
   for (let i = 0; i < dates.length; i++) {
-    if (dates[i] <= action_date) anchorIdx = i
+    if (dates[i] <= action_date) beforeIdx = i
     else break
   }
-  if (anchorIdx < 0) {
-    // action happens before any snapshot — treat both sides as zero
-    return { weight_before: 0, weight_after: 0, weight_delta: 0 }
-  }
-  const afterDay = holdingsByDate[dates[anchorIdx]]
-  const beforeDay = anchorIdx > 0 ? holdingsByDate[dates[anchorIdx - 1]] : []
-  const w_after = Number(afterDay.find(h => h.fund_code === fund_code)?.weight ?? 0)
-  const w_before = Number(beforeDay.find(h => h.fund_code === fund_code)?.weight ?? 0)
+  // afterIdx: 严格晚于 action_date 的第一张快照（T+1 结算后）；没有则回退到 before
+  const afterIdx = beforeIdx + 1 < dates.length ? beforeIdx + 1 : beforeIdx
+  const w_before = weightOn(dates[beforeIdx])
+  const w_after = weightOn(dates[afterIdx])
   return {
     weight_before: w_before,
     weight_after: w_after,

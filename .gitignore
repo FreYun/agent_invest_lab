@@ -28,3 +28,6 @@ fund-portfolio-mcp/fund.db
 # research backtest artifacts (generated equity curves / run cards / result csvs)
 research/**/runs/
 research/**/*.csv
+
+
+.venv

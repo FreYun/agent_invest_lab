@@ -706,10 +706,14 @@ function attachCursor(detailRoot, bot, chartCtx){
   }
 }
 function renderHoldings(bot, dateOverride){
-  const list = dateOverride && bot.holdingsByDate && bot.holdingsByDate[dateOverride]
-    ? bot.holdingsByDate[dateOverride]
+  // dateOverride 给定时锁定那一天的持仓（含空仓），绝不回退到最新日——否则空仓日会
+  // 把最新日持仓贴到该日标题下（持仓快照与实际仓位对不上）。仅“最新持仓”视图（不传
+  // dateOverride）才用 bot.holdings 兜底。
+  const hasOverride = dateOverride != null
+  const list = hasOverride
+    ? ((bot.holdingsByDate && bot.holdingsByDate[dateOverride]) || [])
     : bot.holdings
-  if (!list || !list.length) return '<div class="empty">没有持仓快照</div>'
+  if (!list || !list.length) return `<div class="empty">${hasOverride ? '当日空仓' : '没有持仓快照'}</div>`
   return `<div class="holdings">${list.map(h => {
     const wPct = (Number(h.weight) || 0) * 100
     const wFill = Math.max(0, Math.min(100, wPct))

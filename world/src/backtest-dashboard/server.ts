@@ -560,20 +560,26 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
   // LEFT JOIN fund_bot_orders to surface the bot's actual decision rationale
   // (orders.action_reason — written by the bot at place_buy/sell time). The
   // actions.reason column is just an auto-generated settle bookkeeping string.
+  // bot_reason 用关联子查询而非 LEFT JOIN：当同一 action_date 有多条匹配 order
+  // （例如 bot 误调用工具下了两笔），LEFT JOIN 会做笛卡尔积，把 N 条 action × M 条
+  // order 放大成 N×M 行（一笔买入显示成四笔）。子查询保证每条 action 恰好一行，
+  // 行数严格等于真实 action 数。
   const actionsRaw = await queryRows<ActionRow>(dbPath, `
     SELECT a.action_id, a.review_id, a.bot_id, a.fund_code,
            COALESCE(i.fund_name, a.fund_code) AS fund_name,
            a.action_type, a.final_decision, a.amount, a.shares, a.nav_used,
-           a.reason, o.action_reason AS bot_reason, a.action_date
+           a.reason,
+           (SELECT o.action_reason FROM fund_bot_orders o
+             WHERE o.bot_id = a.bot_id
+               AND o.fund_code = a.fund_code
+               AND o.order_date = a.action_date
+               AND o.settle_run_id = a.run_id
+               AND ( (a.action_type='ADD' AND o.order_type='buy')
+                  OR (a.action_type='REDUCE' AND o.order_type='sell') )
+             ORDER BY o.order_id ASC LIMIT 1) AS bot_reason,
+           a.action_date
     FROM fund_bot_actions a
     LEFT JOIN fund_info i ON i.fund_code = a.fund_code
-    LEFT JOIN fund_bot_orders o
-      ON o.bot_id = a.bot_id
-      AND o.fund_code = a.fund_code
-      AND o.order_date = a.action_date
-      AND o.settle_run_id = a.run_id
-      AND ( (a.action_type='ADD' AND o.order_type='buy')
-         OR (a.action_type='REDUCE' AND o.order_type='sell') )
     WHERE a.bot_id = ${botIdSql} AND a.run_id = ${runIdSql}
     ORDER BY a.action_date ASC, a.action_id ASC
   `)

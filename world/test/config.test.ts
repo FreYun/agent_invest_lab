@@ -151,3 +151,94 @@ test('loop=openclaw-pi rejects unknown values', () => {
   const p = tmpYaml(yaml)
   assert.throws(() => loadWorldConfig(p), /loop/)
 })
+
+
+test('loadWorldConfig parses strategy library root and bot assignments', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wcfg-strategy-'))
+  const lib = join(dir, 'strategies', 'index-products')
+  mkdirSync(lib, { recursive: true })
+  writeFileSync(join(lib, 'hs300.md'), '# HS300 strategy\n')
+  writeFileSync(join(lib, 'semi.md'), '# Semi strategy\n')
+  writeFileSync(join(lib, 'manifest.yaml'), [
+    'version: 1',
+    'strategies:',
+    '  hs300:',
+    '    title: 沪深300指数投资框架',
+    '    methodology: hs300.md',
+    '    target_index: "000300.SH"',
+    '    default_buyable_fund_codes: ["000051", "510300"]',
+    '  semiconductor:',
+    '    title: 半导体设备指数投资框架',
+    '    methodology: semi.md',
+    '    target_index: "931865.CSI"',
+    '    default_buyable_fund_codes: ["014854"]',
+  ].join('\n') + '\n')
+  const p = join(dir, 'world.yaml')
+  writeFileSync(p, [
+    'research_loop: /opt/rl',
+    'bots: [bot7, bot11]',
+    'replay: { from: "2024-01-02", to: "2024-01-03" }',
+    'simworld_upstream_url: http://x/mcp',
+    'fund_mcp_cli: /fake/cli.py',
+    'strategy_library_root: ./strategies/index-products',
+    'bot_assignments:',
+    '  bot7:',
+    '    strategy_id: hs300',
+    '    buyable_fund_codes: ["000051"]',
+    '  bot11:',
+    '    strategy_id: semiconductor',
+  ].join('\n') + '\n')
+
+  const c = loadWorldConfig(p)
+  assert.equal(c.strategyLibraryRoot, lib)
+  assert.deepEqual(c.botAssignments, {
+    bot7: { strategyId: 'hs300', buyableFundCodes: ['000051'] },
+    bot11: { strategyId: 'semiconductor' },
+  })
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('loadWorldConfig validates strategy assignments fail-fast', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wcfg-strategy-bad-'))
+  const lib = join(dir, 'strategies', 'index-products')
+  mkdirSync(lib, { recursive: true })
+  writeFileSync(join(lib, 'hs300.md'), '# HS300 strategy\n')
+  writeFileSync(join(lib, 'manifest.yaml'), [
+    'version: 1',
+    'strategies:',
+    '  hs300:',
+    '    title: 沪深300指数投资框架',
+    '    methodology: hs300.md',
+    '    target_index: "000300.SH"',
+    '    default_buyable_fund_codes: ["000051"]',
+  ].join('\n') + '\n')
+  const base = [
+    'research_loop: /opt/rl',
+    'bots: [bot7]',
+    'replay: { from: "2024-01-02", to: "2024-01-03" }',
+    'simworld_upstream_url: http://x/mcp',
+  ]
+  const write = (name: string, extra: string[]) => {
+    const f = join(dir, name)
+    writeFileSync(f, [...base, ...extra].join('\n') + '\n')
+    return f
+  }
+
+  assert.throws(() => loadWorldConfig(write('missing-root.yaml', [
+    'bot_assignments:',
+    '  bot7: { strategy_id: hs300 }',
+  ])), /strategy_library_root/)
+  assert.throws(() => loadWorldConfig(write('unknown-strategy.yaml', [
+    'strategy_library_root: ./strategies/index-products',
+    'bot_assignments:',
+    '  bot7: { strategy_id: no_such }',
+  ])), /not found in strategy library/)
+  assert.throws(() => loadWorldConfig(write('bad-code.yaml', [
+    'strategy_library_root: ./strategies/index-products',
+    'bot_assignments:',
+    '  bot7:',
+    '    strategy_id: hs300',
+    '    buyable_fund_codes: ["ABC"]',
+  ])), /6-digit fund code/)
+  rmSync(dir, { recursive: true, force: true })
+})

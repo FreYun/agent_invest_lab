@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { loadStrategyLibrary } from './strategy-library.ts'
 
 export const DEFAULT_SHADOW_INCLUDE = [
   'IDENTITY.md', 'SOUL.md', 'AGENTS.md', 'USER.md',
@@ -53,6 +54,10 @@ export interface WorldConfig {
   // 在 fund.db 里的所有行（accounts/holdings/orders/actions/snapshots/runs）。默认 true
   // 当 fundMcpCli 已配置——非 reset 的延续场景请显式传 false。
   fundInitReset?: boolean
+  // Optional shared strategy library. When botAssignments[botId] is present, world
+  // generates that bot's shadow METHODOLOGY.md from the referenced shared strategy.
+  strategyLibraryRoot?: string
+  botAssignments?: Record<string, BotAssignment>
   // 本 run 显式给 bot 播报的可买基金白名单（day-1 prompt 注入）。
   // user 每轮回测自己挑（典型 3-10 只代表性 ETF / 主题基金）。fund.db 里有 300+
   // 个 fund_code，全播会污染上下文；这里收窄成 user 关心的小集合。
@@ -77,6 +82,11 @@ export interface WorldConfig {
   fundPortfolioUpstreamUrl?: string
 }
 
+export interface BotAssignment {
+  strategyId: string
+  buyableFundCodes?: string[]
+}
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 function reqString(obj: Record<string, unknown>, key: string): string {
@@ -94,6 +104,40 @@ function validIsoDate(s: string, label: string): string {
 
 function resolveMaybe(base: string, p: string): string {
   return isAbsolute(p) ? p : resolve(base, p)
+}
+
+function parseFundCodeList(raw: unknown, label: string): string[] {
+  if (!Array.isArray(raw) || !raw.every(c => typeof c === 'string' && /^\d{6}$/.test(c))) {
+    throw new Error('world config: "' + label + '" must be an array of 6-digit fund code strings')
+  }
+  const codes = [...new Set(raw as string[])].sort()
+  if (codes.length === 0) throw new Error('world config: "' + label + '" cannot be empty when set')
+  return codes
+}
+
+function parseBotAssignments(raw: unknown, bots: string[]): Record<string, BotAssignment> | undefined {
+  if (raw === undefined) return undefined
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('world config: "bot_assignments" must be an object keyed by bot id')
+  }
+  const botSet = new Set(bots)
+  const out: Record<string, BotAssignment> = {}
+  for (const [botId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!botSet.has(botId)) throw new Error('world config: "bot_assignments.' + botId + '" references a bot not listed in "bots"')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('world config: "bot_assignments.' + botId + '" must be an object')
+    }
+    const entry = value as Record<string, unknown>
+    if (typeof entry.strategy_id !== 'string' || !entry.strategy_id.trim()) {
+      throw new Error('world config: "bot_assignments.' + botId + '.strategy_id" must be a non-empty string')
+    }
+    const assignment: BotAssignment = { strategyId: entry.strategy_id.trim() }
+    if (entry.buyable_fund_codes !== undefined) {
+      assignment.buyableFundCodes = parseFundCodeList(entry.buyable_fund_codes, 'bot_assignments.' + botId + '.buyable_fund_codes')
+    }
+    out[botId] = assignment
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 export function loadWorldConfig(path: string): WorldConfig {
@@ -128,6 +172,11 @@ export function loadWorldConfig(path: string): WorldConfig {
     throw new Error('world config: "bots" must be a non-empty array of bot ids (e.g. [bot1, bot7])')
   }
   const bots = botsRaw as string[]
+
+  const strategyLibraryRoot = typeof raw.strategy_library_root === 'string' && raw.strategy_library_root.trim()
+    ? resolveMaybe(baseDir, raw.strategy_library_root)
+    : undefined
+  const botAssignments = parseBotAssignments(raw.bot_assignments, bots)
 
   const replayRaw = (raw.replay ?? {}) as Record<string, unknown>
   const from = validIsoDate(reqString(replayRaw, 'from'), 'replay.from')
@@ -235,17 +284,28 @@ export function loadWorldConfig(path: string): WorldConfig {
     : (fundMcpCli ? true : undefined)
   let buyableFundCodes: string[] | undefined
   if (raw.buyable_fund_codes !== undefined) {
-    if (!Array.isArray(raw.buyable_fund_codes) || !raw.buyable_fund_codes.every(c => typeof c === 'string' && /^\d{6}$/.test(c))) {
-      throw new Error('world config: "buyable_fund_codes" must be an array of 6-digit fund code strings')
-    }
-    buyableFundCodes = [...new Set(raw.buyable_fund_codes as string[])].sort()
-    if (buyableFundCodes.length === 0) {
-      throw new Error('world config: "buyable_fund_codes" cannot be empty when set — pick the funds bot is allowed to buy this run')
+    buyableFundCodes = parseFundCodeList(raw.buyable_fund_codes, 'buyable_fund_codes')
+  }
+
+  const strategyDefaults: Record<string, string[]> = {}
+  if (botAssignments) {
+    if (!strategyLibraryRoot) throw new Error('world config: "strategy_library_root" is required when "bot_assignments" is set')
+    const lib = loadStrategyLibrary(strategyLibraryRoot)
+    for (const [botId, assignment] of Object.entries(botAssignments)) {
+      const strategy = lib.strategies.get(assignment.strategyId)
+      if (!strategy) throw new Error('world config: bot_assignments.' + botId + '.strategy_id "' + assignment.strategyId + '" not found in strategy library')
+      strategyDefaults[botId] = strategy.defaultBuyableFundCodes
     }
   }
   if (fundMcpCli && !buyableFundCodes) {
-    throw new Error('world config: "buyable_fund_codes" is required when "fund_mcp_cli" is set — list the fund codes bot can buy this run (e.g. [510300, 159915, 002611])')
+    for (const botId of bots) {
+      const assignment = botAssignments?.[botId]
+      const resolved = assignment?.buyableFundCodes ?? strategyDefaults[botId]
+      if (!resolved || resolved.length === 0) {
+        throw new Error('world config: "buyable_fund_codes" is required when "fund_mcp_cli" is set unless every bot assignment resolves a non-empty buyable pool')
+      }
+    }
   }
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl }
 }

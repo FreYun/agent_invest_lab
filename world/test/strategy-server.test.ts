@@ -14,6 +14,27 @@ function seedMethodology(worldRoot: string, runId: string, botId: string, conten
   return p
 }
 
+function seedStrategyLibrary(worldRoot: string, runId: string, botId: string): void {
+  const dir = join(shadowWorkspaceDir(worldRoot, runId, botId), 'strategies', 'index-products')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'hs300.md'), '# HS300 shared strategy\n')
+  writeFileSync(join(dir, 'semi.md'), '# Semiconductor shared strategy\n')
+  writeFileSync(join(dir, 'manifest.yaml'), [
+    'version: 1',
+    'strategies:',
+    '  hs300:',
+    '    title: 沪深300指数投资框架',
+    '    methodology: hs300.md',
+    '    target_index: "000300.SH"',
+    '    default_buyable_fund_codes: ["000051"]',
+    '  semiconductor:',
+    '    title: 半导体设备指数投资框架',
+    '    methodology: semi.md',
+    '    target_index: "931865.CSI"',
+    '    default_buyable_fund_codes: ["014854"]',
+  ].join('\n') + '\n')
+}
+
 interface Rpc {
   jsonrpc: '2.0'
   id?: number | string | null
@@ -76,7 +97,7 @@ test('initialize returns full capabilities (experimental/prompts/resources/tools
   assert.ok('tools' in caps)
   assert.equal((result.serverInfo as { name: string }).name, 'strategy-server')
   // instructions 字段给客户端做服务描述
-  assert.match(result.instructions as string, /策略文档自管理服务/)
+  assert.match(result.instructions as string, /策略文档服务/)
   // mcp-session-id header 在 initialize 时签发
   const sid = headers.get('mcp-session-id')
   assert.ok(sid && sid.length > 0, 'initialize response must mint mcp-session-id header')
@@ -115,7 +136,7 @@ test('tools/list returns FastMCP-style tool declarations: title on properties + 
   assert.equal(status, 200)
   const tools = ((body as { result: { tools: Array<Record<string, unknown>> } }).result).tools
   const names = tools.map(t => t.name as string).sort()
-  assert.deepEqual(names, ['get_my_strategy', 'update_my_strategy'])
+  assert.deepEqual(names, ['get_active_strategy', 'get_my_strategy', 'get_strategy', 'list_strategies', 'update_my_strategy'])
 
   const update = tools.find(t => t.name === 'update_my_strategy')!
   // FastMCP 风格：inputSchema 自带 title
@@ -288,6 +309,39 @@ test('health endpoint returns ok with tools list (smoke / dashboard helper)', as
   assert.equal(r.status, 200)
   const j = await r.json() as { status: string; tools: string[] }
   assert.equal(j.status, 'ok')
-  assert.deepEqual(j.tools.sort(), ['get_my_strategy', 'update_my_strategy'])
+  assert.deepEqual(j.tools.sort(), ['get_active_strategy', 'get_my_strategy', 'get_strategy', 'list_strategies', 'update_my_strategy'])
 })
 
+
+
+test('strategy-server lists shared strategies, reads shared strategy, and reads active strategy', async (t) => {
+  const { s, worldRoot, runId } = await freshServer(t)
+  seedMethodology(worldRoot, runId, 'bot7', '# Active methodology\nstrategy_id: hs300\n')
+  seedStrategyLibrary(worldRoot, runId, 'bot7')
+
+  const list = await rpc(s.url, {
+    jsonrpc: '2.0', id: 50, method: 'tools/call',
+    params: { name: 'list_strategies', arguments: { bot_id: 'bot7' } },
+  })
+  const listResult = (list.body as { result: { content: Array<{ text: string }>; isError?: boolean } }).result
+  assert.ok(!listResult.isError)
+  const catalog = JSON.parse(listResult.content[0].text)
+  assert.deepEqual(catalog.strategies.map((x: { strategy_id: string }) => x.strategy_id), ['hs300', 'semiconductor'])
+  assert.equal(catalog.strategies[0].target_index, '000300.SH')
+
+  const shared = await rpc(s.url, {
+    jsonrpc: '2.0', id: 51, method: 'tools/call',
+    params: { name: 'get_strategy', arguments: { bot_id: 'bot7', strategy_id: 'semiconductor' } },
+  })
+  const sharedResult = (shared.body as { result: { content: Array<{ text: string }>; isError?: boolean } }).result
+  assert.ok(!sharedResult.isError)
+  assert.match(sharedResult.content[0].text, /Semiconductor shared strategy/)
+
+  const active = await rpc(s.url, {
+    jsonrpc: '2.0', id: 52, method: 'tools/call',
+    params: { name: 'get_active_strategy', arguments: { bot_id: 'bot7' } },
+  })
+  const activeResult = (active.body as { result: { content: Array<{ text: string }>; isError?: boolean } }).result
+  assert.ok(!activeResult.isError)
+  assert.match(activeResult.content[0].text, /# Active methodology/)
+})

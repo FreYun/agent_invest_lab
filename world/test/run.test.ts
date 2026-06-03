@@ -123,7 +123,7 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /simworld-data/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /portfolio_place_buy_order/)
   // Day 1 prompt 提示 bot 按 system prompt 里的 ## METHODOLOGY.md section 决策（methodology-only 模式）
-  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /你的 methodology 已就位/)
+  assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /你的 active methodology 已就位/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-14', 'bot1'), 'utf8'), /## METHODOLOGY\.md/)
   assert.match(readFileSync(P.sentFile(worldRoot, 'r1', '2024-03-15', 'bot1'), 'utf8'), /今天的节奏（按顺序）/)
   // Day N 不再有 AUTONOMY block
@@ -414,7 +414,7 @@ test('runWorld: every-5 cadence still drives the budget split (first/research �
   assert.doesNotMatch(sentOf(dates[0]), /今天是研究日/)
   assert.doesNotMatch(sentOf(dates[0]), /今天是普通交易日/)
   // methodology-only 模式：Day 1 prompt 指向 system prompt 里的 ## METHODOLOGY.md section（不再要求 bot 现写 MY_STRATEGY）
-  assert.match(sentOf(dates[0]), /你的 methodology 已就位/, 'Day 1 must include methodology hint')
+  assert.match(sentOf(dates[0]), /你的 active methodology 已就位/, 'Day 1 must include methodology hint')
   assert.match(sentOf(dates[0]), /## METHODOLOGY\.md/, 'Day 1 must reference METHODOLOGY.md section')
   // Day 2..5 (non-first): 也没有 AUTONOMY，也没有 banner——uniform 精简 prompt
   for (const d of dates.slice(1)) {
@@ -731,5 +731,54 @@ test('requestStop on a paused run flips it straight to aborted (no STOP sentinel
   assert.equal(r.ok, true)
   assert.equal(readState(worldRoot, 'rps').status, 'aborted')
   assert.equal(existsSync(P.stopFile(worldRoot, 'rps')), false)
+  cleanup()
+})
+
+
+test('runWorld installs assigned strategy as active shadow METHODOLOGY and writes assignment audit', async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot7', 'bot11'], dates: ['2024-03-14'] })
+  const lib = join(dirname(worldRoot), 'strategies', 'index-products')
+  mkdirSync(lib, { recursive: true })
+  writeFileSync(join(lib, 'hs300.md'), '# HS300 body\nlegacy bot source must not appear here\n')
+  writeFileSync(join(lib, 'semi.md'), '# Semi body\nactive semiconductor rules\n')
+  writeFileSync(join(lib, 'manifest.yaml'), [
+    'version: 1',
+    'strategies:',
+    '  hs300:',
+    '    title: 沪深300指数投资框架',
+    '    methodology: hs300.md',
+    '    target_index: "000300.SH"',
+    '    default_buyable_fund_codes: ["000051", "510300"]',
+    '  semiconductor:',
+    '    title: 半导体设备指数投资框架',
+    '    methodology: semi.md',
+    '    target_index: "931865.CSI"',
+    '    default_buyable_fund_codes: ["014854"]',
+  ].join('\n') + '\n')
+  config.strategyLibraryRoot = lib
+  config.botAssignments = {
+    bot7: { strategyId: 'hs300', buyableFundCodes: ['000051'] },
+    bot11: { strategyId: 'semiconductor' },
+  }
+
+  await runWorld({ worldRoot, config, runId: 'strategy-r1', startBotServer: stubStartBotServer })
+
+  const bot7Method = readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'strategy-r1', 'bot7'), 'METHODOLOGY.md'), 'utf8')
+  assert.match(bot7Method, /# 当前回测任务/)
+  assert.match(bot7Method, /strategy_id: hs300/)
+  assert.match(bot7Method, /target_index: 000300.SH/)
+  assert.match(bot7Method, /buyable_fund_codes: 000051/)
+  assert.match(bot7Method, /# HS300 body/)
+  assert.ok(existsSync(join(P.shadowWorkspaceDir(worldRoot, 'strategy-r1', 'bot7'), 'STRATEGY_LIBRARY.md')))
+  assert.ok(existsSync(join(P.shadowWorkspaceDir(worldRoot, 'strategy-r1', 'bot7'), 'strategies', 'index-products', 'manifest.yaml')))
+
+  const bot11Method = readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'strategy-r1', 'bot11'), 'METHODOLOGY.md'), 'utf8')
+  assert.match(bot11Method, /strategy_id: semiconductor/)
+  assert.match(bot11Method, /buyable_fund_codes: 014854/)
+  assert.match(bot11Method, /active semiconductor rules/)
+
+  const audit = JSON.parse(readFileSync(join(P.runDir(worldRoot, 'strategy-r1'), 'strategy-assignments.json'), 'utf8'))
+  assert.deepEqual(audit.bots.bot7.buyable_fund_codes, ['000051'])
+  assert.equal(audit.bots.bot11.strategy_id, 'semiconductor')
   cleanup()
 })
