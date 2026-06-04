@@ -12,7 +12,8 @@
 |---|---|---|
 | 市场风险状态 | `market-context` skill | `risk_state` = risk_on / neutral / risk_off；`market_regime` = uptrend / range / downtrend；`valuation_anchor` = cheap / fair / expensive |
 | 主线结论 | `skills/market-mainline/SKILL.md` | 主线类别（9 类）+ 确信度（强 / 中 / 弱 / 无）+ 行业落点 + 质地 |
-| 候选基金 | 选品环节（主线 → 候选 → 选品三步收敛） | 收敛后的 1-3 只可买候选 |
+| 基金主线 | `skills/fund-mainline/SKILL.md` | 把主线升维成中线：主题指数 + 配置档（超配 / 标配 / 低配·观察 / 无主线·配宽基）+ 可投载体候选池 |
+| 候选基金 | `skills/fund-screening/SKILL.md`（在基金主线给的候选池里选载体） | 收敛后的 1-3 只可买候选 |
 
 **本手册的职责** = 把上面这些结论翻译成：目标仓位、主攻/辅助/现金结构、建仓/减仓动作、回撤与换手风控闸门。
 
