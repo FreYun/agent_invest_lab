@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { extractDayDigestFromJsonl, renderDayDigest } from '../src/history-window/extract.ts'
 import { buildHistoryWindow, listBotSessionsBefore } from '../src/history-window/window.ts'
+import { resolveLlmEndpointFromRlConfig } from '../src/history-window/compact.ts'
 
 // jsonl 帮手：构造一个最小可解析的 session jsonl
 function writeJsonl(path: string, rows: object[]): void {
@@ -116,6 +117,21 @@ test('listBotSessionsBefore: 严格 <beforeDate，按日期升序', () => {
   const all = listBotSessionsBefore(rlDir, botId, '2026-02-01')
   assert.deepEqual(all.map(g => g.date), ['2026-01-05', '2026-01-06', '2026-01-07'])
   cleanup()
+})
+
+test('resolveLlmEndpointFromRlConfig: 取 research-loop.yaml 的 model.primary', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rlcfg-'))
+  const p = join(dir, 'research-loop.yaml')
+  // writeResearchLoopYaml 落的是 JSON.stringify（合法 YAML 子集）
+  writeFileSync(p, JSON.stringify({
+    model: { primary: { provider: 'openai_compatible', base_url: 'https://dd-ai-api.eastmoney.com/v1', model: 'qwen3.6-plus', api_key: 'sk-live-xyz' } },
+  }))
+  const ep = resolveLlmEndpointFromRlConfig(p)
+  assert.deepEqual(ep, { baseUrl: 'https://dd-ai-api.eastmoney.com/v1', apiKey: 'sk-live-xyz', model: 'qwen3.6-plus' })
+  // 字段不全 → 抛错（让调用方回退到 openclaw.json）
+  writeFileSync(p, JSON.stringify({ model: { primary: { base_url: 'x', model: 'm' } } }))
+  assert.throws(() => resolveLlmEndpointFromRlConfig(p), /incomplete model.primary/)
+  rmSync(dir, { recursive: true, force: true })
 })
 
 test('buildHistoryWindow: Day 1（无 prior session）→ 空 markdown', async () => {

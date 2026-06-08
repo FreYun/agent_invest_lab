@@ -40,6 +40,21 @@ export function resolveLlmEndpoint(openclawJsonPath: string): LlmEndpoint {
   return { baseUrl, apiKey, model }
 }
 
+// History window 压缩端点的首选来源：每个 bot 影子 workspace 的 research-loop.yaml
+// （writeResearchLoopYaml 落的明文，内容是 JSON.stringify → 可直接 JSON.parse）。
+// 取 model.primary.{base_url, model, api_key} —— 即 bot 自身 LLM 调用的同一套端点，
+// 让压缩跟着 bot 当前 key 走，不再依赖 world/config/openclaw.json（其 provider/key 易与回测脱节）。
+export function resolveLlmEndpointFromRlConfig(rlConfigPath: string): LlmEndpoint {
+  const cfg = JSON.parse(readFileSync(rlConfigPath, 'utf8')) as Record<string, unknown>
+  const model = (typeof cfg.model === 'object' && cfg.model ? cfg.model : {}) as Record<string, unknown>
+  const primary = (typeof model.primary === 'object' && model.primary ? model.primary : {}) as Record<string, unknown>
+  const baseUrl = typeof primary.base_url === 'string' ? primary.base_url : ''
+  const apiKey = typeof primary.api_key === 'string' ? primary.api_key : ''
+  const modelId = typeof primary.model === 'string' ? primary.model : ''
+  if (!baseUrl || !apiKey || !modelId) throw new Error(`resolveLlmEndpointFromRlConfig: incomplete model.primary in ${rlConfigPath} (need base_url/api_key/model)`)
+  return { baseUrl, apiKey, model: modelId }
+}
+
 const COMPACT_SYSTEM_PROMPT = `你在帮一个量化交易 agent 维护"历史交易记忆"。
 我会给你这个 agent 过去 N 个交易日的 session 记录（包含工具调用链 + 决策反思，已去掉工具结果原文）。
 

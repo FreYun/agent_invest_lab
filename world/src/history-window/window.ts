@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractDayDigestFromJsonl, renderDayDigest, type DayDigest } from './extract.ts'
-import { compactHistory, resolveLlmEndpoint } from './compact.ts'
+import { compactHistory, resolveLlmEndpoint, resolveLlmEndpointFromRlConfig } from './compact.ts'
 
 // History window 注入位置（在 daily prompt 顶部）。预算：20000 中文字符。
 // 切割策略：
@@ -63,7 +63,9 @@ export interface BuildHistoryWindowOptions {
   rlOpenclawDir: string
   botId: string
   beforeDate: string                  // 当前世界日，不含
-  openclawJsonPath: string            // 给 compact LLM 用
+  // 压缩 LLM 端点优先来源：本 bot 影子 workspace 的 research-loop.yaml（跟着 bot 当前 key 走）。
+  rlConfigPath?: string
+  openclawJsonPath: string            // 回退来源（pi loop / 测试 / rlConfigPath 解析失败）
   budgetChars?: number
   // 单元测试 / 离线场景：跳过真正的 LLM 调用，直接拼老 digest 当 compact（用于不依赖外部网络）。
   skipLlmCompact?: boolean
@@ -102,6 +104,15 @@ function writeCompactState(rlOpenclawDir: string, botId: string, state: CompactS
   const dir = historyCompactDir(rlOpenclawDir, botId)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   writeFileSync(compactStatePath(rlOpenclawDir, botId), JSON.stringify(state, null, 2))
+}
+
+// 压缩端点：优先 research-loop.yaml（rlConfigPath，跟 bot 当前 key 一致），
+// 解析不到（文件缺失 / 字段不全 / pi loop 未提供）再回退 openclaw.json。
+function resolveCompactEndpoint(opts: BuildHistoryWindowOptions) {
+  if (opts.rlConfigPath) {
+    try { return resolveLlmEndpointFromRlConfig(opts.rlConfigPath) } catch { /* fall through */ }
+  }
+  return resolveLlmEndpoint(opts.openclawJsonPath)
 }
 
 export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promise<HistoryWindowResult> {
@@ -173,7 +184,7 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
           if (opts.skipLlmCompact) {
             compactText = `（已 recompact ${olderDigests.length} 个交易日，截至 ${lastOlderDate}；LLM compact 已跳过）\n\n` + candidate.slice(0, compactBudget - 200)
           } else {
-            const endpoint = resolveLlmEndpoint(opts.openclawJsonPath)
+            const endpoint = resolveCompactEndpoint(opts)
             compactText = await compactHistory({
               endpoint,
               digestsMarkdown: candidate,
@@ -196,7 +207,7 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
         if (opts.skipLlmCompact) {
           compactText = `（已压缩 ${olderDigests.length} 个交易日，截至 ${lastOlderDate}；LLM compact 已跳过）\n\n` + olderRaw.slice(0, compactBudget - 200)
         } else {
-          const endpoint = resolveLlmEndpoint(opts.openclawJsonPath)
+          const endpoint = resolveCompactEndpoint(opts)
           compactText = await compactHistory({
             endpoint,
             digestsMarkdown: olderRaw,

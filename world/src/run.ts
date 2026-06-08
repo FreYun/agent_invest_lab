@@ -861,6 +861,10 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
             rlOpenclawDir: P.rlOpenclawDir(worldRoot, runId),
             botId: b.botId,
             beforeDate: date,
+            // 压缩端点首选本 bot 的 research-loop.yaml（model.primary，跟 bot 当前 key 一致）；
+            // 解析不到再回退 openclaw.json。修复点：旧版只读 openclaw.json 的 zai-coding-plan
+            // provider，key 与回测端点脱节 → 401 → 整窗清空。
+            rlConfigPath: join(P.shadowWorkspaceDir(worldRoot, runId, b.botId), 'config', 'research-loop.yaml'),
             openclawJsonPath: openclawJsonSource(config),
           })
           historyWindow = hw.markdown
