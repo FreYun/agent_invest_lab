@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { replyFile, sentFile, universeContaminationFile } from '../paths.ts'
+import { botDayDir, hiddenRecordsFile, replyFile, runDir, sentFile, universeContaminationFile } from '../paths.ts'
 import { listControllableRuns, type WorldState } from '../state.ts'
 import { requestPause, requestStop } from '../run-control.ts'
 import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
@@ -156,6 +156,10 @@ interface BotDataset {
   goldWeight: number | null
   cashWeight: number | null
   series: BotSeriesPoint[]
+  // 该 bot 在本 run 真正「决策/反思」过的交易日（runtime 下存在 bot 当日目录的日期，升序）。
+  // 月度/周度回测时 series 是逐日 NAV、决策却只在月末/周末 → 反思面板按这个列表翻页，
+  // 才会一格一格落在有内容的决策日，而不是逐日空翻。
+  reflectionDates: string[]
   actions: BotAction[]
   holdings: HoldingRow[]
   holdingsByDate: Record<string, Omit<HoldingRow, 'trade_date'>[]>
@@ -397,6 +401,26 @@ async function loadBenchmark(
   return loadBenchmarkSeries(dbPath, fundCode, anchorDate, latestTradeDate)
 }
 
+// ---- 看板「隐藏记录」：纯展示层过滤，DB 一行不动 ----
+// hidden-records.json = { hidden: [{botId, runId}] }。被隐藏的 (bot, run) 在 listRunsForBot
+// 处被滤掉 → 该 run 从主列表/run 选择器消失；某 bot 全部 run 被隐藏则整行消失。可随时恢复。
+interface HiddenRecord { botId: string; runId: string }
+function hiddenKey(botId: string, runId: string): string { return `${botId} ${runId}` }
+function loadHiddenRecords(worldRoot: string): HiddenRecord[] {
+  try {
+    const parsed = JSON.parse(readFileSync(hiddenRecordsFile(worldRoot), 'utf8')) as { hidden?: unknown }
+    const arr = Array.isArray(parsed.hidden) ? parsed.hidden : []
+    return arr.filter((r): r is HiddenRecord =>
+      !!r && typeof (r as HiddenRecord).botId === 'string' && typeof (r as HiddenRecord).runId === 'string')
+  } catch { return [] }  // 文件不存在/损坏 → 视作没有隐藏项
+}
+function saveHiddenRecords(worldRoot: string, list: HiddenRecord[]): void {
+  writeFileSync(hiddenRecordsFile(worldRoot), JSON.stringify({ hidden: list }, null, 2))
+}
+function loadHiddenSet(worldRoot: string): Set<string> {
+  return new Set(loadHiddenRecords(worldRoot).map(r => hiddenKey(r.botId, r.runId)))
+}
+
 async function listAllBotIds(dbPath: string): Promise<string[]> {
   const rows = await queryRows<{ bot_id: string }>(dbPath, `
     SELECT DISTINCT bot_id FROM (
@@ -434,11 +458,14 @@ async function listRunsForBot(dbPath: string, worldRoot: string, botId: string):
     GROUP BY run_id
     ORDER BY run_id DESC
   `)
-  return rows.map(r => {
-    const ref: BotRunRef = { runId: r.run_id, latestDate: r.latest_date ?? '' }
-    if (existsSync(universeContaminationFile(worldRoot, r.run_id))) ref.contaminated = true
-    return ref
-  })
+  const hidden = loadHiddenSet(worldRoot)
+  return rows
+    .filter(r => !hidden.has(hiddenKey(botId, r.run_id)))  // 隐藏的 (bot, run) 不进列表/选择器
+    .map(r => {
+      const ref: BotRunRef = { runId: r.run_id, latestDate: r.latest_date ?? '' }
+      if (existsSync(universeContaminationFile(worldRoot, r.run_id))) ref.contaminated = true
+      return ref
+    })
 }
 
 async function tableExists(dbPath: string, name: string): Promise<boolean> {
@@ -520,7 +547,21 @@ async function loadRealUsers(dbPath: string, fundCodes: string[]): Promise<RealU
   })).filter(u => u.series.length > 0)
 }
 
-async function loadBotForRun(dbPath: string, botId: string, runId: string, availableRuns: BotRunRef[]): Promise<BotDataset | null> {
+/** 列出该 bot 在本 run 真正决策过的交易日：扫 runDir 下形如 YYYY-MM-DD 的日期目录，
+ *  保留其中存在 bot 当日目录（sent.md/reply.json 所在）的日期，升序返回。
+ *  反思面板的左右箭头/日历就按这个列表翻页——月度回测时它天然是月度。
+ *  best-effort：run 目录不存在（旧 run / 已清理）时返回空数组，前端回落到逐日 series。 */
+function listReflectionDates(worldRoot: string, runId: string, botId: string): string[] {
+  const root = runDir(worldRoot, runId)
+  let entries: string[]
+  try { entries = readdirSync(root) }
+  catch { return [] }
+  return entries
+    .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name) && existsSync(botDayDir(worldRoot, runId, name, botId)))
+    .sort()
+}
+
+async function loadBotForRun(dbPath: string, worldRoot: string, botId: string, runId: string, availableRuns: BotRunRef[]): Promise<BotDataset | null> {
   const runIdSql = quoteSql(runId)
   const botIdSql = quoteSql(botId)
 
@@ -647,6 +688,7 @@ async function loadBotForRun(dbPath: string, botId: string, runId: string, avail
       gold_weight: row.gold_weight,
       cash_weight: row.cash_weight,
     })),
+    reflectionDates: listReflectionDates(worldRoot, runId, botId),
     actions,
     holdings,
     holdingsByDate,
@@ -664,7 +706,7 @@ async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> 
   for (const botId of botIds) {
     const runs = await listRunsForBot(dbPath, worldRoot, botId)
     if (!runs.length) continue
-    const bot = await loadBotForRun(dbPath, botId, runs[0].runId, runs)
+    const bot = await loadBotForRun(dbPath, worldRoot, botId, runs[0].runId, runs)
     if (bot) {
       // /api/backtest/data is polled every 10s by the frontend, which reads
       // holdingsByDate only on the per-bot detail view (/api/backtest/bot).
@@ -778,7 +820,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         if (!botId || !runId) { sendJson(res, 400, { error: 'bot_id and run_id required' }); return }
         const runs = await listRunsForBot(dbPath, worldRoot, botId)
         if (!runs.some(r => r.runId === runId)) { sendJson(res, 404, { error: 'bot or run not found' }); return }
-        const bot = await loadBotForRun(dbPath, botId, runId, runs)
+        const bot = await loadBotForRun(dbPath, worldRoot, botId, runId, runs)
         if (!bot) { sendJson(res, 404, { error: 'no data for bot/run' }); return }
         sendJson(res, 200, bot)
         return
@@ -812,6 +854,33 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         if (!runId) { sendJson(res, 400, { ok: false, error: 'runId required' }); return }
         const r = url.pathname.endsWith('/pause') ? requestPause(worldRoot, runId) : requestStop(worldRoot, runId)
         sendJson(res, r.ok ? 200 : 409, r)
+        return
+      }
+      // 隐藏记录管理（纯展示层，DB 不动）：列出 / 隐藏 / 恢复某条 (bot, run)。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/records/hidden') {
+        sendJson(res, 200, { hidden: loadHiddenRecords(worldRoot) })
+        return
+      }
+      if (req.method === 'POST' && (url.pathname === '/api/backtest/records/hide' || url.pathname === '/api/backtest/records/unhide')) {
+        let body: Record<string, unknown>
+        try { body = await readJsonBody(req) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }
+        const botId = typeof body.botId === 'string' ? body.botId : ''
+        const runId = typeof body.runId === 'string' ? body.runId : ''
+        const idRe = /^[A-Za-z0-9._-]+$/
+        if (!idRe.test(botId) || !idRe.test(runId)) {
+          sendJson(res, 400, { ok: false, error: 'botId and runId required and must be well-formed' })
+          return
+        }
+        const list = loadHiddenRecords(worldRoot)
+        if (url.pathname.endsWith('/hide')) {
+          if (!list.some(r => r.botId === botId && r.runId === runId)) list.push({ botId, runId })
+        } else {
+          const i = list.findIndex(r => r.botId === botId && r.runId === runId)
+          if (i >= 0) list.splice(i, 1)
+        }
+        saveHiddenRecords(worldRoot, list)
+        sendJson(res, 200, { ok: true, hidden: list })
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/benchmark') {

@@ -3,6 +3,8 @@ import { join } from 'node:path'
 export const runDir = (w: string, runId: string) => join(w, 'runs', runId)
 export const runStateFile = (w: string, runId: string) => join(runDir(w, runId), 'state.json')
 export const calendarFile = (w: string) => join(w, 'calendar.json')
+// 看板「隐藏记录」清单：{ hidden: [{botId, runId}] }。纯展示过滤，不动 DB。
+export const hiddenRecordsFile = (w: string) => join(w, 'hidden-records.json')
 export const dayDir = (w: string, date: string) => join(w, 'days', date)
 export const quotesFile = (w: string, date: string) => join(dayDir(w, date), 'quotes.json')
 export const overviewFile = (w: string, date: string) => join(dayDir(w, date), 'overview.md')

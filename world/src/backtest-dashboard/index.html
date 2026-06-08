@@ -42,6 +42,9 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .bot-filter-clear{background:rgba(255,255,255,.03);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,color .12s}
 .bot-filter-clear:hover{background:rgba(255,255,255,.08);color:var(--text)}
 .bot-hidden-note{font-size:11px;color:var(--dim);text-align:center;padding:6px 0 2px}
+.bot-row-hide{flex-shrink:0;background:transparent;border:none;color:var(--dim);font-size:14px;line-height:1;width:20px;height:20px;border-radius:5px;cursor:pointer;opacity:0;transition:opacity .12s,background .12s,color .12s;display:flex;align-items:center;justify-content:center}.bot-row:hover .bot-row-hide{opacity:.7}.bot-row-hide:hover{opacity:1;background:rgba(255,107,138,.16);color:var(--loss)}
+.hidden-records{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.hidden-toggle{width:100%;background:rgba(255,255,255,.03);border:1px solid var(--border);color:var(--dim);border-radius:6px;padding:6px 10px;font-size:11px;font-family:inherit;cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center}.hidden-toggle:hover{background:rgba(255,255,255,.07);color:var(--text)}
+.hidden-rec-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}.hidden-rec-row{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.015)}.hidden-rec-meta{min-width:0;display:flex;flex-direction:column;gap:1px}.hidden-rec-bot{font-size:12px;font-weight:600;color:var(--text)}.hidden-rec-run{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hidden-rec-restore{flex-shrink:0;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer}.hidden-rec-restore:hover{background:rgba(102,217,232,.12)}.hidden-rec-empty{font-size:11px;color:var(--dim);text-align:center;padding:4px 0}
 .detail-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px 15px;margin-bottom:14px}.detail-title{font-size:22px;font-weight:800}.detail-sub{margin-top:4px;color:var(--dim);font-size:12px}.detail-pillrow{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.pill{border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:12px;background:rgba(255,255,255,.03)}.pill strong{font-weight:700}.pill.buy{color:var(--gain)}.pill.sell{color:var(--loss)}
 .panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:14px}.panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.grid-2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,.9fr);gap:14px}.chart-wrap{padding-top:2px}.chart{width:100%;height:auto;display:block;border-radius:6px;background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)}
 .axis{font-size:10px;fill:var(--dim)}.line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.bench-line{fill:none;stroke:var(--accent2);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.9;pointer-events:none}.area{fill:url(#areaGrad);opacity:.9;pointer-events:none}.gridline{stroke:rgba(255,255,255,.06);stroke-width:1}.baseline{stroke:rgba(255,184,107,.35);stroke-width:1.4;stroke-dasharray:4 4}.marker-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1.5}.marker-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1.5}.marker-text{font-size:10px;font-weight:700;fill:var(--text)}.chart-legend{display:flex;gap:14px;align-items:center;font-size:11px;color:var(--dim);margin-bottom:6px}.lg-item{display:inline-flex;align-items:center;gap:6px}.lg-swatch{display:inline-block;width:18px;height:3px;border-radius:2px}.lg-swatch.lg-bot{background:var(--accent)}.lg-swatch.lg-bench{background:var(--accent2)}.user-line{fill:none;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;opacity:.32;pointer-events:none}.lg-swatch.lg-user{height:2px;opacity:.6}.user-hit{fill:none;stroke-width:9;opacity:0;stroke-linecap:round;cursor:pointer}.user-mk{opacity:0;pointer-events:none;transition:opacity .08s;stroke:rgba(0,0,0,.5);stroke-width:.8}.user-grp:hover .user-mk,.user-grp.pinned .user-mk{opacity:.95;pointer-events:auto}.user-grp:hover .user-line{opacity:.92;stroke-width:1.8}.user-grp.pinned .user-line{opacity:.98;stroke-width:2.4}.user-grp.pinned .user-mk{stroke:#fff;stroke-width:1.1}.lg-pin-hint{color:var(--dim);font-size:10px;font-style:italic}
@@ -109,6 +112,10 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
         </div>
       </div>
       <div class="bot-list" id="botList"></div>
+      <div class="hidden-records">
+        <button type="button" class="hidden-toggle" id="hiddenToggle"><span>已隐藏记录 <span id="hiddenCount">0</span></span><span id="hiddenChevron">▸</span></button>
+        <div class="hidden-rec-list" id="hiddenList" hidden></div>
+      </div>
     </aside>
     <section class="content"><div id="detailRoot"></div></section>
   </div>
@@ -128,6 +135,7 @@ const state = {
   botSince: null,            // 'YYYY-MM-DD'(上海时区): 只显示该日期当天及之后跑的 bot; null=全部
   onlyRunning: false,        // 只显示当前 status=running 的 run 里的 bot(与日期筛选可叠加)
   runningBots: new Set(),    // 运行中 run 的 botId 集合; 由 /api/backtest/runs 刷新填充
+  hiddenOpen: false,         // 左下「已隐藏记录」可恢复列表是否展开
   expandedActions: new Set(),// "botId|action_id" keys to re-expand after re-render
   pinnedUsers: new Set(),    // cycleId keys: 钉住的真实用户曲线,跨自动刷新保持高亮
   reflectionTab: 'memory',   // 反思面板当前 tab: 'memory'|'belief'|'decision'
@@ -299,12 +307,48 @@ function renderBotList(data){
     const stampText = stamp ? `跑于 ${stamp.short}` : '跑测时间未知'
     const fi = botFundInfo(bot)
     const fundHtml = `<span class="bot-row-fund${fi.empty ? ' fund-empty' : ''}" title="${esc(fi.title)}">${esc(fi.label)}</span>`
-    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><div class="bot-row-main"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-stamp">${esc(stampText)}</span></div>${fundHtml}<span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span></div>`
+    const hideBtn = `<button type="button" class="bot-row-hide" data-hide-bot="${esc(bot.botId)}" data-hide-run="${esc(bot.runId)}" title="从看板隐藏此记录（不删数据库，可在下方恢复）">✕</button>`
+    return `<div class="bot-row${selected}" data-bot="${esc(bot.botId)}"><div class="bot-row-main"><span class="bot-row-name">${esc(bot.botId)}</span><span class="bot-row-stamp">${esc(stampText)}</span></div>${fundHtml}<span class="bot-row-return ${retCls}">${fmtPct(bot.cumulativeReturnPct)}</span>${hideBtn}</div>`
   }).join('')
   const hiddenNote = state.onlyRunning ? `已隐藏 ${hidden} 个未在跑的 bot` : `更早的 ${hidden} 个 bot 已隐藏`
   root.innerHTML = rows + (hidden > 0 ? `<div class="bot-hidden-note">${hiddenNote}</div>` : '')
   root.querySelectorAll('.bot-row').forEach(el => el.addEventListener('click', () => { void selectBot(el.dataset.bot) }))
+  root.querySelectorAll('.bot-row-hide').forEach(el => el.addEventListener('click', e => {
+    e.stopPropagation()  // 别触发选中该行
+    void hideRecord(el.dataset.hideBot, el.dataset.hideRun)
+  }))
   syncFilterControls()
+}
+// 隐藏 / 恢复某条 (bot, run) 记录：只改 runtime/hidden-records.json，DB 不动。改完重拉数据重渲染。
+async function hideRecord(botId, runId){
+  try {
+    const res = await fetch('/api/backtest/records/hide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botId, runId }) })
+    if (!res.ok) { const b = await res.json().catch(() => ({})); alert(`隐藏失败：${b.error || ('HTTP ' + res.status)}`); return }
+  } catch (err) { alert(`隐藏失败：${err && err.message ? err.message : String(err)}`); return }
+  if (state.selected === botId) { state.selected = null; byId('detailRoot').innerHTML = '<div class="empty">选择左侧一个 bot 查看明细</div>' }
+  await refreshData()
+  if (state.hiddenOpen) void loadHiddenRecords()
+}
+async function restoreRecord(botId, runId){
+  try {
+    const res = await fetch('/api/backtest/records/unhide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ botId, runId }) })
+    if (!res.ok) { const b = await res.json().catch(() => ({})); alert(`恢复失败：${b.error || ('HTTP ' + res.status)}`); return }
+  } catch (err) { alert(`恢复失败：${err && err.message ? err.message : String(err)}`); return }
+  await refreshData()
+  void loadHiddenRecords()
+}
+// 拉隐藏清单，渲染到左下角的可恢复列表 + 更新计数。
+async function loadHiddenRecords(){
+  let list = []
+  try {
+    const res = await fetch('/api/backtest/records/hidden', { cache: 'no-store' })
+    if (res.ok) list = (await res.json()).hidden || []
+  } catch { /* 取不到就当空 */ }
+  const countEl = byId('hiddenCount'); if (countEl) countEl.textContent = list.length
+  const box = byId('hiddenList'); if (!box) return
+  if (!list.length){ box.innerHTML = '<div class="hidden-rec-empty">没有隐藏的记录</div>'; return }
+  box.innerHTML = list.map(r => `<div class="hidden-rec-row"><div class="hidden-rec-meta"><span class="hidden-rec-bot">${esc(r.botId)}</span><span class="hidden-rec-run" title="${esc(r.runId)}">${esc(r.runId)}</span></div><button type="button" class="hidden-rec-restore" data-restore-bot="${esc(r.botId)}" data-restore-run="${esc(r.runId)}">恢复</button></div>`).join('')
+  box.querySelectorAll('.hidden-rec-restore').forEach(el => el.addEventListener('click', () => { void restoreRecord(el.dataset.restoreBot, el.dataset.restoreRun) }))
 }
 // 把筛选控件同步到 state.botSince: 清除按钮显隐、日期框回填、快捷按钮高亮当前命中的那个。
 function syncFilterControls(){
@@ -833,21 +877,27 @@ function stripBeliefYaml(text){
     .trim()
 }
 function renderReflectionPanel(bot){
-  const dates = (bot.series || []).map(p => p.trade_date)
+  const dates = rflDates(bot)
+  const latest = rflLatest(bot)
   if (state.reflectionPinned && !dates.includes(state.reflectionPinned)) state.reflectionPinned = null  // 钉住日不属于本 bot → 清掉
   let date = state.reflectionPinned || state.reflectionDate
-  if (!date || !dates.includes(date)) date = bot.latestTradeDate  // 切 bot/超出区间 → 回落到最新日
+  if (!date || !dates.includes(date)) date = latest  // 切 bot/超出区间 → 回落到最新反思日
   state.reflectionDate = date
   const tabs = REFLECTION_TABS.map(([k, label]) => `<button data-rfl-tab="${k}"${state.reflectionTab === k ? ' class="active"' : ''}>${label}</button>`).join('')
   const idx = dates.indexOf(date)
   const prevDis = idx <= 0 ? ' disabled' : ''
   const nextDis = (idx < 0 || idx >= dates.length - 1) ? ' disabled' : ''
   const minD = dates[0] || '', maxD = dates[dates.length - 1] || ''
-  const datenav = `<div class="rfl-datenav"><button class="rfl-nav-btn" id="rflPrev" title="上一交易日"${prevDis}>‹</button><input type="date" class="rfl-date-input" id="reflectionDateInput" min="${esc(minD)}" max="${esc(maxD)}" value="${esc(date)}" title="选交易日（非交易日自动就近）"><button class="rfl-nav-btn" id="rflNext" title="下一交易日"${nextDis}>›</button><button class="rfl-follow-btn${state.reflectionPinned ? '' : ' active'}" id="rflFollow" title="回到最新交易日">最新</button></div>`
+  const datenav = `<div class="rfl-datenav"><button class="rfl-nav-btn" id="rflPrev" title="上一反思日"${prevDis}>‹</button><input type="date" class="rfl-date-input" id="reflectionDateInput" min="${esc(minD)}" max="${esc(maxD)}" value="${esc(date)}" title="选反思日（无决策的日期自动就近回退）"><button class="rfl-nav-btn" id="rflNext" title="下一反思日"${nextDis}>›</button><button class="rfl-follow-btn${state.reflectionPinned ? '' : ' active'}" id="rflFollow" title="回到最新反思日">最新</button></div>`
   return `<div class="panel panel-reflection" id="reflectionPanel"><div class="reflection-head"><h2 id="reflectionTitle">当日反思 · ${esc(date || '--')}</h2>${datenav}<div class="reflection-tabs">${tabs}</div><button class="rfl-fs-btn" id="reflectionFsBtn" title="放大 / 还原">⛶</button></div><div class="reflection-body" id="reflectionBody"><div class="empty">加载中…</div></div></div>`
 }
-// 交易日导航(日历输入 / 左右箭头)的共享逻辑。dates 升序;非交易日就近回退到 ≤d 的最近交易日。
-function rflDates(bot){ return (bot.series || []).map(p => p.trade_date) }
+// 反思日导航(日历输入 / 左右箭头)的共享逻辑。dates 升序;非反思日就近回退到 ≤d 的最近反思日。
+// 翻页落点用 bot.reflectionDates（bot 真正决策过的日期）——月度/周度回测时它天然是月度/周度，
+// 不会逐日空翻；旧 run 没这个字段时回落到逐日 series。
+function rflDates(bot){ const d = bot && bot.reflectionDates; return (d && d.length) ? d : (bot.series || []).map(p => p.trade_date) }
+// 最新「反思日」= 反思日列表末项。和 bot.latestTradeDate（最新 NAV 交易日）不同：月度回测里
+// 净值逐日结算到 run 末日，但最后一次决策可能在更早的月末，「最新」该落在最后决策日。
+function rflLatest(bot){ const d = rflDates(bot); return d.length ? d[d.length - 1] : bot.latestTradeDate }
 function rflGoToDate(bot, d){
   const dates = rflDates(bot)
   if (!dates.length) return
@@ -882,7 +932,7 @@ function paintReflection(bot){
   const body = byId('reflectionBody'); const title = byId('reflectionTitle')
   if (!body) return
   const date = state.reflectionDate
-  if (title) title.textContent = `当日反思 · ${date}${date === bot.latestTradeDate ? '（最新）' : ''}${state.reflectionPinned ? ' · 已钉住' : ''}`
+  if (title) title.textContent = `当日反思 · ${date}${date === rflLatest(bot) ? '（最新）' : ''}${state.reflectionPinned ? ' · 已钉住' : ''}`
   const data = state.reflectionCache.get(reflectionKey(bot, date))
   if (!data){ body.innerHTML = '<div class="empty">加载中…</div>'; return }
   const raw = { memory: data.memoryWindow, decision: data.decision }[state.reflectionTab] || ''
@@ -895,7 +945,7 @@ let _rflTimer = null
 function scheduleReflection(bot, date){
   state.reflectionDate = date
   const title = byId('reflectionTitle')
-  if (title) title.textContent = `当日反思 · ${date}${date === bot.latestTradeDate ? '（最新）' : ''}`
+  if (title) title.textContent = `当日反思 · ${date}${date === rflLatest(bot) ? '（最新）' : ''}`
   syncRflDateNav(bot)  // 日历输入 + 左右箭头同步到当前查看日
   if (state.reflectionCache.has(reflectionKey(bot, date))){ paintReflection(bot); return }
   clearTimeout(_rflTimer)
@@ -1138,6 +1188,7 @@ async function runControl(act, runId, btn){
 async function boot(){
   await refreshData({ initial: true })
   void refreshRuns()
+  void loadHiddenRecords()  // 填充左下「已隐藏记录」计数
   setInterval(() => { void refreshData(); void refreshRuns() }, REFRESH_MS)
 }
 document.addEventListener('change', (e) => {
@@ -1153,7 +1204,7 @@ document.addEventListener('change', (e) => {
     const bot = state.data?.bots.find(b => b.botId === state.selected)
     if (!bot) return
     if (e.target.value) rflGoToDate(bot, e.target.value)  // 选定日历日期 → 钉住(非交易日就近回退)
-    else { state.reflectionPinned = null; scheduleReflection(bot, bot.latestTradeDate) }  // 清空 = 取消钉住
+    else { state.reflectionPinned = null; scheduleReflection(bot, rflLatest(bot)) }  // 清空 = 取消钉住
     return
   }
   if (e.target.id === 'botSinceIn') {
@@ -1181,6 +1232,14 @@ document.addEventListener('click', (e) => {
     if (state.data) renderBotList(state.data)
     return
   }
+  if (e.target.closest?.('#hiddenToggle')) {
+    state.hiddenOpen = !state.hiddenOpen
+    const box = byId('hiddenList'); const chev = byId('hiddenChevron')
+    if (box) box.hidden = !state.hiddenOpen
+    if (chev) chev.textContent = state.hiddenOpen ? '▾' : '▸'
+    if (state.hiddenOpen) void loadHiddenRecords()
+    return
+  }
   const quick = e.target.closest?.('.bot-quick-btn')
   if (quick) {
     const since = shDateDaysAgo(Number(quick.dataset.sinceDays))
@@ -1201,9 +1260,9 @@ document.addEventListener('click', (e) => {
   if (navBtn) {
     const bot = state.data?.bots.find(b => b.botId === state.selected)
     if (!bot) return
-    if (navBtn.id === 'rflPrev') rflStep(bot, -1)        // 上一交易日
-    else if (navBtn.id === 'rflNext') rflStep(bot, 1)    // 下一交易日
-    else { state.reflectionPinned = null; scheduleReflection(bot, bot.latestTradeDate) }  // 「最新」→ 回最新日
+    if (navBtn.id === 'rflPrev') rflStep(bot, -1)        // 上一反思日
+    else if (navBtn.id === 'rflNext') rflStep(bot, 1)    // 下一反思日
+    else { state.reflectionPinned = null; scheduleReflection(bot, rflLatest(bot)) }  // 「最新」→ 回最新反思日
     return
   }
   const rflTab = e.target.closest?.('.reflection-tabs button[data-rfl-tab]')
