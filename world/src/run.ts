@@ -219,6 +219,50 @@ function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string,
   writeFileSync(P.runConfigFile(worldRoot, runId), JSON.stringify(base, null, 2) + '\n')
 }
 
+/** 新版 research-loop-rust2 只从 `<workspace>/config/research-loop.yaml` 读全部配置
+ *  （model / api_key / mem0 / ...），不再认 `--config trading-rl-config.json` 里的
+ *  `api_key_from_openclaw`（rust config.rs::merge_from_data 已移除该支持）。world 之前只生成
+ *  被忽略的 trading-rl-config.json，导致 rust 端 primary_api_key 为空 → "LLM API not configured"。
+ *
+ *  这里在每个 bot 的影子 workspace 里生成 research-loop.yaml：以 rl_config_base 为模板，把
+ *  api_key 解析成明文（从 run 专属 rl-openclaw/openclaw.json 的同名 provider 取），注入本 run 的
+ *  mem0 URL / workspace / skills，并关掉 dashboard（多 bot 并发时 rust 默认监听 18890 会互撞）。
+ *  JSON 是合法 YAML，直接按 .yaml 落盘即可被 serde_yaml 解析。buildShadowWorkspace 把
+ *  config/research-loop.yaml 当 runtime-override 跳过拷贝，所以这份每次 setup 重写、不会被覆盖。 */
+function writeResearchLoopYaml(config: WorldConfig, shadow: string, memoryUrl: string, openclawDir: string): void {
+  let base: Record<string, unknown>
+  try { base = JSON.parse(readFileSync(config.rlConfigBase, 'utf8')) as Record<string, unknown> }
+  catch (err) { throw new Error(`cannot read rl_config_base ${config.rlConfigBase}: ${err instanceof Error ? err.message : String(err)}`) }
+  const model = (typeof base.model === 'object' && base.model ? base.model : {}) as Record<string, unknown>
+  const primary = (typeof model.primary === 'object' && model.primary ? model.primary : {}) as Record<string, unknown>
+  // api_key_from_openclaw → 明文 api_key：新 rust 版按名取 key 的逻辑已删，必须落明文。
+  const provName = typeof primary.api_key_from_openclaw === 'string' ? primary.api_key_from_openclaw : ''
+  if (provName && typeof primary.api_key !== 'string') {
+    try {
+      const oc = JSON.parse(readFileSync(join(openclawDir, 'openclaw.json'), 'utf8')) as Record<string, unknown>
+      const providers = (((oc.models as Record<string, unknown> | undefined)?.providers) ?? {}) as Record<string, { apiKey?: string }>
+      const key = providers[provName]?.apiKey
+      if (typeof key === 'string' && key) primary.api_key = key
+    } catch { /* 非致命：解析不到则留空，server 会报 "LLM API not configured" */ }
+  }
+  delete primary.api_key_from_openclaw
+  model.primary = primary
+  base.model = model
+  const mcp = (typeof base.mcp === 'object' && base.mcp ? base.mcp : {}) as Record<string, unknown>
+  mcp.mem0 = memoryUrl
+  base.mcp = mcp
+  base.extra_roots = [config.skillsRoot]
+  base.openclaw_dir = openclawDir
+  base.workspace = shadow
+  // 回测多 bot 并发，rust 默认 dashboard 监听 18890 会互撞端口 → 显式关掉。
+  const dash = (typeof base.dashboard === 'object' && base.dashboard ? base.dashboard : {}) as Record<string, unknown>
+  dash.enabled = false
+  base.dashboard = dash
+  const dst = join(shadow, 'config', 'research-loop.yaml')
+  mkdirSync(dirname(dst), { recursive: true })
+  writeFileSync(dst, JSON.stringify(base, null, 2) + '\n')
+}
+
 interface SetupResult {
   tradingDates: string[]
   memory: MemoryServerHandle
@@ -415,6 +459,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
     const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
     buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars })
+    if (config.loop !== 'openclaw-pi') writeResearchLoopYaml(config, shadow, memory.url, rlOpenclawDir)
     const audit = installStrategyLibraryInShadow({
       config,
       lib: strategyLibrary,
