@@ -1,0 +1,10 @@
+# 本 bot 的模型配置（research-loop 的 model.primary）。
+# 继承 world/config/trading-rl-config.base.json 的其余设置（LLM 参数、超时等），这里只指定模型端点。
+# api_key 用 api_key_from_openclaw 引用 openclaw.json 里的 provider，回测时由 world 解析成明文注入
+# run 的 research-loop.yaml；本文件不落明文 key。
+# 18888「新建回测」可为某次回测临时覆盖本选择；不覆盖时即用此默认。
+# 可选模型见 world/config/openclaw.json 的 models.providers[].models[]（qwen3.6-plus / gpt-5.4 / glm-5 / kimi-k2.5 …）。
+provider: openai_compatible
+base_url: https://dd-ai-api.eastmoney.com/v1
+model: qwen3.6-plus
+api_key_from_openclaw: zai-coding-plan

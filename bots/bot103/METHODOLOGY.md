@@ -156,8 +156,10 @@
 #### 步 ② — 板块因子排名（识别具体主题）
 
 **用什么工具**：
-- `mcp__simworld_data__sector_factor(top_n=15)` —— 板块动量分 + 风险分 + 机会分
-- `mcp__simworld_data__sector_market(top_n=15)` —— 板块行情 + 估值 + 主力资金流
+- `mcp__simworld_data__sector_search(sector_type='industry')` 枚举行业板块码 → `sector_factor(sec_codes=[全部行业板块])` —— 板块动量分 + 风险分 + 机会分
+- `mcp__simworld_data__sector_market(sec_codes=[动量前15板块])` —— 板块行情 + 估值 + 主力资金流
+
+> 注：`sector_factor` / `sector_market` **无 `top_n` 参数**，必须传 `sec_codes`；"top15" 是先枚举全部板块、`sector_factor` 取分后**本地按动量分降序取前 15**，再喂给 `sector_market`。
 
 **怎么读**（**低风险 bot 的主线门槛更高**）：
 - top 15 里 **≥ 5 个属于同一类**主题 → **强主线候选**（比 101/102 的 4 个更严）

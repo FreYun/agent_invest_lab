@@ -41,6 +41,17 @@ export interface WorldConfig {
   // 按日推进，simulated_datetime 和 currentDateRef 同样每天更新——只是 bot 不被叫起。用于
   // 模拟"周频"或更长周期的调仓节奏。
   chatStepDays: number
+  // 决策日的对齐口径。'trading_days'（默认）：按交易日序号取模（cursor % chatStepDays），
+  // 历史行为不变。'weekly'：每个自然周（按周一起算）的第一个交易日唤起一次。'monthly'：每个
+  // 自然月的第一个交易日唤起一次。weekly/monthly 下 chatStepDays 被忽略，决策日由日历边界派生，
+  // 不会因假期漂移。中间交易日同样只做系统侧 settle/close，simulated_datetime 照常推进。
+  chatStepMode: 'trading_days' | 'weekly' | 'monthly'
+  // weekly 模式下决策落在每周的第几天。ISO 周几：1=周一 … 5=周五；遇假就近顺延到「≥该周几」的首个
+  // 交易日，整周都在该周几之前则落到本周最后一个交易日。缺省=1（≈周首交易日，历史行为）。
+  chatWeekday?: number
+  // monthly 模式下决策落在每月第几个交易日。正数=从月初数（1=月初）；负数=从月末倒数（-1=月末）。
+  // 越界自动夹到当月首/末交易日。缺省=1（月初，历史行为）。
+  chatMonthlyNth?: number
   loop: 'research-loop' | 'openclaw-pi'
   openclawRoot?: string
   piServerEntry?: string
@@ -80,6 +91,10 @@ export interface WorldConfig {
   //   - tools/call 强制注入 run_id = <本轮 runId>，让 bot 写入永远带审计标签
   // bot 的 mcporter.json 用 ${FUND_PORTFOLIO_PROXY_URL} 占位符引用，buildShadowWorkspace 替换。
   fundPortfolioUpstreamUrl?: string
+  // 可选。per-bot 模型覆盖（来自 18888 新建回测 modal 的「本次」选择）。botId → research-loop 的
+  // model.primary 片段 { provider, base_url, model, api_key_from_openclaw }。优先级最高：
+  // 盖过 bots/<bot>/config/model.yaml 和全局 rlConfigBase。缺省时各 bot 用自带 model.yaml / 全局兜底。
+  botModels?: Record<string, Record<string, unknown>>
 }
 
 export interface BotAssignment {
@@ -177,6 +192,16 @@ export function loadWorldConfig(path: string): WorldConfig {
     ? resolveMaybe(baseDir, raw.strategy_library_root)
     : undefined
   const botAssignments = parseBotAssignments(raw.bot_assignments, bots)
+  // per-bot 模型覆盖（18888 modal 本次选择）：{ botId: { provider, base_url, model, api_key_from_openclaw } }。
+  // 只收非空对象；botId 不限定在 bots 内（多写的键无害，writeResearchLoopYaml 按 botId 取）。
+  let botModels: Record<string, Record<string, unknown>> | undefined
+  if (raw.bot_models && typeof raw.bot_models === 'object') {
+    const out: Record<string, Record<string, unknown>> = {}
+    for (const [botId, v] of Object.entries(raw.bot_models as Record<string, unknown>)) {
+      if (v && typeof v === 'object') out[botId] = v as Record<string, unknown>
+    }
+    if (Object.keys(out).length) botModels = out
+  }
 
   const replayRaw = (raw.replay ?? {}) as Record<string, unknown>
   const from = validIsoDate(reqString(replayRaw, 'from'), 'replay.from')
@@ -191,6 +216,12 @@ export function loadWorldConfig(path: string): WorldConfig {
   const researchDayEvery = typeof raw.research_day_every === 'number' && raw.research_day_every >= 0 ? Math.floor(raw.research_day_every) : 0
   const researchDayTimeoutSeconds = typeof raw.research_day_timeout_seconds === 'number' && raw.research_day_timeout_seconds > 0 ? Math.floor(raw.research_day_timeout_seconds) : Math.max(perBotTimeoutSeconds, 300)
   const chatStepDays = typeof raw.chat_step_days === 'number' && raw.chat_step_days >= 1 ? Math.floor(raw.chat_step_days) : 1
+  const rawStepMode = typeof raw.chat_step_mode === 'string' ? raw.chat_step_mode.trim() : ''
+  const chatStepMode: 'trading_days' | 'weekly' | 'monthly' = rawStepMode === 'weekly' || rawStepMode === 'monthly' ? rawStepMode : 'trading_days'
+  // weekly：周几（1=周一…5=周五）；非法/缺省 → undefined（run.ts 回落到周首交易日）。
+  const chatWeekday = typeof raw.chat_weekday === 'number' && raw.chat_weekday >= 1 && raw.chat_weekday <= 5 ? Math.floor(raw.chat_weekday) : undefined
+  // monthly：第 N 个交易日（正=从月初、负=从月末倒数，不能为 0）；非法/缺省 → undefined（回落到月初）。
+  const chatMonthlyNth = typeof raw.chat_monthly_nth === 'number' && Number.isFinite(raw.chat_monthly_nth) && Math.trunc(raw.chat_monthly_nth) !== 0 ? Math.trunc(raw.chat_monthly_nth) : undefined
   const rlConfigBase = typeof raw.rl_config_base === 'string' && raw.rl_config_base.trim()
     ? resolveMaybe(baseDir, raw.rl_config_base)
     : resolveMaybe(baseDir, '../config/trading-rl-config.base.json')
@@ -307,5 +338,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
   }
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
 }

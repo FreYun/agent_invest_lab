@@ -1,0 +1,39 @@
+research_loop: /home/rooot/.openclaw/research-loop/ts
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
+
+# ── 决策频次对照实验 · 月度臂 ──────────────────────────────────────────────
+# 与 daily / weekly 臂唯一差别 = chat_step_mode。monthly = 每个自然月的第一个交易日唤起一次
+# bot（机构月度再平衡的标准口径）；中间交易日系统侧照常 settle/close，bot 不被叫起、不能补做交易。
+# 决策日由日历边界派生，不随假期漂移；每个月度决策日自动获得 research_day_timeout 的更宽预算。
+bots: [bot_multi]
+
+replay:
+  from: "2023-01-03"
+  to: "2026-05-29"
+
+calendar: ../runtime/calendar.json
+
+concurrency: 1
+chat_step_mode: monthly
+per_bot_timeout_seconds: 600
+research_day_every: 0
+research_day_timeout_seconds: 900
+
+fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
+simworld_upstream_url: http://127.0.0.1:18078/mcp
+
+buyable_fund_codes:
+  - "000051"   # 华夏沪深300ETF联接A
+  - "000962"   # 天弘中证500ETF联接A
+  - "001512"   # 易方达中债3-5年期国债指数
+  - "001550"   # 天弘中证医药100A
+  - "001552"   # 天弘中证证券保险A
+  - "001617"   # 天弘中证电子ETF联接A
+  - "002610"   # 博时黄金ETF联接A
+  - "004854"   # 广发中证全指汽车指数A
+  - "005223"   # 广发中证基建工程ETF联接A
+  - "006451"   # 代表性权益/行业候选
+  - "006961"   # 代表性权益/行业候选
+  - "012543"   # 嘉实中证新能源汽车指数A
+  - "161907"   # 红利ETF联接
+  - "518880"   # 黄金ETF

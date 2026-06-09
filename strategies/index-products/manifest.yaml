@@ -4,7 +4,13 @@ strategies:
     title: 沪深300指数投资框架
     methodology: hs300.md
     target_index: "000300.SH"
-    default_buyable_fund_codes: ["000051", "510300"]
+    default_buyable_fund_codes: ["510300"]
+
+  sse50:
+    title: 上证50指数投资框架
+    methodology: sse50.md
+    target_index: "000016.SH"
+    default_buyable_fund_codes: ["510050"]
 
   semiconductor:
     title: 半导体设备指数投资框架

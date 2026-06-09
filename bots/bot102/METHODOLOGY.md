@@ -160,8 +160,10 @@ ERP 低分位、温度过热、VIX 极值、散户反向因子过热，**不能�
 #### 步 ② — 板块因子排名（识别具体主题）
 
 **用什么工具**（识别主线最关键的两个，不要漏）：
-- `mcp__simworld_data__sector_factor(top_n=15)` —— 板块动量分 + 风险分 + 机会分
-- `mcp__simworld_data__sector_market(top_n=15)` —— 板块行情 + 估值 + 主力资金流
+- `mcp__simworld_data__sector_search(sector_type='industry')` 枚举行业板块码 → `sector_factor(sec_codes=[全部行业板块])` —— 板块动量分 + 风险分 + 机会分
+- `mcp__simworld_data__sector_market(sec_codes=[动量前15板块])` —— 板块行情 + 估值 + 主力资金流
+
+> 注：`sector_factor` / `sector_market` **无 `top_n` 参数**，必须传 `sec_codes`；"top15" 是先枚举全部板块、`sector_factor` 取分后**本地按动量分降序取前 15**，再喂给 `sector_market`。
 
 **怎么读**：
 - 取板块动量分 top 15，按所属主题映射到 9 类（科技 / 新能源 / 医药 / 消费 / 金融 / 周期 / 制造 / 基建地产 / 全市场）

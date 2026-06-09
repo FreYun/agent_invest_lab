@@ -14,7 +14,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .hero h1{margin:0;font-size:28px}.hero .sub{color:var(--dim);margin-top:6px;font-size:13px}.hero-right-col{display:flex;flex-direction:column;align-items:flex-end;gap:8px}.hero-badges{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}.badge{border:1px solid var(--border);background:rgba(255,255,255,.03);border-radius:999px;padding:7px 11px;font-size:12px;color:var(--text)}.badge strong{color:var(--accent)}
 .badge.live{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);border-color:rgba(101,217,165,.25);background:rgba(101,217,165,.04)}.badge.live.err{color:var(--gain);border-color:rgba(255,107,138,.35);background:rgba(255,107,138,.06)}.live-dot{width:7px;height:7px;border-radius:999px;background:var(--loss);box-shadow:0 0 6px rgba(101,217,165,.6);animation:livepulse 1.6s ease-in-out infinite}.badge.live.err .live-dot{background:var(--gain);box-shadow:0 0 6px rgba(255,107,138,.55)}.live-sub{color:var(--dim);font-style:italic;margin-left:4px}@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.45}}
 .bot-run-picker{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:var(--dim)}.bot-run-picker label{text-transform:uppercase;letter-spacing:.06em;font-size:10px;white-space:nowrap}.bot-run-picker select{flex:1;min-width:0;background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;font-family:inherit;cursor:pointer}.bot-run-picker select:focus{outline:none;border-color:var(--accent)}.bot-run-picker select:disabled{opacity:.5;cursor:not-allowed}
-.detail-run-picker{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--dim)}.detail-run-picker label{text-transform:uppercase;letter-spacing:.06em;font-size:11px}.detail-run-picker select{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px;font-family:inherit;min-width:220px;cursor:pointer}.detail-run-picker select:focus{outline:none;border-color:var(--accent)}
+.detail-run-picker{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--dim)}.detail-run-picker label{text-transform:uppercase;letter-spacing:.06em;font-size:11px}.detail-run-picker select{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px;font-family:inherit;min-width:220px;cursor:pointer}.detail-run-picker select:focus{outline:none;border-color:var(--accent)}.detail-run-hide{flex-shrink:0;background:rgba(255,107,138,.06);border:1px solid var(--border);color:var(--gain);border-radius:6px;padding:5px 10px;font-size:11px;font-family:inherit;cursor:pointer;white-space:nowrap}.detail-run-hide:hover{background:rgba(255,107,138,.16);border-color:var(--gain)}.row-badge.model-badge{background:#10212a;border:1px solid #1d4a5a;color:#7fd0e6;white-space:nowrap;flex-shrink:0;max-width:none}
 .range-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.range-bar .label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}.range-presets{display:flex;gap:6px;flex-wrap:wrap}.range-presets button{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:12px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s}.range-presets button:hover{background:rgba(255,255,255,.08)}.range-presets button.active{background:#122034;border-color:var(--accent);color:var(--accent)}.range-custom{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim)}.range-custom input{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;font-family:inherit}
 .metrics-table{width:100%;border-collapse:collapse}.metrics-table th,.metrics-table td{padding:9px 10px;font-size:12px;text-align:right;font-variant-numeric:tabular-nums;border-bottom:1px solid rgba(255,255,255,.04)}.metrics-table th:first-child,.metrics-table td:first-child{text-align:left;color:var(--dim)}.metrics-table thead th{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;font-weight:500}.metrics-table tr:last-child td{border-bottom:none}.metrics-table .diff{font-size:11px;color:var(--dim);margin-left:6px;font-variant-numeric:tabular-nums}.metrics-table .diff.gain{color:var(--gain)}.metrics-table .diff.loss{color:var(--loss)}
 .summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}.metric{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid var(--border);border-radius:var(--radius);padding:14px 14px 12px}.metric .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.metric .v{margin-top:8px;font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}.metric .s{margin-top:4px;font-size:12px;color:var(--dim)}
@@ -43,14 +43,16 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .bot-filter-clear:hover{background:rgba(255,255,255,.08);color:var(--text)}
 .bot-hidden-note{font-size:11px;color:var(--dim);text-align:center;padding:6px 0 2px}
 .bot-row-hide{flex-shrink:0;background:transparent;border:none;color:var(--dim);font-size:14px;line-height:1;width:20px;height:20px;border-radius:5px;cursor:pointer;opacity:0;transition:opacity .12s,background .12s,color .12s;display:flex;align-items:center;justify-content:center}.bot-row:hover .bot-row-hide{opacity:.7}.bot-row-hide:hover{opacity:1;background:rgba(255,107,138,.16);color:var(--loss)}
+/* 已隐藏记录：放在 bot 列表底部的折叠区。下面那条 .hidden-rec-list[hidden]{display:none} 用来压过
+   .hidden-rec-list{display:flex}——否则类样式特异度盖过 hidden 属性,列表会折不起来。 */
 .hidden-records{margin-top:14px;border-top:1px solid var(--border);padding-top:10px}.hidden-toggle{width:100%;background:rgba(255,255,255,.03);border:1px solid var(--border);color:var(--dim);border-radius:6px;padding:6px 10px;font-size:11px;font-family:inherit;cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center}.hidden-toggle:hover{background:rgba(255,255,255,.07);color:var(--text)}
-.hidden-rec-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}.hidden-rec-row{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.015)}.hidden-rec-meta{min-width:0;display:flex;flex-direction:column;gap:1px}.hidden-rec-bot{font-size:12px;font-weight:600;color:var(--text)}.hidden-rec-run{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hidden-rec-restore{flex-shrink:0;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer}.hidden-rec-restore:hover{background:rgba(102,217,232,.12)}.hidden-rec-empty{font-size:11px;color:var(--dim);text-align:center;padding:4px 0}
+.hidden-rec-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}.hidden-rec-list[hidden]{display:none}.hidden-rec-row{display:flex;align-items:center;gap:8px;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.015)}.hidden-rec-meta{min-width:0;display:flex;flex-direction:column;gap:1px}.hidden-rec-bot{font-size:12px;font-weight:600;color:var(--text)}.hidden-rec-run{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hidden-rec-restore{flex-shrink:0;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer}.hidden-rec-restore:hover{background:rgba(102,217,232,.12)}.hidden-rec-empty{font-size:11px;color:var(--dim);text-align:center;padding:4px 0}
 .detail-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px 15px;margin-bottom:14px}.detail-title{font-size:22px;font-weight:800}.detail-sub{margin-top:4px;color:var(--dim);font-size:12px}.detail-pillrow{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.pill{border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:12px;background:rgba(255,255,255,.03)}.pill strong{font-weight:700}.pill.buy{color:var(--gain)}.pill.sell{color:var(--loss)}
 .panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:14px}.panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.grid-2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,.9fr);gap:14px}.chart-wrap{padding-top:2px}.chart{width:100%;height:auto;display:block;border-radius:6px;background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)}
 .axis{font-size:10px;fill:var(--dim)}.line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}.bench-line{fill:none;stroke:var(--accent2);stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.9;pointer-events:none}.area{fill:url(#areaGrad);opacity:.9;pointer-events:none}.gridline{stroke:rgba(255,255,255,.06);stroke-width:1}.baseline{stroke:rgba(255,184,107,.35);stroke-width:1.4;stroke-dasharray:4 4}.marker-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1.5}.marker-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1.5}.marker-text{font-size:10px;font-weight:700;fill:var(--text)}.chart-legend{display:flex;gap:14px;align-items:center;font-size:11px;color:var(--dim);margin-bottom:6px}.lg-item{display:inline-flex;align-items:center;gap:6px}.lg-swatch{display:inline-block;width:18px;height:3px;border-radius:2px}.lg-swatch.lg-bot{background:var(--accent)}.lg-swatch.lg-bench{background:var(--accent2)}.user-line{fill:none;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;opacity:.32;pointer-events:none}.lg-swatch.lg-user{height:2px;opacity:.6}.user-hit{fill:none;stroke-width:9;opacity:0;stroke-linecap:round;cursor:pointer}.user-mk{opacity:0;pointer-events:none;transition:opacity .08s;stroke:rgba(0,0,0,.5);stroke-width:.8}.user-grp:hover .user-mk,.user-grp.pinned .user-mk{opacity:.95;pointer-events:auto}.user-grp:hover .user-line{opacity:.92;stroke-width:1.8}.user-grp.pinned .user-line{opacity:.98;stroke-width:2.4}.user-grp.pinned .user-mk{stroke:#fff;stroke-width:1.1}.lg-pin-hint{color:var(--dim);font-size:10px;font-style:italic}
 .table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px 8px;border-bottom:1px solid rgba(255,255,255,.04);text-align:left;font-size:12px}.table th{color:var(--dim);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em}.table td.num,.table th.num{text-align:right;font-variant-numeric:tabular-nums}.table tr:last-child td{border-bottom:none}.row-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:11px;border:1px solid var(--border)}.row-badge.buy{color:var(--gain)}.row-badge.sell{color:var(--loss)}.row-badge.hold{color:var(--dim)}.row-badge.active{color:var(--loss)}.row-badge.contaminated{color:var(--accent2);border-color:rgba(255,184,107,.4);background:rgba(255,184,107,.06)}
 .panel-holdings{display:flex;flex-direction:column}.panel-holdings .holdings{flex:1;align-content:center}.holdings{display:grid;grid-template-columns:1fr;gap:10px}.holding{border:1px solid rgba(255,255,255,.05);border-radius:6px;background:rgba(255,255,255,.02);padding:12px 12px 10px}.holding-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.holding-name{font-size:13px;font-weight:700;line-height:1.35}.holding-code{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace;margin-top:2px}.holding-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;color:var(--dim);font-size:11px}.holding strong{color:var(--text)}.reason{margin-top:8px;font-size:12px;line-height:1.55;color:var(--dim);white-space:pre-wrap}.empty{border:1px dashed var(--border);border-radius:var(--radius);padding:24px;color:var(--dim);text-align:center}
-.panel-reflection .reflection-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.rfl-datenav{margin-left:auto;display:flex;align-items:center;gap:4px}.rfl-nav-btn{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--text);font-size:14px;line-height:1;width:26px;height:27px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center}.rfl-nav-btn:hover:not(:disabled){border-color:var(--accent)}.rfl-nav-btn:disabled{opacity:.32;cursor:not-allowed}.rfl-date-input{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 7px;font-size:12px;font-family:inherit;cursor:pointer;color-scheme:dark}.rfl-date-input:focus{outline:none;border-color:var(--accent)}.rfl-follow-btn{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--dim);font-size:11px;padding:4px 9px;border-radius:6px;cursor:pointer}.rfl-follow-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}.reflection-tabs{display:flex;gap:6px}.reflection-tabs button{background:rgba(255,255,255,.05);border:1px solid var(--border);color:rgba(255,255,255,.7);font-size:12px;padding:4px 12px;border-radius:6px;cursor:pointer}.reflection-tabs button.active{background:var(--accent);border-color:var(--accent);color:#fff}.rfl-fs-btn{background:transparent;border:none;color:var(--dim);font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;cursor:pointer}.rfl-fs-btn:hover{color:var(--text);background:rgba(255,255,255,.06)}.reflection-body{max-height:460px;overflow:auto;font-size:13px;line-height:1.75;border:1px solid rgba(255,255,255,.09);border-radius:6px;background:rgba(22,24,36,.6);padding:16px;color:rgba(255,255,255,.87)}.rfl-h2{font-size:14px;font-weight:700;color:#fff;margin:14px 0 5px}.rfl-h3{font-size:13px;font-weight:700;color:#f0b95c;margin:14px 0 5px;letter-spacing:.02em}.rfl-quote{color:rgba(255,255,255,.66);border-left:2px solid var(--accent);padding-left:10px;margin:5px 0}.rfl-li{color:rgba(255,255,255,.84);margin:3px 0}.rfl-p{color:rgba(255,255,255,.84);margin:3px 0}.rfl-sp{height:8px}.rfl-p strong,.rfl-li strong,.rfl-quote strong,.rfl-h2 strong{color:#fff;font-weight:700}.panel-reflection.fullscreen{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,92vw);max-height:82vh;z-index:60;margin:0;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.55),0 0 0 9999px rgba(0,0,0,.6)}.panel-reflection.fullscreen .reflection-body{max-height:none;flex:1}
+.panel-reflection .reflection-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.rfl-cadence{font-size:11px;color:var(--accent);border:1px solid var(--border);border-radius:999px;padding:3px 10px;background:rgba(127,179,255,.09);white-space:nowrap;font-weight:600}.rfl-datenav{margin-left:auto;display:flex;align-items:center;gap:4px}.rfl-nav-btn{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--text);font-size:14px;line-height:1;width:26px;height:27px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center}.rfl-nav-btn:hover:not(:disabled){border-color:var(--accent)}.rfl-nav-btn:disabled{opacity:.32;cursor:not-allowed}.rfl-date-input{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 7px;font-size:12px;font-family:inherit;cursor:pointer;color-scheme:dark}.rfl-date-input:focus{outline:none;border-color:var(--accent)}.rfl-follow-btn{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--dim);font-size:11px;padding:4px 9px;border-radius:6px;cursor:pointer}.rfl-follow-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}.reflection-tabs{display:flex;gap:6px}.reflection-tabs button{background:rgba(255,255,255,.05);border:1px solid var(--border);color:rgba(255,255,255,.7);font-size:12px;padding:4px 12px;border-radius:6px;cursor:pointer}.reflection-tabs button.active{background:var(--accent);border-color:var(--accent);color:#fff}.rfl-fs-btn{background:transparent;border:none;color:var(--dim);font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;cursor:pointer}.rfl-fs-btn:hover{color:var(--text);background:rgba(255,255,255,.06)}.reflection-body{max-height:460px;overflow:auto;font-size:13px;line-height:1.75;border:1px solid rgba(255,255,255,.09);border-radius:6px;background:rgba(22,24,36,.6);padding:16px;color:rgba(255,255,255,.87)}.rfl-h2{font-size:14px;font-weight:700;color:#fff;margin:14px 0 5px}.rfl-h3{font-size:13px;font-weight:700;color:#f0b95c;margin:14px 0 5px;letter-spacing:.02em}.rfl-quote{color:rgba(255,255,255,.66);border-left:2px solid var(--accent);padding-left:10px;margin:5px 0}.rfl-li{color:rgba(255,255,255,.84);margin:3px 0}.rfl-p{color:rgba(255,255,255,.84);margin:3px 0}.rfl-sp{height:8px}.rfl-p strong,.rfl-li strong,.rfl-quote strong,.rfl-h2 strong{color:#fff;font-weight:700}.panel-reflection.fullscreen{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,92vw);max-height:82vh;z-index:60;margin:0;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.55),0 0 0 9999px rgba(0,0,0,.6)}.panel-reflection.fullscreen .reflection-body{max-height:none;flex:1}
 .action-row{cursor:pointer;transition:background .12s}.action-row:hover{background:rgba(255,255,255,.025)}.action-row.expanded{background:rgba(102,217,232,.04)}.action-chevron{display:inline-block;color:var(--dim);font-size:10px;transition:transform .15s ease}.action-row.expanded .action-chevron{transform:rotate(90deg);color:var(--accent)}.reason-row td{padding:0;border-bottom:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.22);border-left:3px solid var(--accent)}.reason-section{padding:10px 14px}.reason-section + .reason-section{border-top:1px solid rgba(255,255,255,.04)}.reason-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:4px;font-weight:600}.reason-body{font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap}.reason-body.reason-settle{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}.reason-body.reason-empty{padding:10px 14px;color:rgba(255,255,255,.25);font-style:italic;font-size:12px}
 .holding-weight{display:flex;align-items:baseline;gap:8px;margin-left:auto}.holding-weight-pct{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--accent);letter-spacing:.5px;line-height:1}.holding-weight-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.holding-weight-bar{margin-top:10px;height:6px;border-radius:999px;background:rgba(255,255,255,.05);overflow:hidden;position:relative}.holding-weight-bar-fill{height:100%;background:linear-gradient(90deg, var(--accent) 0%, rgba(102,217,232,.6) 100%);border-radius:inherit;transition:width .25s ease-out}
 .runs-panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:16px}.runs-panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.run-list{display:flex;flex-direction:column;gap:8px}
@@ -112,7 +114,8 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
         </div>
       </div>
       <div class="bot-list" id="botList"></div>
-      <div class="hidden-records">
+      <!-- 已隐藏记录：bot 列表底部的折叠区。button 在前 → 点开向下展开。 -->
+      <div class="hidden-records" id="hiddenRecords">
         <button type="button" class="hidden-toggle" id="hiddenToggle"><span>已隐藏记录 <span id="hiddenCount">0</span></span><span id="hiddenChevron">▸</span></button>
         <div class="hidden-rec-list" id="hiddenList" hidden></div>
       </div>
@@ -876,6 +879,24 @@ function stripBeliefYaml(text){
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
+// 用反思日(决策日)的中位间隔推断决策频率,给反思面板一个频率提醒。
+//   日度 ≤3 天 / 周度 ≤10 天 / 月度 ≤45 天 / 否则不定期。单点回测默认按日度。
+function rflCadence(bot){
+  const d = rflDates(bot)
+  if (d.length < 2) return { label: '日度', freq: 'daily' }
+  const gaps = []
+  for (let i = 1; i < d.length; i++){
+    const g = Math.round((new Date(d[i]) - new Date(d[i - 1])) / 86400000)
+    if (g > 0) gaps.push(g)
+  }
+  if (!gaps.length) return { label: '日度', freq: 'daily' }
+  gaps.sort((a, b) => a - b)
+  const med = gaps[Math.floor(gaps.length / 2)]
+  if (med <= 3) return { label: '日度', freq: 'daily' }
+  if (med <= 10) return { label: '周度', freq: 'weekly' }
+  if (med <= 45) return { label: '月度', freq: 'monthly' }
+  return { label: '不定期', freq: 'irregular' }
+}
 function renderReflectionPanel(bot){
   const dates = rflDates(bot)
   const latest = rflLatest(bot)
@@ -888,10 +909,14 @@ function renderReflectionPanel(bot){
   const prevDis = idx <= 0 ? ' disabled' : ''
   const nextDis = (idx < 0 || idx >= dates.length - 1) ? ' disabled' : ''
   const minD = dates[0] || '', maxD = dates[dates.length - 1] || ''
-  const datenav = `<div class="rfl-datenav"><button class="rfl-nav-btn" id="rflPrev" title="上一反思日"${prevDis}>‹</button><input type="date" class="rfl-date-input" id="reflectionDateInput" min="${esc(minD)}" max="${esc(maxD)}" value="${esc(date)}" title="选反思日（无决策的日期自动就近回退）"><button class="rfl-nav-btn" id="rflNext" title="下一反思日"${nextDis}>›</button><button class="rfl-follow-btn${state.reflectionPinned ? '' : ' active'}" id="rflFollow" title="回到最新反思日">最新</button></div>`
-  return `<div class="panel panel-reflection" id="reflectionPanel"><div class="reflection-head"><h2 id="reflectionTitle">当日反思 · ${esc(date || '--')}</h2>${datenav}<div class="reflection-tabs">${tabs}</div><button class="rfl-fs-btn" id="reflectionFsBtn" title="放大 / 还原">⛶</button></div><div class="reflection-body" id="reflectionBody"><div class="empty">加载中…</div></div></div>`
+  const cad = rflCadence(bot)
+  // 频率提醒:周度/月度回测下日历选了非决策日会跳到「下一个决策日」,提示语随频率变。
+  const dateHint = cad.freq === 'daily' ? '选反思日' : `选日期（非决策日自动跳到下一个${cad.label}决策日）`
+  const cadenceBadge = `<span class="rfl-cadence" title="agent 决策/反思的频率(由决策日间隔推断)">📅 ${cad.label}决策</span>`
+  const datenav = `<div class="rfl-datenav"><button class="rfl-nav-btn" id="rflPrev" title="上一反思日"${prevDis}>‹</button><input type="date" class="rfl-date-input" id="reflectionDateInput" min="${esc(minD)}" max="${esc(maxD)}" value="${esc(date)}" title="${esc(dateHint)}"><button class="rfl-nav-btn" id="rflNext" title="下一反思日"${nextDis}>›</button><button class="rfl-follow-btn${state.reflectionPinned ? '' : ' active'}" id="rflFollow" title="回到最新反思日">最新</button></div>`
+  return `<div class="panel panel-reflection" id="reflectionPanel"><div class="reflection-head"><h2 id="reflectionTitle">当日反思 · ${esc(date || '--')}</h2>${cadenceBadge}${datenav}<div class="reflection-tabs">${tabs}</div><button class="rfl-fs-btn" id="reflectionFsBtn" title="放大 / 还原">⛶</button></div><div class="reflection-body" id="reflectionBody"><div class="empty">加载中…</div></div></div>`
 }
-// 反思日导航(日历输入 / 左右箭头)的共享逻辑。dates 升序;非反思日就近回退到 ≤d 的最近反思日。
+// 反思日导航(日历输入 / 左右箭头)的共享逻辑。dates 升序;选了非决策日 → 跳到下一个决策日(≥d)。
 // 翻页落点用 bot.reflectionDates（bot 真正决策过的日期）——月度/周度回测时它天然是月度/周度，
 // 不会逐日空翻；旧 run 没这个字段时回落到逐日 series。
 function rflDates(bot){ const d = bot && bot.reflectionDates; return (d && d.length) ? d : (bot.series || []).map(p => p.trade_date) }
@@ -903,8 +928,9 @@ function rflGoToDate(bot, d){
   if (!dates.length) return
   let target = d
   if (!dates.includes(target)){
-    const le = dates.filter(x => x <= d)
-    target = le.length ? le[le.length - 1] : dates[0]
+    // 选了非决策日 → 落到下一个 agent 决策日(≥d);若选在最后一次决策之后,落到最后一个决策日
+    const ge = dates.filter(x => x >= d)
+    target = ge.length ? ge[0] : dates[dates.length - 1]
   }
   state.reflectionPinned = target
   scheduleReflection(bot, target)
@@ -973,7 +999,8 @@ function renderDetail(bot){
     const alpha = bot.cumulativeReturnPct - benchEndPct
     alphaPill = `<span class="pill">vs 基准 <strong style="color:${alpha >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(alpha)}</strong></span>`
   }
-  const detailRunPicker = `<div class="detail-run-picker"><label>Run</label><select class="detail-run-select" data-bot="${esc(bot.botId)}">${runOptionsHtml(bot)}</select>${contaminationBadge(bot)}</div>`
+  const detailRunHide = `<button type="button" class="detail-run-hide" data-hide-bot="${esc(bot.botId)}" data-hide-run="${esc(bot.runId)}" title="从看板隐藏当前选中的这个 run（不删数据库，可在左侧「已隐藏记录」恢复）">✕ 隐藏此 run</button>`
+  const detailRunPicker = `<div class="detail-run-picker"><label>Run</label><select class="detail-run-select" data-bot="${esc(bot.botId)}">${runOptionsHtml(bot)}</select>${detailRunHide}${contaminationBadge(bot)}${modelBadge(bot)}</div>`
   const chartData = renderChart(bot)
   const chartHtml = typeof chartData === 'string'
     ? chartData
@@ -1055,6 +1082,13 @@ function formatRunLabel(run){
 }
 function runOptionsHtml(bot){
   return (bot.availableRuns || []).map(r => `<option value="${esc(r.runId)}"${r.runId === bot.runId ? ' selected' : ''}>${esc(formatRunLabel(r))}</option>`).join('')
+}
+function modelBadge(bot){
+  const m = bot.model
+  if (!m || !m.model) return ''
+  const prov = m.provider ? `${esc(m.provider)} · ` : ''
+  const tip = m.baseUrl ? `本 run 实际调用的模型端点：${esc(m.baseUrl)}` : '本 run 实际生效的模型'
+  return `<span class="row-badge model-badge" title="${tip}">🧠 ${prov}${esc(m.model)}</span>`
 }
 function contaminationBadge(bot){
   const cur = (bot.availableRuns || []).find(r => r.runId === bot.runId)
@@ -1203,7 +1237,7 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'reflectionDateInput') {
     const bot = state.data?.bots.find(b => b.botId === state.selected)
     if (!bot) return
-    if (e.target.value) rflGoToDate(bot, e.target.value)  // 选定日历日期 → 钉住(非交易日就近回退)
+    if (e.target.value) rflGoToDate(bot, e.target.value)  // 选定日历日期 → 钉住(非决策日跳到下一个决策日)
     else { state.reflectionPinned = null; scheduleReflection(bot, rflLatest(bot)) }  // 清空 = 取消钉住
     return
   }
@@ -1230,6 +1264,11 @@ document.addEventListener('click', (e) => {
   if (runningToggle) {
     state.onlyRunning = !state.onlyRunning
     if (state.data) renderBotList(state.data)
+    return
+  }
+  const runHideBtn = e.target.closest?.('.detail-run-hide')
+  if (runHideBtn) {
+    void hideRecord(runHideBtn.dataset.hideBot, runHideBtn.dataset.hideRun)
     return
   }
   if (e.target.closest?.('#hiddenToggle')) {

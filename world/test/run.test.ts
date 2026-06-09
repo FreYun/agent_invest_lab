@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runWorld, requestPause, requestStop, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, proxyEnvSupplement } from '../src/run.ts'
+import { runWorld, requestPause, requestStop, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, isChatDayAt, previousChatCursor, isoWeekKey, proxyEnvSupplement } from '../src/run.ts'
 import { BotServer } from '../src/botServer.ts'
 import * as P from '../src/paths.ts'
 import { readState, writeState } from '../src/state.ts'
@@ -61,7 +61,7 @@ function setupWorldDir(opts: { bots: string[]; dates: string[]; withSrcWorkspace
     // Tests don't exercise the actual research-day wall-clock; keep low so
     // first-day-extended-budget tests (cursor=0 → researchDayTimeoutSeconds)
     // don't drag a 1-day hanging-bot test out for 300s.
-    researchDayTimeoutSeconds: 5, chatStepDays: 1,
+    researchDayTimeoutSeconds: 5, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: cfgBase,
     shadowInclude: ['SOUL.md'],
     loop: 'research-loop',
@@ -84,7 +84,7 @@ function piBaseConfig(overrides: Partial<WorldConfig> = {}): WorldConfig {
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300, chatStepDays: 1,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -359,6 +359,90 @@ test('isResearchDay: every=0 disables; every=5 fires on cursor 4,9,14 (1-based 5
   for (let i = 0; i < 5; i++) assert.equal(isResearchDay(i, 1), true)
 })
 
+test('isoWeekKey: maps any weekday to that ISO week Monday (2024-01-01 is a Monday)', () => {
+  assert.equal(isoWeekKey('2024-01-02'), '2024-01-01') // Tue → Mon
+  assert.equal(isoWeekKey('2024-01-07'), '2024-01-01') // Sun → same week Mon
+  assert.equal(isoWeekKey('2024-01-08'), '2024-01-08') // Mon → itself
+})
+
+test('isChatDayAt trading_days: cursor % chatStepDays, cursor 0 always a chat day', () => {
+  const dates = Array.from({ length: 8 }, (_, i) => `2024-01-${String(i + 2).padStart(2, '0')}`)
+  const hits: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'trading_days', 5)) hits.push(c)
+  assert.deepEqual(hits, [0, 5]) // step=5 → 0,5
+})
+
+test('isChatDayAt weekly: first trading day of each ISO week (holiday-robust, no drift)', () => {
+  // 01-15 stands in for a post-holiday Monday; weekly fires on it regardless of how many
+  // trading days the modulo would have counted — alignment is calendar-driven, not count-driven.
+  const dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08', '2024-01-09', '2024-01-15', '2024-01-16']
+  const hits: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'weekly', 1)) hits.push(c)
+  assert.deepEqual(hits, [0, 4, 6]) // 01-02(cursor0), 01-08(new wk), 01-15(new wk)
+})
+
+test('isChatDayAt monthly: first trading day of each calendar month', () => {
+  const dates = ['2024-01-30', '2024-01-31', '2024-02-01', '2024-02-02', '2024-03-01']
+  const hits: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'monthly', 1)) hits.push(c)
+  assert.deepEqual(hits, [0, 2, 4]) // 01-30(cursor0), 02-01(new month), 03-01(new month)
+})
+
+test('isChatDayAt weekly weekday=3: fires on Wednesday of each week (first partial week covered by cursor 0)', () => {
+  // 三个完整周(周一~周五),weekday=3 → 每周三决策;首周已由 cursor 0 覆盖,故首周三被抑制。
+  const dates = [
+    '2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', // 周一~周五
+    '2024-01-08', '2024-01-09', '2024-01-10', '2024-01-11', '2024-01-12',
+    '2024-01-15', '2024-01-16', '2024-01-17', '2024-01-18', '2024-01-19',
+  ]
+  const hits: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'weekly', 1, { weekday: 3 })) hits.push(c)
+  assert.deepEqual(hits, [0, 7, 12]) // 01-01(cursor0), 01-10(周三), 01-17(周三)
+})
+
+test('isChatDayAt weekly weekday=3 holiday: 周三放假 → 顺延到本周下一个交易日(周四)', () => {
+  // 第二周缺 01-10(周三) → weekday=3 顺延到 01-11(周四,首个 dow≥3)。
+  const dates = [
+    '2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05',
+    '2024-01-08', '2024-01-09', '2024-01-11', '2024-01-12', // 无 01-10
+  ]
+  const hits: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'weekly', 1, { weekday: 3 })) hits.push(c)
+  assert.deepEqual(hits, [0, 7]) // 01-01(cursor0), 01-11(周三放假→顺延周四)
+})
+
+test('isChatDayAt monthly nth=-1: last trading day of each month (first month covered by cursor 0)', () => {
+  const dates = [
+    '2024-01-02', '2024-01-30', '2024-01-31', // Jan
+    '2024-02-01', '2024-02-28', '2024-02-29', // Feb
+    '2024-03-01', '2024-03-28', '2024-03-29', // Mar
+  ]
+  const hits: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'monthly', 1, { monthlyNth: -1 })) hits.push(c)
+  assert.deepEqual(hits, [0, 5, 8]) // 01-02(cursor0), 02-29(月末), 03-29(月末)
+})
+
+test('isChatDayAt monthly nth=5: 5th trading day of each month; out-of-range clamps to month end', () => {
+  const dates = [
+    '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08', // Jan(首月,被 cursor0 覆盖)
+    '2024-02-01', '2024-02-02', '2024-02-05', '2024-02-06', '2024-02-07', // Feb 5个,第5个=02-07
+  ]
+  const nth5: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'monthly', 1, { monthlyNth: 5 })) nth5.push(c)
+  assert.deepEqual(nth5, [0, 9]) // 01-02(cursor0), 02-07(Feb第5个交易日)
+  // nth 超过当月交易日数 → 夹到月末(此处 Feb 共5天,nth=99 落到 02-07)
+  const nthBig: number[] = []
+  for (let c = 0; c < dates.length; c++) if (isChatDayAt(c, dates, 'monthly', 1, { monthlyNth: 99 })) nthBig.push(c)
+  assert.deepEqual(nthBig, [0, 9])
+})
+
+test('previousChatCursor: trading-days-since-last-decision for weekly periods', () => {
+  const dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08', '2024-01-09', '2024-01-15', '2024-01-16']
+  assert.equal(previousChatCursor(0, dates, 'weekly', 1), 0) // first day → self
+  assert.equal(previousChatCursor(4, dates, 'weekly', 1), 0) // 01-08 back to 01-02 → 4 trading days
+  assert.equal(previousChatCursor(6, dates, 'weekly', 1), 4) // 01-15 back to 01-08 → 2 trading days
+})
+
 test('proxyEnvSupplement: returns {} when parent env has no proxy vars', () => {
   const env = { PATH: '/usr/bin', HOME: '/h' }
   assert.deepEqual(proxyEnvSupplement(env), {})
@@ -442,7 +526,7 @@ test('botServerArgv: research-loop branch points at researchLoop/server.ts with 
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300, chatStepDays: 1,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -471,7 +555,7 @@ test('botServerArgv: research-loop with researchLoopRustBin spawns rust binary "
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300, chatStepDays: 1,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -502,7 +586,7 @@ test('botServerArgv: openclaw-pi branch points at piServerEntry with --openclaw-
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300, chatStepDays: 1,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -531,7 +615,7 @@ test('botServerArgv: openclaw-pi does NOT append --sessions-dir (piSessionsDir f
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300, chatStepDays: 1,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -575,7 +659,7 @@ test('botServerArgv: openclaw-pi without piServerEntry throws', () => {
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300, chatStepDays: 1,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],
@@ -599,7 +683,7 @@ test('botServerArgv: openclaw-pi without openclawRoot throws', () => {
     concurrency: 1,
     perBotTimeoutSeconds: 30,
     researchDayEvery: 0,
-    researchDayTimeoutSeconds: 300, chatStepDays: 1,
+    researchDayTimeoutSeconds: 300, chatStepDays: 1, chatStepMode: 'trading_days',
     rlConfigBase: '/tmp/base.json',
     rlOpenclawDir: undefined,
     shadowInclude: [],

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import type { WorldConfig } from './config.ts'
 import { copyStrategyLibraryToWorkspace, loadStrategyLibrary, renderActiveMethodology, renderStrategyCatalog, type StrategyLibrary } from './strategy-library.ts'
 import { loadCalendar, computeTradingDates } from './calendar.ts'
@@ -229,12 +230,36 @@ function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string,
  *  mem0 URL / workspace / skills，并关掉 dashboard（多 bot 并发时 rust 默认监听 18890 会互撞）。
  *  JSON 是合法 YAML，直接按 .yaml 落盘即可被 serde_yaml 解析。buildShadowWorkspace 把
  *  config/research-loop.yaml 当 runtime-override 跳过拷贝，所以这份每次 setup 重写、不会被覆盖。 */
-function writeResearchLoopYaml(config: WorldConfig, shadow: string, memoryUrl: string, openclawDir: string): void {
+/** 读 bots/<botId>/config/model.yaml（真 YAML）的模型片段——bot 自带的常驻默认模型。
+ *  字段同 research-loop 的 model.primary：provider / base_url / model / api_key_from_openclaw（或 api_key）。
+ *  缺文件 / 解析失败 / 绝对路径 bot → 返回 null，由调用方回退全局 base。 */
+function readBotModelOverride(botsRoot: string, botId: string): Record<string, unknown> | null {
+  if (isAbsolute(botId)) return null
+  const f = join(botsRoot, botId, 'config', 'model.yaml')
+  if (!existsSync(f)) return null
+  try {
+    const parsed = parseYaml(readFileSync(f, 'utf8'))
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>
+  } catch { /* 解析失败：回退全局 base */ }
+  return null
+}
+
+function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow: string, memoryUrl: string, openclawDir: string): void {
   let base: Record<string, unknown>
   try { base = JSON.parse(readFileSync(config.rlConfigBase, 'utf8')) as Record<string, unknown> }
   catch (err) { throw new Error(`cannot read rl_config_base ${config.rlConfigBase}: ${err instanceof Error ? err.message : String(err)}`) }
   const model = (typeof base.model === 'object' && base.model ? base.model : {}) as Record<string, unknown>
-  const primary = (typeof model.primary === 'object' && model.primary ? model.primary : {}) as Record<string, unknown>
+  const basePrimary = (typeof model.primary === 'object' && model.primary ? model.primary : {}) as Record<string, unknown>
+  // per-bot 模型优先级：config.botModels[botId]（modal 本次覆盖）> bots/<bot>/config/model.yaml（bot 默认）
+  // > 全局 rlConfigBase。语义是字段级合并——override 提供的 provider/base_url/model/api_key* 盖过 base，
+  // 没提供的继续从 base.primary 继承（LLM 调用参数等都在 base 里，不必每个 bot 重复写）。
+  const override = config.botModels?.[botId] ?? readBotModelOverride(config.botsRoot, botId) ?? {}
+  // override 换了模型/端点时，旧的明文 api_key 不能跟着继承（会拿错 key）——只要 override 带了
+  // api_key_from_openclaw 或 base_url，就丢掉 base 里可能残留的明文 api_key，下面按引用重新解析。
+  const primary = { ...basePrimary, ...override } as Record<string, unknown>
+  if (('api_key_from_openclaw' in override || 'base_url' in override) && !('api_key' in override)) {
+    delete primary.api_key
+  }
   // api_key_from_openclaw → 明文 api_key：新 rust 版按名取 key 的逻辑已删，必须落明文。
   const provName = typeof primary.api_key_from_openclaw === 'string' ? primary.api_key_from_openclaw : ''
   if (provName && typeof primary.api_key !== 'string') {
@@ -459,7 +484,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
     const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
     buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars })
-    if (config.loop !== 'openclaw-pi') writeResearchLoopYaml(config, shadow, memory.url, rlOpenclawDir)
+    if (config.loop !== 'openclaw-pi') writeResearchLoopYaml(config, botId, shadow, memory.url, rlOpenclawDir)
     const audit = installStrategyLibraryInShadow({
       config,
       lib: strategyLibrary,
@@ -690,6 +715,10 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     trading_dates: setupRes.tradingDates, cursor: 0, bots: config.bots,
     memory_port: setupRes.memory.port, started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     loop: config.loop,
+    chat_step_mode: config.chatStepMode,
+    chat_step_days: config.chatStepDays,
+    chat_weekday: config.chatWeekday,
+    chat_monthly_nth: config.chatMonthlyNth,
     pid: process.pid,
   }
   writeState(worldRoot, runId, initial)
@@ -702,6 +731,78 @@ interface RunLoopArgs { worldRoot: string; runId: string; config: WorldConfig; s
 /** 第 N / 2N / 3N … 个交易日（cursor 0-based）算研究日；researchDayEvery=0 关闭。 */
 export function isResearchDay(cursor: number, researchDayEvery: number): boolean {
   return researchDayEvery > 0 && ((cursor + 1) % researchDayEvery === 0)
+}
+
+/** ISO 周锚：返回该日期所在自然周的周一（YYYY-MM-DD）。同一周的任意一天得到同一字符串。 */
+export function isoWeekKey(isoDate: string): string {
+  const d = new Date(isoDate + 'T00:00:00Z')
+  const dow = (d.getUTCDay() + 6) % 7 // 周一=0 … 周日=6
+  d.setUTCDate(d.getUTCDate() - dow)
+  return d.toISOString().slice(0, 10)
+}
+
+/** 自然月锚：YYYY-MM。 */
+function monthKey(isoDate: string): string { return isoDate.slice(0, 7) }
+
+/** ISO 周几：1=周一 … 7=周日。 */
+function isoDow(isoDate: string): number {
+  const d = new Date(isoDate + 'T00:00:00Z')
+  return ((d.getUTCDay() + 6) % 7) + 1
+}
+
+/** weekly：可调决策日（周几 / 第 N 个交易日）的灵活参数。缺省即历史行为。 */
+export interface ChatDayOpts { weekday?: number; monthlyNth?: number }
+
+/** weekly：cursor 所在自然周里被选中的决策交易日 cursor。
+ *  目标周几 wd(1..5)：取该周内首个「周几 ≥ wd」的交易日；整周都在 wd 之前(罕见,如该周几及其后全是假期)
+ *  则取该周最后一个交易日。wd 缺省=1 → 周内首个交易日（历史行为）。 */
+function weeklyTargetCursor(cursor: number, dates: string[], wd: number): number {
+  const wk = isoWeekKey(dates[cursor])
+  let s = cursor; while (s > 0 && isoWeekKey(dates[s - 1]) === wk) s--
+  let e = cursor; while (e < dates.length - 1 && isoWeekKey(dates[e + 1]) === wk) e++
+  for (let c = s; c <= e; c++) if (isoDow(dates[c]) >= wd) return c
+  return e
+}
+
+/** monthly：cursor 所在自然月里被选中的决策交易日 cursor。
+ *  nth>0：从月初数第 nth 个交易日(1=月初)；nth<0：从月末倒数(-1=月末)。越界夹到首/末。
+ *  nth 缺省=1 → 月初（历史行为）。 */
+function monthlyTargetCursor(cursor: number, dates: string[], nth: number): number {
+  const mk = monthKey(dates[cursor])
+  let s = cursor; while (s > 0 && monthKey(dates[s - 1]) === mk) s--
+  let e = cursor; while (e < dates.length - 1 && monthKey(dates[e + 1]) === mk) e++
+  const len = e - s + 1
+  let idx = nth > 0 ? nth - 1 : len + nth // nth<0: -1 → len-1(末)
+  if (idx < 0) idx = 0
+  if (idx > len - 1) idx = len - 1
+  return s + idx
+}
+
+/**
+ * 本 cursor 是否决策日（唤起 bot chat）。cursor 0 永远是（run 首日建仓）。
+ * - trading_days：cursor % chatStepDays === 0（每 N 个交易日，锚定 run 起点；历史行为）。
+ * - weekly：落在每个自然周的目标交易日（opts.weekday，缺省周首）。
+ * - monthly：落在每个自然月的目标交易日（opts.monthlyNth，缺省月初；负数从月末倒数）。
+ * weekly/monthly 由日历边界派生、不随假期漂移；chatStepDays 在这两种模式下被忽略。
+ * 首个（可能不完整的）周/月已由 cursor 0 覆盖，故同周/同月不再二次决策——保证「每周期一次决策」。
+ */
+export function isChatDayAt(cursor: number, dates: string[], mode: 'trading_days' | 'weekly' | 'monthly', chatStepDays: number, opts?: ChatDayOpts): boolean {
+  if (cursor === 0) return true
+  if (mode === 'weekly') {
+    if (isoWeekKey(dates[cursor]) === isoWeekKey(dates[0])) return false // 首周已由 cursor 0 覆盖
+    return cursor === weeklyTargetCursor(cursor, dates, opts?.weekday ?? 1)
+  }
+  if (mode === 'monthly') {
+    if (monthKey(dates[cursor]) === monthKey(dates[0])) return false // 首月已由 cursor 0 覆盖
+    return cursor === monthlyTargetCursor(cursor, dates, opts?.monthlyNth ?? 1)
+  }
+  return cursor % chatStepDays === 0
+}
+
+/** 上一个决策日的 cursor（严格 < 当前）。首日（无更早决策日）返回自身。 */
+export function previousChatCursor(cursor: number, dates: string[], mode: 'trading_days' | 'weekly' | 'monthly', chatStepDays: number, opts?: ChatDayOpts): number {
+  for (let c = cursor - 1; c >= 0; c--) { if (isChatDayAt(c, dates, mode, chatStepDays, opts)) return c }
+  return cursor
 }
 
 // 决定 daily prompt 里 simworld 工具清单走 manual 白名单还是 probe 全集。
@@ -795,9 +896,16 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const state = readState(worldRoot, runId)
         writeState(worldRoot, runId, { ...state, current_date: date, updated_at: new Date().toISOString() })
       }
-      // chatStepDays > 1：cursor 0, N, 2N, … 才唤起 bot；中间天系统侧 settle + close 仍按日推进。
-      // cursor 0 永远是 chat day（与 isFirstDay 对齐）。
-      const isChatDay = cursor % config.chatStepDays === 0
+      // 决策日判定：trading_days 取模 / weekly / monthly 日历对齐（详见 isChatDayAt）。中间天系统侧
+      // settle + close 仍按日推进，simulated_datetime 同样每天更新——只是 bot 不被叫起。cursor 0 永远
+      // 是 chat day（与 isFirstDay 对齐）。
+      const chatDayOpts = { weekday: config.chatWeekday, monthlyNth: config.chatMonthlyNth }
+      const isChatDay = isChatDayAt(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
+      // 距上次决策已过几个交易日 + 上次决策日，用于周期感知 prompt（让低频 bot 知道这是周/月度再平衡，
+      // 下方数据块覆盖的是整段区间而非单日）。首日/日度 = 1，不渲染周期块。
+      const prevChatCursor = previousChatCursor(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
+      const periodTradingDays = cursor - prevChatCursor
+      const periodSinceDate = periodTradingDays > 0 ? dates[prevChatCursor] : null
       // 系统侧 settle：T+1 收口。每天 chat **之前** 把所有 order_date < today 的 pending 单按
       // reference_nav 结算（BUY → 持仓增加 + 释放 cash_in_transit；SELL → 现金回流 + 释放 pending_sell）。
       // close_my_day 不做这件事，所以必须独立调一次。bot 在 BOT_ONLY 端口看不到 settle。
@@ -825,9 +933,14 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // sanity check) consistently spills past a 60s budget.
       // Research-day budget is the right ceiling for that workload too, so reuse it
       // instead of adding another knob.
-      const useExtendedBudget = isFirstDay || isResearch
+      // 周/月度决策日本身就是一次重再平衡（覆盖整段区间），等同研究日，给更宽预算——无需再单独配
+      // research_day_every 去命中它们。
+      const useExtendedBudget = isFirstDay || isResearch || periodTradingDays > 1
       const timeoutMs = useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs
-      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : ''].filter(Boolean).join(' ')
+      const stepTag = config.chatStepMode === 'weekly' ? `[weekly@dow${config.chatWeekday ?? 1}]`
+        : config.chatStepMode === 'monthly' ? `[monthly#${config.chatMonthlyNth ?? 1}]`
+        : (config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : '')
+      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
       log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
@@ -883,6 +996,19 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           log(worldRoot, runId, `[belief-context] bot ${b.botId} ${date} build failed: ${e instanceof Error ? e.message : String(e)}`)
           return ''
         })
+        // 周期块：仅当真的跳过了交易日（periodTradingDays > 1）才注入。区间涨跌直接复用
+        // dailyContext.benchmark 的「自 run 起点累计 %」相减得到，无需另拉行情。
+        let periodInfo: { tradingDays: number; sinceDate: string; benchMovePct: number | null } | undefined
+        if (periodTradingDays > 1 && periodSinceDate) {
+          let benchMovePct: number | null = null
+          const bench = dailyContext.benchmark
+          if (bench) {
+            const from = bench.pointsByDate[periodSinceDate]
+            const to = bench.latestCumulativePct
+            if (typeof from === 'number' && typeof to === 'number') benchMovePct = to - from
+          }
+          periodInfo = { tradingDays: periodTradingDays, sinceDate: periodSinceDate, benchMovePct }
+        }
         const message = renderDailyMessage({
           worldRoot, date, isFirstDay,
           botId: b.botId,
@@ -892,6 +1018,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           dailyContext,
           historyWindow,
           beliefBlock,
+          periodInfo,
           // 仅 Day 1 fullRules 用到——message.ts 自己门控；这里无脑传即可，Day N 会丢弃。
           tradingDaysTotal: setupRes.tradingDates.length,
         })

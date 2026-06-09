@@ -15,6 +15,16 @@ export interface WorldState {
   started_at: string
   updated_at: string
   loop: 'research-loop' | 'openclaw-pi'
+  /** 决策节奏：bot 在哪些交易日被真正唤起。'trading_days'=每个交易日（或按 chatStepDays 取模）；
+   *  'weekly'=每周首个交易日；'monthly'=每月首个交易日。dashboard 据此在进度旁标注「日度/周度/月度」，
+   *  避免把「逐日推进的结算游标 cursor/total」误读成「天天交易」。可选：老 run 的 state.json 无此字段。 */
+  chat_step_mode?: 'trading_days' | 'weekly' | 'monthly'
+  /** trading_days 模式的交易日步长（每 N 个交易日决策一次，1=日度）。 */
+  chat_step_days?: number
+  /** weekly 模式的目标周几（1=周一…5=周五）；缺省=周首交易日。 */
+  chat_weekday?: number
+  /** monthly 模式的目标交易日序号（正=从月初、负=从月末倒数，如 -1=月末）；缺省=1（月初）。 */
+  chat_monthly_nth?: number
   /** PID of the world orchestrator process that owns this run. Stale across restarts
    *  if the process died without teardown — that's the signal external readers (e.g.
    *  the dashboard) use to detect orphan runs and self-heal them to 'aborted'. */

@@ -37,6 +37,11 @@ export interface DailyMessageContext {
   // 位置：渲染在 dailyContext 数据块之后、METHODOLOGY 提示之前——让 bot 看完今日数据再被要求"今天你
   // 的 belief 是什么 + 上次预测错在哪"，配合 footer 的 termination contract 落库到 mem0。
   beliefBlock?: string
+  // 周期感知信息：仅当本决策日相对上次决策跳过了交易日（周/月度调仓、或 chat_step_days>1）才传。
+  // 让 bot 明白「这是周期再平衡、下方数据覆盖整段区间」，避免低频 bot 把累计涨跌误读成单日波动。
+  // tradingDays = 距上次决策的交易日数；sinceDate = 上次决策日；benchMovePct = 期间基准篮子累计涨跌（可空）。
+  // undefined / tradingDays<=1 → 跳过整块（日度运行即此，行为不变）。
+  periodInfo?: { tradingDays: number; sinceDate: string; benchMovePct: number | null }
 }
 
 export function weekdayOf(isoDate: string): string {
@@ -509,6 +514,20 @@ function fmtSignedPP(n: number): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(2)}pct`
 }
 
+// 周期感知块：周/月度（或 chat_step_days>1）决策日才注入。让 bot 明确「这是一次跨越 N 个交易日的
+// 周期再平衡」——下方所有数据块覆盖的是从上次决策到今天的整段区间，按区间视角判断趋势/回撤，不要把
+// 累计涨跌误读成单日波动；也提醒中间交易日不能补做交易。daily 运行不传 periodInfo → 返回空串。
+function periodBlock(p: DailyMessageContext['periodInfo']): string {
+  if (!p || p.tradingDays <= 1) return ''
+  const move = typeof p.benchMovePct === 'number'
+    ? `，期间你的基准篮子累计 ${p.benchMovePct >= 0 ? '+' : ''}${p.benchMovePct.toFixed(2)}%`
+    : ''
+  return `
+
+【⏱ 调仓周期：距上次决策已过 ${p.tradingDays} 个交易日（上次决策日 = ${p.sinceDate}${move}）】
+这是一次**周期再平衡决策**，不是单日操作。下方所有数据块覆盖的是从上次决策到今天的**整段区间**——请按区间视角判断趋势与回撤，把"这段时间发生了什么"作为决策依据，不要把累计涨跌误读成单日波动。中间的交易日你没有被唤起，系统只做了结算与收盘核算；这段错过的行情不能补做交易，今天的决策要把整段区间一并考虑进去。`
+}
+
 function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): string {
   if (!isReviewDay(dc)) return ''
   const s = dc!.performance!.summary!
@@ -565,5 +584,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   //        让"先定性大趋势 → 业绩对照 → 改策略 or 书面论证维持"成为 bot 收工前读到的最后一条硬约束。
   // FOOTER_BRIEF 的"列了 todo 就要做 + 结束前 mem0_add"对所有 bot 都适用。
   const review = strategyReviewBlock(ctx.dailyContext, ctx.botId)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${toolsBlock}${buyable}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${review}\n`
+  // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
+  const period = periodBlock(ctx.periodInfo)
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${toolsBlock}${buyable}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${review}\n`
 }

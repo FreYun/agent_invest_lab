@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { botDayDir, hiddenRecordsFile, replyFile, runDir, sentFile, universeContaminationFile } from '../paths.ts'
+import { readRunModel, type RunModelInfo } from '../run-model.ts'
 import { listControllableRuns, type WorldState } from '../state.ts'
 import { requestPause, requestStop } from '../run-control.ts'
 import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
@@ -168,6 +169,8 @@ interface BotDataset {
   realUsers: RealUserSeries[]
   runId: string
   availableRuns: BotRunRef[]
+  /** 本 run 实际生效的模型供应商 + 模型名（读 research-loop.yaml，不含 key）；取不到为 null。 */
+  model: RunModelInfo | null
 }
 
 interface BotRunRef {
@@ -548,8 +551,10 @@ async function loadRealUsers(dbPath: string, fundCodes: string[]): Promise<RealU
 }
 
 /** 列出该 bot 在本 run 真正决策过的交易日：扫 runDir 下形如 YYYY-MM-DD 的日期目录，
- *  保留其中存在 bot 当日目录（sent.md/reply.json 所在）的日期，升序返回。
- *  反思面板的左右箭头/日历就按这个列表翻页——月度回测时它天然是月度。
+ *  只保留「当天真发生过决策/对话」的日期——即存在 sent.md（被唤起决策）或 reply.json（决策回复）的日期。
+ *  ⚠️ 不能只判目录存在：月度/周度回测里 bot 每个交易日都会醒来做系统侧结算(close_my_day.json)、
+ *  留下空目录，但只在月初/周初真正决策。按目录存在算会把结算日也当成决策日 → 频率被误判成日度、
+ *  日历逐日可选。反思面板的左右箭头/日历按这个列表翻页，月度回测时它天然是月度。
  *  best-effort：run 目录不存在（旧 run / 已清理）时返回空数组，前端回落到逐日 series。 */
 function listReflectionDates(worldRoot: string, runId: string, botId: string): string[] {
   const root = runDir(worldRoot, runId)
@@ -557,7 +562,9 @@ function listReflectionDates(worldRoot: string, runId: string, botId: string): s
   try { entries = readdirSync(root) }
   catch { return [] }
   return entries
-    .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name) && existsSync(botDayDir(worldRoot, runId, name, botId)))
+    .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)
+      && existsSync(botDayDir(worldRoot, runId, name, botId))
+      && (existsSync(sentFile(worldRoot, runId, name, botId)) || existsSync(replyFile(worldRoot, runId, name, botId))))
     .sort()
 }
 
@@ -697,6 +704,7 @@ async function loadBotForRun(dbPath: string, worldRoot: string, botId: string, r
     realUsers,
     runId,
     availableRuns,
+    model: readRunModel(worldRoot, runId, botId),
   }
 }
 
