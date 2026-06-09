@@ -61,7 +61,7 @@ description: 市场主线识别方法论（独立引擎）。回答"今天市场
 | 龙头景气 | `stock_financial_quality` · `stock_alpha` · `stock_events`(stock_codes) | ROE/增速/质量 · 一致预期 · SUE 盈余惊喜 |
 | 宏观周期 | `macro_data(region='cn', categories=['ppi','pmi',...])` | 价格/库存/景气周期定位 |
 | 叙事 | `research_search(query, search_type='research', top_k)` | 近 N 天研报产业逻辑 |
-| 客观第二意见 | `quant_factor()` | `market_retail_contrarian_20_90` 等回测验证因子(0/0.5/1) |
+| 客观第二意见 | `quant_factor()` | `market_retail_contrarian_20_90` 等量化因子(0/0.5/1) |
 
 ### ⚠️ 调用铁律（违反必出错）
 
@@ -143,7 +143,7 @@ description: 市场主线识别方法论（独立引擎）。回答"今天市场
 
 ## 五、质地维度：聪明钱 vs 散户（软参考，不作硬定档）
 
-> ⚠️ 本维度降为**软信号**：① `fund_index_subscription_redemption` 用 `calc_date`、proxy 不注入 → 实际多半调不动；② 本项目回测中"申赎分歧择时"为负结果。**能取到就当经验信号、取不到就跳过，不据它强行升/降档**；真正的客观第二意见用 §四·阶段5 的 `quant_factor`。
+> ⚠️ 本维度降为**软信号**：① `fund_index_subscription_redemption` 用 `calc_date`、proxy 不注入 → 实际多半调不动；② 申赎分歧单独作择时不稳。**能取到就当经验信号、取不到就跳过，不据它强行升/降档**；真正的客观第二意见用 §四·阶段5 的 `quant_factor`。
 
 - **读法（若可得）**：机构净申购 + 个人净赎回 → 质地好（聪明钱进、散户没反应）；个人猛申购 + 机构净赎回 → 质地差（散户接盘），警惕见顶。
 - **输出字段**：`质地 = 机构主导 / 散户主导 / 中性`（数据缺失填"中性"）。

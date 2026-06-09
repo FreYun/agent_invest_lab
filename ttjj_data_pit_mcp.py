@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 BASE_URL = "http://ttjj-data-api.jijinmima.cn"
 TIMEOUT = 30
@@ -40,7 +41,13 @@ _DATE_FIELD_BLOCKLIST = {
     "_simulated_today", "_pit_note", "_pit_truncated",
 }
 
-_mcp = FastMCP("ttjj-data-pit")
+_mcp = FastMCP(
+    "ttjj-data-pit",
+    # 关掉 MCP SDK 的 DNS rebinding 防护：默认 allowed_hosts=[] 只放行 localhost，
+    # 远端用 LAN IP（如 172.31.41.68:18078）访问会被回 421 Misdirected Request。
+    # 本服务跑在可信办公内网、消费方是另一个 LLM（无需防护），放行所有 Host。
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 _session: requests.Session | None = None
 
 

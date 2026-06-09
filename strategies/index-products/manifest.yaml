@@ -30,11 +30,42 @@ strategies:
     target_index: "000852.SH"
     default_buyable_fund_codes: ["006486"]
 
-  new_energy:
-    title: 中证新能源投资框架
-    methodology: new-energy.md
-    target_index: "930997.CSI"
-    default_buyable_fund_codes: ["012543"]
+  # —— 新能源已按子板块拆分（原 new_energy 930997 笼统框架已归档到 _archive/new-energy.md）——
+  solar:
+    title: 中证光伏产业投资框架
+    methodology: solar.md
+    target_index: "931151.CSI"
+    default_buyable_fund_codes: []   # TODO 待配场外基金代码（参考 ETF 515790 光伏）
+
+  power_grid:
+    title: 中证电网设备投资框架
+    methodology: power-grid.md
+    target_index: "931994.CSI"
+    default_buyable_fund_codes: []   # TODO 待配场外基金代码（电网设备主题）
+
+  battery:
+    title: 中证电池投资框架
+    methodology: battery.md
+    target_index: "931719.CSI"
+    default_buyable_fund_codes: []   # TODO 待配场外基金代码（参考 ETF 512460 电池）
+
+  nev:
+    title: 新能源汽车投资框架
+    methodology: nev.md
+    target_index: "399976.SZ"
+    default_buyable_fund_codes: []   # TODO 待配场外基金代码（新能源车）
+
+  green_power:
+    title: 中证绿色电力投资框架
+    methodology: green-power.md
+    target_index: "931897.CSI"
+    default_buyable_fund_codes: []   # TODO 待配场外基金代码（参考 ETF 562960 绿电）
+
+  power:
+    title: 中证电力投资框架
+    methodology: power.md
+    target_index: "H30199.CSI"
+    default_buyable_fund_codes: []   # TODO 待配场外基金代码（电力）
 
   dividend:
     title: 中证红利投资框架

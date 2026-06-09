@@ -1,9 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { shadowWorkspaceDir, strategiesDir, strategyRevisionsFile } from '../paths.ts'
+import { shadowWorkspaceDir, strategiesDir, strategyRevisionsFile, fundDbFile } from '../paths.ts'
 import { loadStrategyLibrary } from '../strategy-library.ts'
 
 // 进程内 MCP 服务，承载两个工具让 bot 自己管理"投资策略文档"：
