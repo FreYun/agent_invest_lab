@@ -13,6 +13,11 @@ data/
 session/
 *.bak
 
+# Python virtualenv (可由 requirements.txt / pyproject.toml + uv.lock 重建)
+.venv/
+**/.venv/
+venv/
+
 # git worktrees
 .claude/worktrees/
 
