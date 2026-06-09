@@ -41,6 +41,15 @@ export interface SimworldToolSummary {
 
 const INJECT_KEY = 'simulated_datetime'
 
+// 对 bot 隐藏的上游工具：申赎原始数据接口。底层 18078 工具保留（research、以及 market_sentiment
+// 因子的计算仍直接读，不走本 proxy），但经 proxy 给 bot 的视图里：tools/list 整条剔除、tools/call
+// 拒绝，让 agent 既看不到也调不动——申赎数据源对 agent 彻底隐藏，agent 只用加工好的 market_sentiment
+// 因子（见 quant_factor）。
+export const HIDDEN_TOOLS = new Set<string>([
+  'fund_subscription_redemption_summary',
+  'fund_index_subscription_redemption',
+])
+
 interface JsonRpcMessage {
   jsonrpc?: string
   id?: number | string | null
@@ -151,6 +160,13 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     // Request-side rewrite: inject simulated_datetime on tools/call.
     if (parsed && parsed.method === 'tools/call' && isObject(parsed.params)) {
       const name = typeof parsed.params.name === 'string' ? parsed.params.name : ''
+      // 对 bot 隐藏的工具（申赎原始接口）：直接拒绝、不转发上游。报成"未知工具"而非"被禁"，
+      // 不暴露这里藏了东西。底层 18078 工具仍在（research 直接调用不走本 proxy）。
+      if (HIDDEN_TOOLS.has(name)) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: parsed.id ?? null, error: { code: -32601, message: `Unknown tool: ${name}` } }))
+        return
+      }
       const shouldInject = schemaSeen ? needInjection.has(name) : true
       if (shouldInject) {
         const args = isObject(parsed.params.arguments) ? parsed.params.arguments : {}
@@ -203,10 +219,14 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
       // Both SSE and pure JSON paths can carry tools/list result.
       const rewrite = (msg: JsonRpcMessage): void => {
         if (!isObject(msg.result)) return
-        const tools = (msg.result as Record<string, unknown>).tools
+        const result = msg.result as Record<string, unknown>
+        const tools = result.tools
         if (!Array.isArray(tools)) return
+        // 对 bot 隐藏的工具（申赎原始接口）：从 tools/list 响应里整条剔除，bot 实时调用也看不到。
+        const filtered = tools.filter(t => !(isObject(t) && typeof t.name === 'string' && HIDDEN_TOOLS.has(t.name)))
+        if (filtered.length !== tools.length) result.tools = filtered
         let sawSchema = false
-        for (const t of tools) {
+        for (const t of filtered) {
           if (!isObject(t)) continue
           const had = stripFromToolSchema(t)
           const name = typeof t.name === 'string' ? t.name : ''
@@ -336,6 +356,7 @@ async function probeUpstreamTools(upstreamUrl: string): Promise<SimworldToolSumm
 
   return tools
     .filter((t): t is Record<string, unknown> => isObject(t) && typeof t.name === 'string')
+    .filter(t => !HIDDEN_TOOLS.has(String(t.name)))   // 隐藏申赎原始接口，不进 bot 的工具目录
     .map(t => ({
       name: String(t.name),
       description: (typeof t.description === 'string' ? t.description : '').trim().split('\n')[0].trim(),

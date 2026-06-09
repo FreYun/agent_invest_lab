@@ -13,7 +13,7 @@ import { fetchDailyContext } from './daily-context.ts'
 import { buildHistoryWindow } from './history-window/index.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
-import { createSimworldProxy, type SimworldProxyHandle } from './simworld-proxy/server.ts'
+import { createSimworldProxy, HIDDEN_TOOLS, type SimworldProxyHandle } from './simworld-proxy/server.ts'
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
 import { createStrategyServer, type StrategyServerHandle } from './strategy-server/server.ts'
 import { readState, writeState, type WorldState } from './state.ts'
@@ -283,6 +283,16 @@ function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow: strin
   const dash = (typeof base.dashboard === 'object' && base.dashboard ? base.dashboard : {}) as Record<string, unknown>
   dash.enabled = false
   base.dashboard = dash
+  // 预激活 simworld 数据工具：rust 的 deferred-MCP 默认要先 discover_tools 才能调，回测里每个
+  // 决策日都触发 tool→未激活→discover_tools→重试 的试错风暴（实测单个 run discover_tools 被调
+  // 98 次、试错全部命中 mcp__simworld_data__*）。把白名单工具写进 tools.always_load，rust 在会话
+  // 首轮即由 activate_chat_pinned_tools 预激活，彻底免去 discover_tools。名字用全前缀
+  // mcp__simworld_data__<name>，精确匹配 rust registry 的 deferred-tool 键（见 tools.rs get_active_tools）。
+  if (config.simworldTools && config.simworldTools.length) {
+    const toolsCfg = (typeof base.tools === 'object' && base.tools ? base.tools : {}) as Record<string, unknown>
+    toolsCfg.always_load = config.simworldTools.map(t => `mcp__simworld_data__${t.name}`)
+    base.tools = toolsCfg
+  }
   const dst = join(shadow, 'config', 'research-loop.yaml')
   mkdirSync(dirname(dst), { recursive: true })
   writeFileSync(dst, JSON.stringify(base, null, 2) + '\n')
@@ -812,12 +822,17 @@ export function resolveSimworldTools(
   manual: { name: string; description?: string }[] | undefined,
   probed: { name: string; description: string }[],
 ): { name: string; description: string }[] {
-  if (!manual) return probed
-  const probedMap = new Map(probed.map(t => [t.name, t.description]))
-  return manual.map(t => ({
-    name: t.name,
-    description: t.description ?? probedMap.get(t.name) ?? '',
-  }))
+  // 对 bot 隐藏的工具（申赎原始接口）：probe 端已过滤，这里再对配置白名单兜底——
+  // 即便某个配置（如 dashboard 临时生成的）白名单显式列了申赎，也不进 bot 的工具目录。
+  const probedFiltered = probed.filter(t => !HIDDEN_TOOLS.has(t.name))
+  if (!manual) return probedFiltered
+  const probedMap = new Map(probedFiltered.map(t => [t.name, t.description]))
+  return manual
+    .filter(t => !HIDDEN_TOOLS.has(t.name))
+    .map(t => ({
+      name: t.name,
+      description: t.description ?? probedMap.get(t.name) ?? '',
+    }))
 }
 
 export async function runLoop(args: RunLoopArgs): Promise<void> {
@@ -992,7 +1007,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         // METHODOLOGY_DAYN_HINT），不重复注入正文。
         // belief-context（市场环境判断的滚动摘要）：best-effort 注入到 daily message。
         // build 失败不阻塞 chat 主流程——空串等于不渲染对应 section。
-        const beliefBlock = await buildBeliefContext(b.botId, runId, date).catch((e: unknown) => {
+        // reporter 模式不注入 belief-context（那是投资 bot 的市场环境判断滚动摘要 + 输出 schema，
+        // 对"市场研究员"是噪声/误导）。
+        const beliefBlock = config.reporterMode ? '' : await buildBeliefContext(b.botId, runId, date).catch((e: unknown) => {
           log(worldRoot, runId, `[belief-context] bot ${b.botId} ${date} build failed: ${e instanceof Error ? e.message : String(e)}`)
           return ''
         })
@@ -1009,7 +1026,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           }
           periodInfo = { tradingDays: periodTradingDays, sinceDate: periodSinceDate, benchMovePct }
         }
-        const message = renderDailyMessage({
+        // reporter 模式：daily message 极简——研究员的任务（产出哪份研报、读哪些上游、怎么 submit）
+        // 已全在其 AGENTS.md/METHODOLOGY.md（splice 进 system prompt）里写死。不注入持仓/buyable/
+        // 交易规则/行情预取，避免把研究员当交易员。**不含日期**（PIT：reporter 不该知道世界日）。
+        const message = config.reporterMode
+          ? '新的一期市场研究。请严格按你的 AGENTS.md 与 METHODOLOGY.md：先读取所需上游报告（若有），用 simworld-data 工具端到端完成本期分析，产出研报正文与结构化字段，最后调用 submit_market_report 提交。提交成功即结束本期，不要做交易类操作。'
+          : renderDailyMessage({
           worldRoot, date, isFirstDay,
           botId: b.botId,
           quotesPath: quotesAbs,

@@ -5,8 +5,7 @@
 
 作为天天基金的机构投资者，你有如下数据优势：
 
-- **`quant_factor` 里的 `market_retail_contrarian_15_90` / `market_retail_contrarian_20_90`**： contrarian 因子（散户净申购堆积 → 后续大盘走弱）打包到 `quant_factor` 里，**任何指数策略都可作为客观第二意见使用**。两个版本二选一：15_90 敏感快、20_90 平滑慢。
-- **`fund_subscription_redemption_summary`（基金申赎汇总，原始数据）**：如果你**确有特殊场景**需要细分客户类型 / 基金大类（如想看混合型偏债的资金动向），可直接调原始接口；常规择时不需要——走 `quant_factor` 即可。注意：**机构同公式反向**（机构申赎呈 trend-following，散户反之，不要用错了）。
+- **`quant_factor` 里的 `market_sentiment_15_90` / `market_sentiment_20_90`**：市场情绪指数反向因子（市场情绪过热 → 后续大盘走弱、情绪冰点 → 反向回升）打包到 `quant_factor` 里，**任何指数策略都可作为客观第二意见使用**。两个版本二选一：15_90 敏感快、20_90 平滑慢。
 - **`macro_50etf_vix`（50ETF VIX）**：可以看到当日指数的 VIX。
 
 它们都是十分重要的**单指数择时指标**。

@@ -3,13 +3,12 @@
   "note": "时点参数 simulated_datetime 由 world simworld-proxy 自动注入，bot 调用时不要传；其余 date/start_date/end_date 等照常传。",
   "categories": {
     "fund": {
-      "description": "基金分析：基本信息/净值/业绩/持仓/经理/风格/费率/分红/筛选/申赎",
+      "description": "基金分析：基本信息/净值/业绩/持仓/经理/风格/费率/分红/筛选",
       "tools": [
         "fund_abnormal_movement",
         "fund_basic_info",
         "fund_bonus",
         "fund_index_return",
-        "fund_index_subscription_redemption",
         "fund_index_tracking",
         "fund_industry_exposure",
         "fund_invest_position",
@@ -19,7 +18,6 @@
         "fund_rate",
         "fund_stock_holdings_screen",
         "fund_style_analysis",
-        "fund_subscription_redemption_summary",
         "fund_theme_screening",
         "fund_top_holdings",
         "fund_turnover_rate"
@@ -505,33 +503,6 @@
         "type": "object"
       }
     },
-    "fund_index_subscription_redemption": {
-      "category": "fund",
-      "description": "按指数汇总基金申赎（申请/赎回/净申赎），区分个人与机构客户。",
-      "inputSchema": {
-        "properties": {
-          "index_code": {
-            "title": "Index Code",
-            "type": "string"
-          },
-          "calc_date": {
-            "title": "Calc Date",
-            "type": "string"
-          },
-          "cutoff_time": {
-            "default": "15:00:00",
-            "title": "Cutoff Time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "index_code",
-          "calc_date"
-        ],
-        "title": "fund_index_subscription_redemptionArguments",
-        "type": "object"
-      }
-    },
     "fund_index_tracking": {
       "category": "fund",
       "description": "查某指数的跟踪基金（路由型 + 半 PIT，仅按 estabdate <= T 过滤）。",
@@ -770,28 +741,6 @@
           "fund_codes"
         ],
         "title": "fund_style_analysisArguments",
-        "type": "object"
-      }
-    },
-    "fund_subscription_redemption_summary": {
-      "category": "fund",
-      "description": "基金申赎汇总。",
-      "inputSchema": {
-        "properties": {
-          "calc_date": {
-            "title": "Calc Date",
-            "type": "string"
-          },
-          "cutoff_time": {
-            "default": "15:00:00",
-            "title": "Cutoff Time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "calc_date"
-        ],
-        "title": "fund_subscription_redemption_summaryArguments",
         "type": "object"
       }
     },
