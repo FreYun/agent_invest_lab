@@ -50,7 +50,22 @@ export function openclawJsonSource(config: WorldConfig): string {
  *  bot 看不见，只能由 world setup / 每日收盘自动触发。 */
 export async function runFundCli(cliPath: string, cmd: string, args: string[], opts: { timeoutMs?: number } = {}): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolveP, reject) => {
-    const child = spawn('python3', [cliPath, cmd, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    // 裸 `python3` 在本机会落到缺 `mcp` 包的解释器 → cli_tools.py import 即崩。
+    // 优先 FUND_MCP_PYTHON，其次 cli 同级的 .venv/bin/python（fund-portfolio-mcp/.venv），
+    // 最后兜底 python3。
+    const cliAbs = resolve(cliPath)
+    const venvPython = join(dirname(cliAbs), '.venv', 'bin', 'python')
+    const python = process.env.FUND_MCP_PYTHON || (existsSync(venvPython) ? venvPython : 'python3')
+    // cli_tools.py → db.py 缺省把 DB_PATH 落到 /home/rooot/...（另一套 .openclaw 库，本机无权限）。
+    // 从 cli 路径推导仓库根（<repo>/fund-portfolio-mcp/cli_tools.py → <repo>），把 OPENCLAW_ROOT /
+    // FUND_DB_PATH 指向本仓库的 data/fund.db；已显式设置则尊重不覆盖。与 restart-fund-mcp*.sh 一致。
+    const repoRoot = dirname(dirname(cliAbs))
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_ROOT: process.env.OPENCLAW_ROOT || repoRoot,
+      FUND_DB_PATH: process.env.FUND_DB_PATH || join(repoRoot, 'data', 'fund.db'),
+    }
+    const child = spawn(python, [cliAbs, cmd, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env })
     let stdout = ''
     let stderr = ''
     const timer = opts.timeoutMs ? setTimeout(() => { try { child.kill('SIGKILL') } catch { /* ignore */ } reject(new Error(`fund cli ${cmd} timeout (${opts.timeoutMs}ms)`)) }, opts.timeoutMs) : null
