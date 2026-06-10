@@ -56,13 +56,14 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 .action-row{cursor:pointer;transition:background .12s}.action-row:hover{background:rgba(255,255,255,.025)}.action-row.expanded{background:rgba(102,217,232,.04)}.action-chevron{display:inline-block;color:var(--dim);font-size:10px;transition:transform .15s ease}.action-row.expanded .action-chevron{transform:rotate(90deg);color:var(--accent)}.reason-row td{padding:0;border-bottom:1px solid rgba(255,255,255,.04);background:rgba(0,0,0,.22);border-left:3px solid var(--accent)}.reason-section{padding:10px 14px}.reason-section + .reason-section{border-top:1px solid rgba(255,255,255,.04)}.reason-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:4px;font-weight:600}.reason-body{font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap}.reason-body.reason-settle{font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}.reason-body.reason-empty{padding:10px 14px;color:rgba(255,255,255,.25);font-style:italic;font-size:12px}
 .holding-weight{display:flex;align-items:baseline;gap:8px;margin-left:auto}.holding-weight-pct{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--accent);letter-spacing:.5px;line-height:1}.holding-weight-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.holding-weight-bar{margin-top:10px;height:6px;border-radius:999px;background:rgba(255,255,255,.05);overflow:hidden;position:relative}.holding-weight-bar-fill{height:100%;background:linear-gradient(90deg, var(--accent) 0%, rgba(102,217,232,.6) 100%);border-radius:inherit;transition:width .25s ease-out}
 .runs-panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px;margin-bottom:16px}.runs-panel h2{margin:0 0 10px;font-size:13px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}.run-list{display:flex;flex-direction:column;gap:8px}
-.run-row{display:grid;grid-template-columns:minmax(120px,1fr) auto minmax(160px,1.4fr) minmax(80px,1fr) auto;gap:12px;align-items:center;padding:10px 12px;border:1px solid rgba(255,255,255,.06);border-radius:8px;background:rgba(255,255,255,.02)}
+.run-row{display:grid;grid-template-columns:minmax(120px,1fr) auto minmax(160px,1.4fr) minmax(140px,1.6fr) auto;gap:12px;align-items:center;padding:10px 12px;border:1px solid rgba(255,255,255,.06);border-radius:8px;background:rgba(255,255,255,.02)}
 .run-id{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .run-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);white-space:nowrap}.run-status::before{content:'';width:7px;height:7px;border-radius:999px}
 .run-status.running{color:var(--loss);border-color:rgba(101,217,165,.3);background:rgba(101,217,165,.06)}.run-status.running::before{background:var(--loss);box-shadow:0 0 6px rgba(101,217,165,.6);animation:livepulse 1.6s ease-in-out infinite}
 .run-status.paused{color:var(--accent2);border-color:rgba(255,184,107,.35);background:rgba(255,184,107,.06)}.run-status.paused::before{background:var(--accent2)}
 .run-prog{display:flex;flex-direction:column;gap:4px;min-width:0}.run-prog-bar{height:5px;border-radius:999px;background:rgba(255,255,255,.06);overflow:hidden}.run-prog-fill{height:100%;background:linear-gradient(90deg,var(--accent),rgba(102,217,232,.5));border-radius:inherit;transition:width .25s}.run-prog-txt{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
 .run-bots{font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run-bots .run-strat{color:var(--accent2);font-family:ui-monospace,Menlo,monospace;cursor:help}
 .run-ctrls{display:flex;align-items:center;gap:6px;justify-content:flex-end}
 .run-btn{border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--text);border-radius:6px;padding:5px 12px;font-size:12px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s}.run-btn:hover{background:rgba(255,255,255,.09)}.run-btn:disabled{opacity:.5;cursor:not-allowed}.run-btn.pause{border-color:rgba(255,184,107,.4);color:var(--accent2)}.run-btn.stop{border-color:rgba(255,107,138,.4);color:var(--gain)}
 .run-hint{font-size:10px;color:var(--dim);font-style:italic;white-space:nowrap}
@@ -1183,11 +1184,23 @@ function renderRuns(runs){
     const ctrls = isRunning
       ? `<button class="run-btn pause" data-run-act="pause" data-run-id="${esc(r.runId)}">暂停</button><button class="run-btn stop" data-run-act="stop" data-run-id="${esc(r.runId)}">停止</button>`
       : `<button class="run-btn stop" data-run-act="stop" data-run-id="${esc(r.runId)}">停止</button><span class="run-hint">resume 用 CLI</span>`
+    // 每个 bot 旁标注它在跑的方法论（📐 中文策略名，hover 看策略ID/标的指数/基金池大小）。
+    // r.strategies 由后端读 run 目录的 strategy-assignments.json 注入；老 run 没有 → 只显 bot id。
+    const botsHtml = (r.bots || []).map(b => {
+      const st = r.strategies && r.strategies[b]
+      if (!st || !st.strategyId) return esc(b)
+      const tip = `${st.strategyId}${st.targetIndex ? ' ｜ 标的: ' + st.targetIndex : ''}${st.fundCount ? ' ｜ 基金 ' + st.fundCount + ' 只' : ''}`
+      return `${esc(b)} <span class="run-strat" title="${esc(tip)}">📐 ${esc(st.title || st.strategyId)}</span>`
+    }).join('、')
+    const botsPlain = (r.bots || []).map(b => {
+      const st = r.strategies && r.strategies[b]
+      return st && st.strategyId ? `${b}(${st.title || st.strategyId})` : b
+    }).join(', ')
     return `<div class="run-row">`
       + `<div class="run-id" title="${esc(r.runId)}">${esc(r.runId)}</div>`
       + `<span class="run-status ${isRunning ? 'running' : 'paused'}">${isRunning ? '运行中' : '已暂停'}</span>`
       + `<div class="run-prog"><div class="run-prog-bar"><div class="run-prog-fill" style="width:${pct}%"></div></div><span class="run-prog-txt">${r.cursor}/${r.total} 交易日 · ${esc(r.currentDate || '--')}</span></div>`
-      + `<div class="run-bots" title="${esc((r.bots || []).join(', '))}">${esc((r.bots || []).join(', '))}</div>`
+      + `<div class="run-bots" title="${esc(botsPlain)}">${botsHtml}</div>`
       + `<div class="run-ctrls">${ctrls}</div>`
       + `</div>`
   }).join('')
