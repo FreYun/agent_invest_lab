@@ -356,8 +356,12 @@ export function selectRepresentative<T>(sortedAsc: T[], quota: number): T[] {
 // 未建仓 bot 没有首买基金时,用沪深300(510300 沪深300ETF华泰柏瑞)作默认参照,
 // 这样任何 bot 都至少有一条参照曲线。
 const DEFAULT_BENCHMARK_FUND = '510300'
+// 三个多指数权益基金 bot 是做多基金投资策略，统一用规模最大的沪深300 ETF
+// (510300 沪深300ETF华泰柏瑞) 作为比较基准，而不是首笔买入标的。
+const LONG_EQUITY_FUND_BOTS = new Set(['bot101', 'bot102', 'bot103'])
 
-export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[]): string {
+export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[], botId = ''): string {
+  if (LONG_EQUITY_FUND_BOTS.has(botId)) return DEFAULT_BENCHMARK_FUND
   const firstBuy = actions.find(a => a.side === 'buy')
   return firstBuy?.fund_code || holdings[0]?.fund_code || DEFAULT_BENCHMARK_FUND
 }
@@ -393,12 +397,13 @@ async function loadBenchmarkSeries(
 
 async function loadBenchmark(
   dbPath: string,
+  botId: string,
   actions: BotAction[],
   holdings: HoldingRow[],
   firstTradeDate: string,
   latestTradeDate: string,
 ): Promise<BotBenchmark | null> {
-  const fundCode = pickBenchmarkFund(actions, holdings)
+  const fundCode = pickBenchmarkFund(actions, holdings, botId)
   const anchorDate = firstTradeDate || actions.find(a => a.side === 'buy')?.action_date || ''
   if (!anchorDate || !latestTradeDate) return null
   return loadBenchmarkSeries(dbPath, fundCode, anchorDate, latestTradeDate)
@@ -657,7 +662,7 @@ async function loadBotForRun(dbPath: string, worldRoot: string, botId: string, r
   const firstDateForBench = first?.trade_date || actions.find(a => a.side === 'buy')?.action_date || ''
   const lastDateForBench = latest?.trade_date || actions[actions.length - 1]?.action_date || ''
   const benchmark = lastDateForBench
-    ? await loadBenchmark(dbPath, actions, holdings, firstDateForBench, lastDateForBench)
+    ? await loadBenchmark(dbPath, botId, actions, holdings, firstDateForBench, lastDateForBench)
     : null
 
   const touchedFunds = [...new Set([
@@ -757,8 +762,34 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html)
 }
 
+/** 本 run 各 bot 的策略分配（runtime/runs/<runId>/strategy-assignments.json，setup 时落盘，
+ *  见 run.ts）。给实时 Run 控制面板显示「这个 run 在跑什么方法论」。轻量视图：只带
+ *  id/标题/标的/池大小，不带基金码全量（multi_equity 的池 1000+ 只，面板用不上）。
+ *  老 run 没该文件 → undefined，前端优雅退化为只显 bot id。 */
+function readRunStrategies(
+  worldRoot: string,
+  runId: string,
+): Record<string, { strategyId: string; title: string; targetIndex: string; fundCount: number }> | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(runDir(worldRoot, runId), 'strategy-assignments.json'), 'utf8')) as {
+      bots?: Record<string, { strategy_id?: string; strategy_title?: string; target_index?: string; buyable_fund_codes?: string[] }>
+    }
+    if (!raw?.bots) return undefined
+    const out: Record<string, { strategyId: string; title: string; targetIndex: string; fundCount: number }> = {}
+    for (const [botId, a] of Object.entries(raw.bots)) {
+      out[botId] = {
+        strategyId: a.strategy_id ?? '',
+        title: a.strategy_title ?? '',
+        targetIndex: a.target_index ?? '',
+        fundCount: Array.isArray(a.buyable_fund_codes) ? a.buyable_fund_codes.length : 0,
+      }
+    }
+    return Object.keys(out).length ? out : undefined
+  } catch { return undefined }
+}
+
 /** Light per-run view for /api/backtest/runs — only what the control panel renders. */
-function runSummary(s: WorldState): Record<string, unknown> {
+function runSummary(worldRoot: string, s: WorldState): Record<string, unknown> {
   return {
     runId: s.run_id,
     status: s.status,
@@ -769,6 +800,7 @@ function runSummary(s: WorldState): Record<string, unknown> {
     loop: s.loop,
     startedAt: s.started_at,
     updatedAt: s.updated_at,
+    strategies: readRunStrategies(worldRoot, s.run_id),
   }
 }
 
@@ -857,7 +889,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       // state.json, and trigger pause/stop. Resume stays CLI-only (it must spawn a
       // long-lived `world resume` with the world config, which the dashboard lacks).
       if (req.method === 'GET' && url.pathname === '/api/backtest/runs') {
-        sendJson(res, 200, { runs: listControllableRuns(worldRoot).map(runSummary) })
+        sendJson(res, 200, { runs: listControllableRuns(worldRoot).map(s => runSummary(worldRoot, s)) })
         return
       }
       if (req.method === 'POST' && (url.pathname === '/api/backtest/runs/pause' || url.pathname === '/api/backtest/runs/stop')) {
