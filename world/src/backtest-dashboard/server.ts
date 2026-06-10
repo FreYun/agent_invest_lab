@@ -1,16 +1,14 @@
-import { execFile } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 import { botDayDir, hiddenRecordsFile, replyFile, runDir, sentFile, universeContaminationFile } from '../paths.ts'
 import { readRunModel, type RunModelInfo } from '../run-model.ts'
 import { listControllableRuns, type WorldState } from '../state.ts'
 import { requestPause, requestStop } from '../run-control.ts'
 import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
 
-const execFileAsync = promisify(execFile)
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_DB = join(HERE, '../../../data/fund.db')
 // 默认 worldRoot = <repo>/world/runtime；和 paths.ts 里其它 per-run helper 的约定一致。
@@ -247,15 +245,27 @@ function loadReflection(worldRoot: string, runId: string, botId: string, date: s
   return result
 }
 
-async function queryRows<T>(dbPath: string, sql: string): Promise<T[]> {
-  // fund.db is WAL-mode and written concurrently by live world runs; without a busy
-  // timeout the sqlite3 CLI fails instantly with SQLITE_BUSY ("database is locked")
-  // during a writer/checkpoint window, surfacing as flaky 500s. Wait it out instead.
-  const { stdout } = await execFileAsync('sqlite3', ['-json', '-cmd', '.timeout 5000', dbPath, sql], { maxBuffer: 16 * 1024 * 1024 })
-  const text = stdout.trim()
-  if (!text) return []
-  const parsed = JSON.parse(text) as T[]
-  return Array.isArray(parsed) ? parsed : []
+// Persistent in-process SQLite handles, one per dbPath. Replaces the old per-query
+// `sqlite3` CLI spawn: forking the CLI + reopening the ~280MB fund.db cost ~7ms per
+// query, and loadDataset fires ~200 queries per /api/backtest/data poll → ~1.5s of
+// pure spawn overhead (the SQL itself is ~150ms). An in-process handle drops that to
+// ~2ms total. Opened read-write (matching the CLI default) so WAL/-shm attach while
+// live world runs write; busy_timeout waits out the rare writer/checkpoint lock window
+// instead of failing with SQLITE_BUSY. Each .all() is its own implicit txn, so the
+// handle holds no lock between queries and never blocks a writer's checkpoint.
+const _dbHandles = new Map<string, DatabaseSync>()
+function getDb(dbPath: string): DatabaseSync {
+  let db = _dbHandles.get(dbPath)
+  if (!db) {
+    db = new DatabaseSync(dbPath)
+    db.exec('PRAGMA busy_timeout = 5000')
+    _dbHandles.set(dbPath, db)
+  }
+  return db
+}
+
+function queryRows<T>(dbPath: string, sql: string): T[] {
+  return getDb(dbPath).prepare(sql).all() as T[]
 }
 
 function dedupeByDate<T extends { trade_date: string }>(rows: T[]): T[] {
