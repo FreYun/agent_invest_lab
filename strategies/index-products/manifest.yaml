@@ -12,6 +12,32 @@ strategies:
     target_index: "000016.SH"
     default_buyable_fund_codes: ["510050"]
 
+  a500:
+    title: 中证A500指数投资框架
+    methodology: a500.md
+    target_index: "000510.SH"
+    default_buyable_fund_codes: ["159338", "512050"]
+
+  zz500:
+    title: 中证500指数投资框架
+    methodology: zz500.md
+    target_index: "000905.SH"
+    default_buyable_fund_codes: ["110020", "510500"]
+
+  sp500:
+    title: 标普500指数投资框架
+    methodology: sp500.md
+    target_index: "SPX.GI"
+    # QDII / 跨境 ETF（跟踪美股，非 A 股标的；交易系统是否支持 QDII 另行确认）
+    default_buyable_fund_codes: ["050025", "513500"]
+
+  nasdaq100:
+    title: 纳斯达克100指数投资框架
+    methodology: nasdaq100.md
+    target_index: "NDX.GI"
+    # QDII / 跨境 ETF（跟踪美股，非 A 股标的；交易系统是否支持 QDII 另行确认）
+    default_buyable_fund_codes: ["040046", "513100"]
+
   semiconductor:
     title: 半导体设备指数投资框架
     methodology: semiconductor.md

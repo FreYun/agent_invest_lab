@@ -77,9 +77,15 @@ test('loadWorldConfig rejects missing/invalid required fields', () => {
   assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: []\nreplay: {from: "2024-01-02", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`)), /bots/)
   assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-13-99", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`)), /from/)
   assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-02-02", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`)), /after/)
-  assert.throws(() => loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-01-02", to: "2024-01-03"}`)), /simworld_upstream_url/)
   // sanity: baseValid string actually loads
   assert.doesNotThrow(() => loadWorldConfig(tmpYaml(baseValid)))
+})
+
+test('simworld_upstream_url defaults to 127.0.0.1 (local) when omitted', () => {
+  // host 通过 config 注入：缺省回落本机 127.0.0.1，方便其他自起本地 MCP 的环境；
+  // 本机的 world.yaml 显式注入远程数据机地址即指向远程。
+  const c = loadWorldConfig(tmpYaml(`research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-01-02", to: "2024-01-03"}`))
+  assert.equal(c.simworldUpstreamUrl, 'http://127.0.0.1:18078/mcp')
 })
 
 test('loop defaults to research-loop when field omitted', () => {

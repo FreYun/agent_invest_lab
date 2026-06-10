@@ -443,17 +443,21 @@ async function listAllBotIds(dbPath: string): Promise<string[]> {
 
 async function listRunsForBot(dbPath: string, worldRoot: string, botId: string): Promise<BotRunRef[]> {
   const b = quoteSql(botId)
+  // ⚠️ 这里必须 UNION ALL 而非 UNION：sqlite 3.53.2（brew 2026-06-09 升级）的优化器会把
+  // 「UNION 去重的升序中间结果 + GROUP BY 同列」当成已满足 ORDER BY，把 DESC 方向丢掉，
+  // 导致 run 列表变成旧→新、看板默认选中最老的 run。UNION ALL 语义等价（GROUP BY 会去重）
+  // 且绕开该回归；下面再做一次 JS 排序兜底，使顺序不再依赖外部 sqlite3 二进制的优化器行为。
   const rows = await queryRows<{ run_id: string; latest_date: string | null }>(dbPath, `
     WITH per_bot AS (
       SELECT run_id, trade_date AS d FROM fund_bot_daily_snapshots WHERE bot_id = ${b}
-      UNION SELECT run_id, trade_date AS d FROM fund_bot_position_snapshots WHERE bot_id = ${b}
-      UNION SELECT run_id, action_date AS d FROM fund_bot_actions WHERE bot_id = ${b}
-      UNION SELECT run_id, NULL AS d FROM fund_bot_accounts WHERE bot_id = ${b}
-      UNION SELECT run_id, review_date AS d FROM fund_bot_reviews WHERE bot_id = ${b}
-      UNION SELECT run_id, COALESCE(exit_date, entry_date) AS d FROM fund_bot_holdings WHERE bot_id = ${b} AND run_id IS NOT NULL AND run_id <> ''
-      UNION SELECT run_id, trade_date AS d FROM fund_bot_performance WHERE bot_id = ${b}
-      UNION SELECT order_run_id AS run_id, order_date AS d FROM fund_bot_orders WHERE bot_id = ${b} AND order_run_id IS NOT NULL AND order_run_id <> ''
-      UNION SELECT settle_run_id AS run_id, COALESCE(confirm_date, order_date) AS d FROM fund_bot_orders WHERE bot_id = ${b} AND settle_run_id IS NOT NULL AND settle_run_id <> ''
+      UNION ALL SELECT run_id, trade_date AS d FROM fund_bot_position_snapshots WHERE bot_id = ${b}
+      UNION ALL SELECT run_id, action_date AS d FROM fund_bot_actions WHERE bot_id = ${b}
+      UNION ALL SELECT run_id, NULL AS d FROM fund_bot_accounts WHERE bot_id = ${b}
+      UNION ALL SELECT run_id, review_date AS d FROM fund_bot_reviews WHERE bot_id = ${b}
+      UNION ALL SELECT run_id, COALESCE(exit_date, entry_date) AS d FROM fund_bot_holdings WHERE bot_id = ${b} AND run_id IS NOT NULL AND run_id <> ''
+      UNION ALL SELECT run_id, trade_date AS d FROM fund_bot_performance WHERE bot_id = ${b}
+      UNION ALL SELECT order_run_id AS run_id, order_date AS d FROM fund_bot_orders WHERE bot_id = ${b} AND order_run_id IS NOT NULL AND order_run_id <> ''
+      UNION ALL SELECT settle_run_id AS run_id, COALESCE(confirm_date, order_date) AS d FROM fund_bot_orders WHERE bot_id = ${b} AND settle_run_id IS NOT NULL AND settle_run_id <> ''
     )
     SELECT run_id, MAX(d) AS latest_date
     FROM per_bot
@@ -461,6 +465,8 @@ async function listRunsForBot(dbPath: string, worldRoot: string, botId: string):
     GROUP BY run_id
     ORDER BY run_id DESC
   `)
+  // 新 run 在前（run_id 含启动时间戳，字典序即时间序）；不信任 SQL 层的 ORDER BY，见上。
+  rows.sort((a, b) => (a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0))
   const hidden = loadHiddenSet(worldRoot)
   return rows
     .filter(r => !hidden.has(hiddenKey(botId, r.run_id)))  // 隐藏的 (bot, run) 不进列表/选择器

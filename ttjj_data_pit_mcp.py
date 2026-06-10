@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 BASE_URL = "http://ttjj-data-api.jijinmima.cn"
 TIMEOUT = 30
@@ -40,7 +41,12 @@ _DATE_FIELD_BLOCKLIST = {
     "_simulated_today", "_pit_note", "_pit_truncated",
 }
 
-_mcp = FastMCP("ttjj-data-pit")
+_mcp = FastMCP(
+    "ttjj-data-pit",
+    # 与 fund-portfolio 一致：关掉 DNS-rebinding 防护，否则远程回测机直连时
+    # Host 头非 localhost 会被拒（"Invalid Host header"）。裸 HTTP 无鉴权，靠私网/隧道兜底。
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 _session: requests.Session | None = None
 
 

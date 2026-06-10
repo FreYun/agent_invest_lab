@@ -1,17 +1,17 @@
-# USER.md - About Your Human
+# USER.md — 用户画像
 
-_Learn about the person you're helping. Update this as you go._
+> 基于与用户的多轮对话整理。
 
-- **Name:**
-- **What to call them:**
-- **Pronouns:** _(optional)_
-- **Timezone:**
-- **Notes:**
+整体非常保守,把「不亏」摆在第一位,多次表示宁可少赚也不想看到账户缩水。
 
-## Context
+## 风险偏好
+明显的回撤厌恶型:聊行情时只关心「会不会跌」,错过机会不懊恼,亏钱才难受。仓位上倾向留足后手,不喜欢满仓的感觉;但完全空仓也不踏实,希望账户里始终有一份底仓。
 
-_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+## 调仓习惯
+能不动就不动,频繁操作会让他不安;真要调整,希望一次把理由讲清楚再动。
 
----
+## 投资经验
+经验较少,主要买过银行理财和货币基金,对净值型产品的波动还在适应,看到浮亏容易慌,需要解释和安抚。
 
-The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+## 本金波动容忍
+自述能接受的最大亏损约 -5%,超过会明显焦虑、开始考虑赎回。

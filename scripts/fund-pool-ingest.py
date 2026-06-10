@@ -37,9 +37,12 @@ from pathlib import Path
 
 import requests
 
-DB_PATH = "/home/rooot/agent_invest_lab/data/fund.db"
-XLSX_PATH = "/home/rooot/agent_invest_lab/data/被动指数型基金池（权益黄金）.xlsx"
-LOG_PATH = "/home/rooot/agent_invest_lab/logs/fund-pool-ingest.log"
+# 路径默认 /home/rooot（历史布局）；本机迁到 $HOME/rooot 后用 FUND_DB_PATH / OPENCLAW_ROOT 覆盖，
+# 与 fund-portfolio-mcp/db.py 同约定。FUND_DB_PATH 显式指定库；否则按 OPENCLAW_ROOT 推导。
+_ROOT = os.getenv("OPENCLAW_ROOT", "/home/rooot/agent_invest_lab")
+DB_PATH = os.getenv("FUND_DB_PATH", os.path.join(_ROOT, "data", "fund.db"))
+XLSX_PATH = os.path.join(_ROOT, "data", "被动指数型基金池（权益黄金）.xlsx")
+LOG_PATH = os.path.join(_ROOT, "logs", "fund-pool-ingest.log")
 TTJJ_API_URL = os.getenv("TTJJ_API_URL", "http://ttjj-data-api.jijinmima.cn").rstrip("/")
 API_TIMEOUT = 120
 API_HEADERS = {"Content-Type": "application/json"}

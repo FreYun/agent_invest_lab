@@ -261,7 +261,12 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
   }
 
-  const simworldUpstreamUrl = reqString(raw, 'simworld_upstream_url').trim()
+  // 可选；默认指向本机 ttjj-data-pit 默认端口（18078），即 simworld-proxy 的上游。
+  // host 通过 config 注入：配置里显式设 simworld_upstream_url 即用该值（本机的 world.yaml 注入远程数据机地址），
+  // 缺省则回落 127.0.0.1 本机，方便其他自起本地 MCP 的环境。
+  const simworldUpstreamUrl = typeof raw.simworld_upstream_url === 'string' && raw.simworld_upstream_url.trim()
+    ? raw.simworld_upstream_url.trim()
+    : 'http://127.0.0.1:18078/mcp'
 
   let simworldTools: { name: string; description?: string }[] | undefined
   if (raw.simworld_tools !== undefined) {
@@ -300,9 +305,10 @@ export function loadWorldConfig(path: string): WorldConfig {
   }
 
   // 可选；默认指向本机 fund-portfolio-mcp 默认端口（28172）。基金 run 才会被实际使用。
+  // 同 simworld：配置里显式设 fund_portfolio_upstream_url 即用该值，缺省回落 127.0.0.1 本机。
   const fundPortfolioUpstreamUrl = typeof raw.fund_portfolio_upstream_url === 'string' && raw.fund_portfolio_upstream_url.trim()
     ? raw.fund_portfolio_upstream_url.trim()
-    : 'http://localhost:28172/mcp'
+    : 'http://127.0.0.1:28172/mcp'
 
   const fundMcpCli = typeof raw.fund_mcp_cli === 'string' && raw.fund_mcp_cli.trim()
     ? resolveMaybe(baseDir, raw.fund_mcp_cli)
