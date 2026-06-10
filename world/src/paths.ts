@@ -49,5 +49,9 @@ export const strategyServerRuntimeFile = (w: string, runId: string) => join(runD
 // 现按 run_id 物理隔离，每 run 一个文件。
 export const buyableCodesDir = (w: string) => join(w, '..', '..', 'data', 'buyable')
 export const buyableCodesFile = (w: string, runId: string) => join(buyableCodesDir(w), `${runId}.json`)
+// 核心库 fund.db（GLOBAL data 路径，与 buyableCodesDir 同款：worldRoot=<repo>/world/runtime →
+// '..','..','data','fund.db' 落到 <repo>/data/fund.db）。strategy-server 的 market_reports
+// 读写、backtest-dashboard 等都指向这一份。
+export const fundDbFile = (w: string) => join(w, '..', '..', 'data', 'fund.db')
 // 历史受污染 run 的标记文件（scripts/detect-universe-contamination.py 写入；dashboard 贴标读取）。
 export const universeContaminationFile = (w: string, runId: string) => join(runDir(w, runId), 'universe-contamination.json')

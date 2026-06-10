@@ -133,7 +133,7 @@ Composite_z = w_trend·z_trend + w_val·z_val + w_earn·z_earn + w_liq·z_liq + 
 
 ## 八、量化择时辅助：`quant_factor` 工具里的 `hs300_erp_vix_timing`
 
-研究室离线挖出的沪深300 单指数择时因子，包在 `simworld-mcp.quant_factor` 里。**客观第二意见，不替代框架打分。**（另：市场级散户申赎反向 `market_retail_contrarian_*` 见 AGENTS「机构数据优势」，任何指数可用。）
+研究室离线挖出的沪深300 单指数择时因子，包在 `simworld-mcp.quant_factor` 里。**客观第二意见，不替代框架打分。**（另：市场级市场情绪指数反向 `market_sentiment_*` 见 AGENTS「机构数据优势」，任何指数可用。）
 
 ### `hs300_erp_vix_timing` —— 估值×情绪极值 风险管理择时（黄灯/探索性）
 - **是什么**：沪深300 股债性价比（ERP，3 年分位，**正是你框架里最承重的相对债券估值锚**）定基仓 + 50ETF VIX 252 日 z 极值调整——便宜+恐慌（z>1.5）偏多加仓、贵+自满（z<−1.5）偏空减仓，输出 0–1 建议仓位 + 估值/情绪状态读数。它把你格言表里那条 **"GVIX 极端且估值同时便宜才贪婪"** 打包成了一个量化读数。
