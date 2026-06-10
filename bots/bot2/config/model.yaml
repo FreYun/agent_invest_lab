@@ -1,60 +1,10 @@
-# Research Loop 配置 —— bot7 的唯一配置来源
-# rust config.rs::merge_from_data() 只读 <workspace>/config/research-loop.yaml
-# 叠加在 default_config() 默认值之上；未写的字段走默认。
-# api_key 为明文（本文件已被 .gitignore 排除，不入库）。
-# 已不再支持 api_key_from_openclaw / RESEARCH_* 环境变量 / 全局 research-loop.json。
-
-model:
-  primary:
-    provider: openai_compatible
-    base_url: https://sd7o0ricc19oldoovnj30.apigateway-cn-beijing.volceapi.com/v1
-    model: qwen3.6-plus
-    api_key: jHPOWi4a9ntf3DWvB5C903Bb4324408e9912A5149e715847
-  # 注意：当前 rust 版本 merge_from_data 只解析 model.primary，
-  # 不存在独立的 compact 模型字段（仅有 compact_max_tokens/temperature/timeout）。
-  # compact 阶段复用 primary 模型；这里写 model.compact 不会生效，故省略。
-
-llm:
-  chat_max_tokens: 8000
-  chat_temperature: 0.3
-  chat_max_tool_iterations: 100
-  skill_max_tokens: 4000
-  skill_temperature: 0.3
-  compact_max_tokens: 2000
-  compact_temperature: 0.1
-
-timeouts:
-  chat_llm: 180
-  compact_llm: 120
-  skill_llm: 60
-
-mcp:
-  mem0: http://localhost:18096
-
-plugins:
-  browser:
-    enabled: true
-    config:
-      timeout_seconds: 90
-      openclaw_json: /home/rooot/.openclaw/openclaw.json
-
-limits:
-  max_total_turns: 25
-  max_time_minutes: 30
-  token_budget: 900000
-  compact_threshold_pct: 30
-  min_sources_for_dig: 3
-  context_window: 1000000
-
-tools:
-  always_load: []
-
-dashboard:
-  enabled: true
-  port: 18890
-  bind: 127.0.0.1
-
-extra_roots:
-- /home/rooot/.openclaw/workspace/skills
-
-workspace: /home/rooot/.openclaw/workspace-bot7
+# 本 bot 的模型配置（research-loop 的 model.primary）。
+# 继承 world/config/trading-rl-config.base.json 的其余设置（LLM 参数、超时等），这里只指定模型端点。
+# api_key 用 api_key_from_openclaw 引用 openclaw.json 里的 provider，回测时由 world 解析成明文注入
+# run 的 research-loop.yaml；本文件不落明文 key。
+# 18888「新建回测」可为某次回测临时覆盖本选择；不覆盖时即用此默认。
+# 可选模型见 world/config/openclaw.json 的 models.providers[].models[]（qwen3.6-plus / gpt-5.4 / glm-5 / kimi-k2.5 …）。
+provider: openai_compatible
+base_url: https://dd-ai-api.eastmoney.com/v1
+model: qwen3.6-plus
+api_key_from_openclaw: zai-coding-plan
