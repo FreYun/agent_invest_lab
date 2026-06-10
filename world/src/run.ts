@@ -288,9 +288,11 @@ function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow: strin
   // 98 次、试错全部命中 mcp__simworld_data__*）。把白名单工具写进 tools.always_load，rust 在会话
   // 首轮即由 activate_chat_pinned_tools 预激活，彻底免去 discover_tools。名字用全前缀
   // mcp__simworld_data__<name>，精确匹配 rust registry 的 deferred-tool 键（见 tools.rs get_active_tools）。
+  // HIDDEN_TOOLS 兜底：proxy 端已经把申赎原始接口从 tools/list 和 call 里都滤掉了，这里再滤一次，
+  // 防 dashboard 临时配置显式列了隐藏工具时 always_load 去预激活一个 proxy 不暴露的名字。
   if (config.simworldTools && config.simworldTools.length) {
     const toolsCfg = (typeof base.tools === 'object' && base.tools ? base.tools : {}) as Record<string, unknown>
-    toolsCfg.always_load = config.simworldTools.map(t => `mcp__simworld_data__${t.name}`)
+    toolsCfg.always_load = config.simworldTools.filter(t => !HIDDEN_TOOLS.has(t.name)).map(t => `mcp__simworld_data__${t.name}`)
     base.tools = toolsCfg
   }
   const dst = join(shadow, 'config', 'research-loop.yaml')
@@ -439,11 +441,11 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // buildShadowWorkspace 拷贝 config/mcporter.json 时替换为下面的 url。
   const simworldProxy = await createSimworldProxy({ upstreamUrl: config.simworldUpstreamUrl, getCurrentDate, clientId: `run-${runId}` })
   writeFileSync(P.simworldProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: simworldProxy.port, url: simworldProxy.url, upstream: config.simworldUpstreamUrl }, null, 2) + '\n')
-  log(worldRoot, runId, `simworld-data proxy at ${simworldProxy.url} (upstream ${config.simworldUpstreamUrl}); ${simworldProxy.tools.length} tools captured for daily prompt`)
+  log(worldRoot, runId, `simworld-data proxy at ${simworldProxy.url} (upstream ${config.simworldUpstreamUrl}); ${simworldProxy.tools.length} tools probed`)
   if (config.simworldTools) {
     const probedNames = new Set(simworldProxy.tools.map(t => t.name))
-    const missing = config.simworldTools.filter(t => !probedNames.has(t.name) && t.description === undefined).map(t => t.name)
-    log(worldRoot, runId, `simworld_tools whitelist active (${config.simworldTools.length} entries); daily prompt will list only these${missing.length ? ` — bare-name (no probe desc, no config desc): ${missing.join(', ')}` : ''}`)
+    const missing = config.simworldTools.filter(t => !probedNames.has(t.name)).map(t => t.name)
+    log(worldRoot, runId, `simworld_tools whitelist active (${config.simworldTools.length} entries) → tools.always_load 预激活${missing.length ? ` — 上游 probe 里不存在（bot 将调不到）: ${missing.join(', ')}` : ''}`)
   }
   const templateVars: Record<string, string> = { SIMWORLD_PROXY_URL: simworldProxy.url }
   const strategyLibrary = config.strategyLibraryRoot ? loadStrategyLibrary(config.strategyLibraryRoot) : null
@@ -815,26 +817,6 @@ export function previousChatCursor(cursor: number, dates: string[], mode: 'tradi
   return cursor
 }
 
-// 决定 daily prompt 里 simworld 工具清单走 manual 白名单还是 probe 全集。
-// manual 优先；description 没填则按 name 从 probe 结果回查，再缺就给空串
-// （simworldToolsBlock 会跳过 ` — ` 分隔符，只渲染裸 name）。
-export function resolveSimworldTools(
-  manual: { name: string; description?: string }[] | undefined,
-  probed: { name: string; description: string }[],
-): { name: string; description: string }[] {
-  // 对 bot 隐藏的工具（申赎原始接口）：probe 端已过滤，这里再对配置白名单兜底——
-  // 即便某个配置（如 dashboard 临时生成的）白名单显式列了申赎，也不进 bot 的工具目录。
-  const probedFiltered = probed.filter(t => !HIDDEN_TOOLS.has(t.name))
-  if (!manual) return probedFiltered
-  const probedMap = new Map(probedFiltered.map(t => [t.name, t.description]))
-  return manual
-    .filter(t => !HIDDEN_TOOLS.has(t.name))
-    .map(t => ({
-      name: t.name,
-      description: t.description ?? probedMap.get(t.name) ?? '',
-    }))
-}
-
 export async function runLoop(args: RunLoopArgs): Promise<void> {
   const { worldRoot, runId, config, setupRes, fromCursor } = args
   const dates = setupRes.tradingDates
@@ -1036,7 +1018,6 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           botId: b.botId,
           quotesPath: quotesAbs,
           buyableFundCodes: botBuyableFundCodes,
-          simworldTools: resolveSimworldTools(config.simworldTools, setupRes.simworldProxy.tools),
           dailyContext,
           historyWindow,
           beliefBlock,
