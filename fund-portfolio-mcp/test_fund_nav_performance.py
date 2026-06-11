@@ -1,9 +1,10 @@
 """Tests for fund_nav_performance table + _compute_fund_nav_performance + get_fund_perf.nav_intervals
 
-口径与 fund_bot_performance 完全对齐：
+口径与 fund_bot_performance 完全对齐（2026-06-11 统一年化）：
 - 窗口用交易日（1m=21 / 3m=63 / 6m=126 / 1y=252）
-- rf = 1.8% 年化 → rf_daily = 1.8 / 252
-- 区间口径，全部不年化
+- rf = 1% 年化 → rf_daily = 1 / 252
+- vol/sharpe ×√252、calmar = 年化收益/|MDD|、annualized_return_pct 单列；
+  return_pct / max_drawdown_pct 保持区间原值
 - 不满窗口兜底 since_inception，fallback=1
 - 数据源：fund_nav.acc_nav（return / MDD）+ daily_return_pct（vol / sharpe）
 """
@@ -69,7 +70,8 @@ def test_init_db_creates_fund_nav_performance_table(tmp_db):
     cols = set(_column_names(conn, "fund_nav_performance"))
     expected = {
         "fund_code", "trade_date", "period",
-        "return_pct", "max_drawdown_pct", "volatility_pct", "sharpe_ratio", "calmar_ratio",
+        "return_pct", "annualized_return_pct", "max_drawdown_pct",
+        "volatility_pct", "sharpe_ratio", "calmar_ratio",
         "data_points", "window_target_days", "fallback", "updated_at",
     }
     assert expected.issubset(cols), f"missing cols: {expected - cols}"
@@ -82,9 +84,9 @@ def test_fund_nav_perf_matches_bot_perf_metric_columns(tmp_db):
     bot_cols = set(_column_names(conn, "fund_bot_performance"))
     fund_cols = set(_column_names(conn, "fund_nav_performance"))
     metric_cols = {
-        "period", "return_pct", "max_drawdown_pct", "volatility_pct",
-        "sharpe_ratio", "calmar_ratio", "data_points", "window_target_days",
-        "fallback", "updated_at",
+        "period", "return_pct", "annualized_return_pct", "max_drawdown_pct",
+        "volatility_pct", "sharpe_ratio", "calmar_ratio", "data_points",
+        "window_target_days", "fallback", "updated_at",
     }
     assert metric_cols.issubset(bot_cols)
     assert metric_cols.issubset(fund_cols)
@@ -147,7 +149,7 @@ def test_return_uses_acc_nav_endpoints(reload_server, tmp_db):
     conn.close()
 
 
-def test_sharpe_uses_rf_18_pct_and_no_annualization(reload_server, tmp_db):
+def test_sharpe_and_vol_annualized(reload_server, tmp_db):
     s = reload_server
     # 30 天 +0.1% mean + 交替 ±0.05% 噪声
     daily_returns_pct = [0.1 + (0.05 if i % 2 == 0 else -0.05) for i in range(30)]
@@ -168,18 +170,21 @@ def test_sharpe_uses_rf_18_pct_and_no_annualization(reload_server, tmp_db):
     n = len(full_dailies)
     mean_d = sum(full_dailies) / n
     var_d = sum((r - mean_d) ** 2 for r in full_dailies) / (n - 1)
-    expected_std = var_d ** 0.5
-    rf_daily = 1.8 / 252
-    expected_sharpe = (mean_d - rf_daily) / expected_std
-    assert abs(row["volatility_pct"] - expected_std) < 1e-6
-    assert abs(row["sharpe_ratio"] - expected_sharpe) < 1e-6
-    # 没年化：区间夏普绝对值应该 < 5
-    assert abs(row["sharpe_ratio"]) < 5
+    std_d = var_d ** 0.5
+    ann = 252 ** 0.5
+    rf_daily = 1.0 / 252  # _BOT_PERF_RF_ANNUAL_PCT = 1
+    expected_vol = std_d * ann
+    expected_sharpe = (mean_d - rf_daily) / std_d * ann
+    assert abs(row["volatility_pct"] - expected_vol) < 1e-4
+    assert abs(row["sharpe_ratio"] - expected_sharpe) < 1e-4
+    # 年化：应带 √252 因子（日频 ~1.5 量级 → 年化 >5）
+    assert row["sharpe_ratio"] > 5
     conn.close()
 
 
 def test_calmar_v_shape(reload_server, tmp_db):
-    """V 形 acc_nav: 1.00 → 0.90 → 1.05；MDD = -10%, return = +5%, calmar = 0.5"""
+    """V 形 acc_nav: 1.00 → 0.90 → 1.05；MDD = -10%, return = +5%。
+    年化口径：ann_return = (1.05^(252/20) - 1)*100，calmar = ann_return / 10。"""
     s = reload_server
     navs = [1.0 - 0.10 * i / 10 for i in range(11)]
     navs += [0.90 + (1.05 - 0.90) * i / 10 for i in range(1, 11)]
@@ -189,12 +194,15 @@ def test_calmar_v_shape(reload_server, tmp_db):
     conn = sqlite3.connect(tmp_db)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT return_pct, max_drawdown_pct, calmar_ratio FROM fund_nav_performance "
+        "SELECT return_pct, annualized_return_pct, max_drawdown_pct, calmar_ratio "
+        "FROM fund_nav_performance "
         "WHERE fund_code='000004' AND trade_date='2024-01-22' AND period='since_inception'"
     ).fetchone()
     assert abs(row["return_pct"] - 5.0) < 0.01
     assert abs(row["max_drawdown_pct"] - (-10.0)) < 0.01
-    assert abs(row["calmar_ratio"] - 0.5) < 0.01
+    expected_ann = (1.05 ** (252 / 20) - 1) * 100  # 21 个净值点 → 20 个交易日
+    assert abs(row["annualized_return_pct"] - expected_ann) < 0.01
+    assert abs(row["calmar_ratio"] - expected_ann / 10.0) < 0.01
     conn.close()
 
 
@@ -286,8 +294,8 @@ def test_get_fund_perf_returns_nav_intervals(reload_server, tmp_db):
     assert periods == {"1m", "3m", "6m", "1y", "since_inception"}
     # 每行应有完整指标 + fallback bool
     for r in obj["nav_intervals"]:
-        for k in ("return_pct", "max_drawdown_pct", "volatility_pct",
-                  "sharpe_ratio", "calmar_ratio", "data_points",
+        for k in ("return_pct", "annualized_return_pct", "max_drawdown_pct",
+                  "volatility_pct", "sharpe_ratio", "calmar_ratio", "data_points",
                   "window_target_days", "fallback"):
             assert k in r, f"{r['period']} missing {k}"
         assert isinstance(r["fallback"], bool)

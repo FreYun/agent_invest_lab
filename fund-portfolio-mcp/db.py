@@ -379,21 +379,23 @@ CREATE TABLE IF NOT EXISTS fund_paradigm_runs (
     UNIQUE (bot_id, trade_date)
 );
 
--- 20. 基金 NAV 派生业绩表（区间口径，不年化；与 fund_bot_performance 结构对齐）
+-- 20. 基金 NAV 派生业绩表（统一年化口径；与 fund_bot_performance 结构对齐）
 -- 数据来源 = fund_nav 的 acc_nav 序列（累计净值，含分红再投资）+ daily_return_pct。
 -- 不同于老的 fund_performance 表（外部 upsert 灌入的多周期业绩 + 同类排名），
--- 这张表是**系统从 NAV 自动派生的区间业绩**，全部按当前 rf=1.8% / 252 个交易日重算。
+-- 这张表是**系统从 NAV 自动派生的区间业绩**，全部按当前 rf / 252 个交易日重算。
 -- 一行 = (fund_code, trade_date, period)。fund_nav 是全局的不分 run，所以 PK 没有 run_id。
--- 口径完全对齐 fund_bot_performance（return/MDD/vol/sharpe/calmar 都不年化，rf_daily 同口径）。
+-- 口径完全对齐 fund_bot_performance（vol/sharpe ×√252、calmar=年化收益/|MDD|；
+-- return/MDD 区间原值，rf_daily 同口径）。
 CREATE TABLE IF NOT EXISTS fund_nav_performance (
     fund_code           TEXT NOT NULL,
     trade_date          TEXT NOT NULL,
     period              TEXT NOT NULL,            -- '1m' | '3m' | '6m' | '1y' | 'since_inception'
-    return_pct          REAL,                     -- 区间收益（acc_nav[end]/acc_nav[start] - 1）
-    max_drawdown_pct    REAL,                     -- 区间最大回撤（acc_nav 序列 peak-to-trough）
-    volatility_pct      REAL,                     -- 区间日收益率标准差（不年化）
-    sharpe_ratio        REAL,                     -- (mean_daily - rf_daily) / stdev_daily（不年化）
-    calmar_ratio        REAL,                     -- return_pct / abs(max_drawdown_pct)；MDD≈0 时 NULL
+    return_pct          REAL,                     -- 区间收益（acc_nav[end]/acc_nav[start] - 1，不年化）
+    annualized_return_pct REAL,                   -- 年化收益（(1+return)^(252/(data_points-1)) - 1）
+    max_drawdown_pct    REAL,                     -- 区间最大回撤（acc_nav 序列 peak-to-trough，不年化）
+    volatility_pct      REAL,                     -- 年化波动率（stdev_daily × √252）
+    sharpe_ratio        REAL,                     -- (mean_daily - rf_daily) / stdev_daily × √252（年化）
+    calmar_ratio        REAL,                     -- annualized_return_pct / abs(max_drawdown_pct)；MDD≈0 时 NULL
     data_points         INTEGER,                  -- 该窗口实际样本数
     window_target_days  INTEGER,                  -- 目标窗口交易日数（21/63/126/252；since_inception=NULL）
     fallback            INTEGER NOT NULL DEFAULT 0,  -- 1 = 数据不足，已兜底使用 since_inception
@@ -401,22 +403,24 @@ CREATE TABLE IF NOT EXISTS fund_nav_performance (
     PRIMARY KEY (fund_code, trade_date, period)
 );
 
--- 19. Bot 账户业绩表（区间口径，不年化；每日随快照一起刷新）
+-- 19. Bot 账户业绩表（统一年化口径；每日随快照一起刷新）
 -- 数据来源 = fund_bot_daily_snapshots 的 net_value 序列。
 -- 一行 = (bot, trade_date, run_id, period) —— 长表布局，对齐 fund_performance 的约定。
--- 区间口径：return/volatility/sharpe/calmar 都不做年化处理，反映真实窗口内的数字。
--- rf = 1.8% 年化 → rf_daily = 1.8/252 %/day；sharpe = (mean_d - rf_d) / stdev_d。
+-- 2026-06-11 起统一年化口径（与 backtest-dashboard 对齐）：vol/sharpe ×√252、
+-- calmar = 年化收益/|MDD|；return/MDD 仍是区间原值（回撤不年化）。
+-- rf 年化 → rf_daily = rf/252 %/day；sharpe = (mean_d - rf_d) / stdev_d × √252。
 -- 不满窗口（如刚建仓 5 天 < 21 天 1m）→ 兜底使用 since_inception 全量序列，fallback=1 标识。
 CREATE TABLE IF NOT EXISTS fund_bot_performance (
     bot_id              TEXT NOT NULL,
     trade_date          TEXT NOT NULL,
     run_id              TEXT NOT NULL DEFAULT '',
     period              TEXT NOT NULL,            -- '1m' | '3m' | '6m' | '1y' | 'since_inception'
-    return_pct          REAL,                     -- 区间收益（end_nav/start_nav - 1）
-    max_drawdown_pct    REAL,                     -- 区间最大回撤（peak-to-trough on net_value）
-    volatility_pct      REAL,                     -- 区间日收益率标准差（不年化）
-    sharpe_ratio        REAL,                     -- (mean_daily - rf_daily) / stdev_daily（不年化）
-    calmar_ratio        REAL,                     -- return_pct / abs(max_drawdown_pct)；MDD≈0 时 NULL
+    return_pct          REAL,                     -- 区间收益（end_nav/start_nav - 1，不年化）
+    annualized_return_pct REAL,                   -- 年化收益（(1+return)^(252/(data_points-1)) - 1）
+    max_drawdown_pct    REAL,                     -- 区间最大回撤（peak-to-trough on net_value，不年化）
+    volatility_pct      REAL,                     -- 年化波动率（stdev_daily × √252）
+    sharpe_ratio        REAL,                     -- (mean_daily - rf_daily) / stdev_daily × √252（年化）
+    calmar_ratio        REAL,                     -- annualized_return_pct / abs(max_drawdown_pct)；MDD≈0 时 NULL
     data_points         INTEGER,                  -- 该窗口实际样本数
     window_target_days  INTEGER,                  -- 目标窗口交易日数（21/63/126/252；since_inception=NULL）
     fallback            INTEGER NOT NULL DEFAULT 0,  -- 1 = 数据不足，已兜底使用 since_inception
@@ -487,6 +491,14 @@ def _migrate_freeze_columns(conn):
         conn.execute("ALTER TABLE fund_bot_holdings ADD COLUMN pending_sell_shares REAL NOT NULL DEFAULT 0")
     if not _column_exists(conn, "fund_bot_daily_snapshots", "cash_receivable"):
         conn.execute("ALTER TABLE fund_bot_daily_snapshots ADD COLUMN cash_receivable REAL NOT NULL DEFAULT 0")
+
+
+def _migrate_perf_annualized_columns(conn):
+    """两张派生业绩表加 annualized_return_pct 列（2026-06-11 统一年化口径）。
+    旧行 NULL——历史数据由 scripts 侧全量重算回填（INSERT OR REPLACE 覆盖）。"""
+    for table in ("fund_bot_performance", "fund_nav_performance"):
+        if not _column_exists(conn, table, "annualized_return_pct"):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN annualized_return_pct REAL")
 
 
 def _migrate_run_id_columns(conn):
@@ -567,6 +579,7 @@ def init_db():
     conn.executescript(SCHEMA_SQL)
     _migrate_paradigm_columns(conn)
     _migrate_freeze_columns(conn)
+    _migrate_perf_annualized_columns(conn)
     _migrate_run_id_columns(conn)
     conn.commit()
     conn.close()

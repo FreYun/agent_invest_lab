@@ -179,11 +179,13 @@ function maxDrawdown(series){
   return mdd  // negative (e.g. -0.05 = -5%)
 }
 function computeMetrics(series){
-  // Interval (un-annualized) metrics only.
-  // Sharpe = mean(daily_return) / stddev(daily_return)  — per-day risk-adjusted return
-  // Calmar = cumReturn / |maxDD|                        — interval return per unit of worst drawdown
+  // 年化口径（基于交易日数 TRADING_DAYS=252）：
+  // 年化收益 = (1+cumReturn)^(252/区间交易日数) - 1
+  // Sharpe  = mean(daily_return) / stddev(daily_return) * sqrt(252)
+  // Sortino = mean(daily_return) / downsideDev * sqrt(252)
+  // Calmar  = annReturn / |maxDD|
   if (!series || series.length < 2) {
-    return { days: series?.length ?? 0, cumReturn: null, maxDD: null, maxLoss: null, sharpe: null, sortino: null, calmar: null }
+    return { days: series?.length ?? 0, cumReturn: null, annReturn: null, maxDD: null, maxLoss: null, sharpe: null, sortino: null, calmar: null }
   }
   const first = Number(series[0].net_value)
   const last = Number(series[series.length - 1].net_value)
@@ -193,6 +195,9 @@ function computeMetrics(series){
   for (const p of series){ const v = Number(p.net_value); if (Number.isFinite(v) && v < minNV) minNV = v }
   const maxLoss = (first > 0 && Number.isFinite(minNV)) ? Math.min(0, minNV / first - 1) : null
   const rets = dailyReturns(series)
+  // 区间交易日数 = 日收益样本数（净值点数 - 1）
+  const periods = rets.length
+  const annReturn = (cumReturn != null && periods > 0) ? Math.pow(1 + cumReturn, TRADING_DAYS / periods) - 1 : null
   const mean = rets.length ? rets.reduce((s, x) => s + x, 0) / rets.length : 0
   const variance = rets.length > 1 ? rets.reduce((s, x) => s + (x - mean) ** 2, 0) / (rets.length - 1) : 0
   const stddev = Math.sqrt(variance)
@@ -202,10 +207,11 @@ function computeMetrics(series){
   const maxDD = maxDrawdown(series)
   // 收益率为负时，夏普/索提诺/卡玛没有经济含义，不计算（显示 --）
   const negative = cumReturn != null && cumReturn < 0
-  const sharpe = (!negative && stddev > 0) ? mean / stddev : null
-  const sortino = (!negative && downsideDev > 0) ? mean / downsideDev : null
-  const calmar = (!negative && maxDD != null && maxDD < 0 && cumReturn != null) ? cumReturn / Math.abs(maxDD) : null
-  return { days: series.length, cumReturn, maxDD, maxLoss, sharpe, sortino, calmar }
+  const annFactor = Math.sqrt(TRADING_DAYS)
+  const sharpe = (!negative && stddev > 0) ? mean / stddev * annFactor : null
+  const sortino = (!negative && downsideDev > 0) ? mean / downsideDev * annFactor : null
+  const calmar = (!negative && maxDD != null && maxDD < 0 && annReturn != null) ? annReturn / Math.abs(maxDD) : null
+  return { days: series.length, cumReturn, annReturn, maxDD, maxLoss, sharpe, sortino, calmar }
 }
 function rangeForPreset(preset, series){
   if (!series?.length || preset === 'all') return { from: null, to: null }
@@ -809,11 +815,12 @@ function renderMetricsPanel(bot){
   const row = (label, botVal, benchVal, asPct = false) => `<tr><td>${label}</td><td>${asPct ? fmtMetricPct(botVal) : fmtMetricNum(botVal)}</td><td>${asPct ? fmtMetricPct(benchVal) : fmtMetricNum(benchVal)}</td>${diffCell(botVal, benchVal, asPct)}</tr>`
   return `<table class="metrics-table"><thead><tr><th>指标</th><th>${esc(bot.botId)}</th><th>${benchLabel}</th><th>与基准对比</th></tr></thead><tbody>`
     + row('累计收益', bm.cumReturn, km.cumReturn, true)
+    + row('年化收益', bm.annReturn, km.annReturn, true)
     + row('最大回撤', bm.maxDD, km.maxDD, true)
     + row('最大亏损', bm.maxLoss, km.maxLoss, true)
-    + row('夏普比率', bm.sharpe, km.sharpe, false)
-    + row('索提诺比率', bm.sortino, km.sortino, false)
-    + row('卡玛比率', bm.calmar, km.calmar, false)
+    + row('夏普比率(年化)', bm.sharpe, km.sharpe, false)
+    + row('索提诺比率(年化)', bm.sortino, km.sortino, false)
+    + row('卡玛比率(年化)', bm.calmar, km.calmar, false)
     + `<tr><td>样本天数</td><td>${bm.days}</td><td>${km.days}</td><td></td></tr>`
     + `</tbody></table>`
 }
@@ -1006,7 +1013,7 @@ function renderDetail(bot){
   const chartHtml = typeof chartData === 'string'
     ? chartData
     : chartData.html + renderPositionChart(bot, chartData.dateToIdx, chartData.xAxisDates)
-  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内）</h2>${renderMetricsPanel(bot)}</div>${renderReflectionPanel(bot)}<div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
+  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div><div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div id="holdingsBody">${renderHoldings(bot)}</div></div></div><div class="panel"><h2>指标对比（区间内 · 比率按252交易日年化）</h2>${renderMetricsPanel(bot)}</div>${renderReflectionPanel(bot)}<div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
   if (typeof chartData !== 'string') attachCursor(byId('detailRoot'), bot, chartData)
   if (state.reflectionDate) void loadReflectionForDate(bot, state.reflectionDate)  // 渲染后拉当前日反思(默认最新日)
 }

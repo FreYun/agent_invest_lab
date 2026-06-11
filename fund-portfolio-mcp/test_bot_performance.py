@@ -1,9 +1,10 @@
 """Tests for fund_bot_performance table + _compute_bot_performance + portfolio_get_my_performance.interval_metrics
 
-口径（按用户要求）：
+口径（2026-06-11 统一年化，与 backtest-dashboard 对齐）：
 - 窗口用交易日（1m=21 / 3m=63 / 6m=126 / 1y=252）
-- rf = 1.8% 年化 → rf_daily = 1.8 / 252
-- 全部不年化（区间收益、区间波动、区间夏普、区间卡玛）
+- rf = 1% 年化 → rf_daily = 1 / 252
+- vol/sharpe ×√252、calmar = 年化收益/|MDD|、annualized_return_pct 单列；
+  return_pct / max_drawdown_pct 保持区间原值
 - 不满窗口兜底到 since_inception，fallback=1
 """
 import asyncio
@@ -80,7 +81,8 @@ def test_init_db_creates_bot_performance_table(tmp_db):
     cols = set(_column_names(conn, "fund_bot_performance"))
     expected = {
         "bot_id", "trade_date", "run_id", "period",
-        "return_pct", "max_drawdown_pct", "volatility_pct", "sharpe_ratio", "calmar_ratio",
+        "return_pct", "annualized_return_pct", "max_drawdown_pct",
+        "volatility_pct", "sharpe_ratio", "calmar_ratio",
         "data_points", "window_target_days", "fallback", "updated_at",
     }
     assert expected.issubset(cols), f"missing cols: {expected - cols}"
@@ -160,9 +162,9 @@ def test_compute_bot_performance_return_pct_uses_window_nav(reload_server, tmp_d
     conn.close()
 
 
-def test_compute_bot_performance_sharpe_uses_rf_18_pct(reload_server, tmp_db):
-    """构造一段日收益恒为 +0.05% 的序列，验证夏普 = (0.05 - 1.8/252) / 0 (stdev=0 → NULL)
-    然后构造有方差的序列，验证夏普 = (mean - rf_daily) / stdev。"""
+def test_compute_bot_performance_sharpe_annualized(reload_server, tmp_db):
+    """构造有方差的序列，验证年化口径：
+    vol = stdev_daily × √252；sharpe = (mean - rf_daily) / stdev × √252（rf=1%/252）。"""
     s = reload_server
     # 30 天 +0.05% 日复利 + ±0.10% 噪声（位置 1/-1 交替）
     navs = [1.0]
@@ -186,18 +188,21 @@ def test_compute_bot_performance_sharpe_uses_rf_18_pct(reload_server, tmp_db):
     n = len(full_dailies)
     mean_d = sum(full_dailies) / n
     var_d = sum((r - mean_d) ** 2 for r in full_dailies) / (n - 1)
-    expected_std = var_d ** 0.5
-    rf_daily = 1.8 / 252  # 用户指定 1.8%
-    expected_sharpe = (mean_d - rf_daily) / expected_std
-    assert abs(row["volatility_pct"] - expected_std) < 1e-6, \
-        f"vol mismatch: got {row['volatility_pct']}, expected {expected_std}"
-    assert abs(row["sharpe_ratio"] - expected_sharpe) < 1e-6, \
+    std_d = var_d ** 0.5
+    ann = 252 ** 0.5
+    rf_daily = 1.0 / 252  # _BOT_PERF_RF_ANNUAL_PCT = 1
+    expected_vol = std_d * ann
+    expected_sharpe = (mean_d - rf_daily) / std_d * ann
+    assert abs(row["volatility_pct"] - expected_vol) < 1e-4, \
+        f"vol mismatch: got {row['volatility_pct']}, expected {expected_vol}"
+    assert abs(row["sharpe_ratio"] - expected_sharpe) < 1e-4, \
         f"sharpe mismatch: got {row['sharpe_ratio']}, expected {expected_sharpe}"
     conn.close()
 
 
-def test_compute_bot_performance_calmar_is_return_over_abs_mdd(reload_server, tmp_db):
-    """V 字形 nav: 1.00 → 0.90 → 1.05 (MDD = -10%, total return = +5%, calmar = 0.5)."""
+def test_compute_bot_performance_calmar_is_ann_return_over_abs_mdd(reload_server, tmp_db):
+    """V 字形 nav: 1.00 → 0.90 → 1.05 (MDD = -10%, total return = +5%)。
+    年化口径：annualized_return = (1.05^(252/20) - 1)*100，calmar = ann_return / 10。"""
     s = reload_server
     # 21 天的 V 形：前 11 天 1.00 线性降到 0.90，后 10 天再升到 1.05
     navs = []
@@ -211,12 +216,17 @@ def test_compute_bot_performance_calmar_is_return_over_abs_mdd(reload_server, tm
     conn = sqlite3.connect(tmp_db)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT return_pct, max_drawdown_pct, calmar_ratio FROM fund_bot_performance "
+        "SELECT return_pct, annualized_return_pct, max_drawdown_pct, calmar_ratio "
+        "FROM fund_bot_performance "
         "WHERE bot_id='botD' AND trade_date='2024-01-22' AND period='since_inception'"
     ).fetchone()
     assert abs(row["return_pct"] - 5.0) < 0.01
     assert abs(row["max_drawdown_pct"] - (-10.0)) < 0.01
-    assert abs(row["calmar_ratio"] - 0.5) < 0.01  # 5 / 10 = 0.5
+    # 年化基数 = 21 个净值点 - 1 = 20 个交易日
+    expected_ann = (1.05 ** (252 / 20) - 1) * 100
+    assert abs(row["annualized_return_pct"] - expected_ann) < 0.01, \
+        f"ann return mismatch: got {row['annualized_return_pct']}, expected {expected_ann}"
+    assert abs(row["calmar_ratio"] - expected_ann / 10.0) < 0.01
     conn.close()
 
 
@@ -238,9 +248,8 @@ def test_compute_bot_performance_calmar_null_when_no_drawdown(reload_server, tmp
     conn.close()
 
 
-def test_compute_bot_performance_no_annualization_in_sharpe(reload_server, tmp_db):
-    """验证夏普没年化：和 portfolio_get_my_performance 旧版本的 sharpe_ratio_rf0
-    （年化版）数量级应当差大约 √252 ≈ 15.87 倍。"""
+def test_compute_bot_performance_sharpe_carries_annualization_factor(reload_server, tmp_db):
+    """验证夏普已年化：日频夏普 ~1 量级的序列，年化后应带 √252 ≈ 15.87 倍因子。"""
     s = reload_server
     # 30 天恒正收益 + 小方差
     daily_returns_pct = [0.1 + (0.05 if i % 2 == 0 else -0.05) for i in range(30)]
@@ -252,13 +261,13 @@ def test_compute_bot_performance_no_annualization_in_sharpe(reload_server, tmp_d
         s._compute_bot_performance(conn, "botF", "2024-02-01", run_id="test-run")
     conn = sqlite3.connect(tmp_db)
     conn.row_factory = sqlite3.Row
-    sharpe_interval = conn.execute(
+    sharpe = conn.execute(
         "SELECT sharpe_ratio FROM fund_bot_performance "
         "WHERE bot_id='botF' AND trade_date='2024-02-01' AND period='since_inception'"
     ).fetchone()["sharpe_ratio"]
-    # 区间夏普应该 < 1（每日 0.1% mean, daily 0.05 stdev, rf_daily≈0.007 → ~1.8 范围）
-    # 关键是：不应当带 √252 因子（年化版的话应该是 ~28 量级）
-    assert abs(sharpe_interval) < 5, f"区间夏普应在 -5~5 范围（没年化），got {sharpe_interval}"
+    # 日频夏普 ~1.5 量级（mean≈0.097, std≈0.06, rf_daily≈0.004）；
+    # 年化后 ×√252 应落在 5 以上——如果 < 5 说明 √252 因子又被丢了。
+    assert sharpe > 5, f"年化夏普应带 √252 因子（>5），got {sharpe}"
     conn.close()
 
 
@@ -315,6 +324,7 @@ def test_portfolio_get_my_performance_includes_interval_metrics(reload_server, t
     assert set(im["metrics"].keys()) == {"1m", "3m", "6m", "1y", "since_inception"}
     for p, m in im["metrics"].items():
         assert "return_pct" in m
+        assert "annualized_return_pct" in m
         assert "max_drawdown_pct" in m
         assert "volatility_pct" in m
         assert "sharpe_ratio" in m
@@ -379,8 +389,8 @@ def test_portfolio_get_my_performance_holdings_performance(reload_server, tmp_db
         assert entry["perf_as_of_date"] is not None
         assert set(entry["metrics"].keys()) == {"1m", "3m", "6m", "1y", "since_inception"}
         for p, m in entry["metrics"].items():
-            for k in ("return_pct", "max_drawdown_pct", "volatility_pct",
-                      "sharpe_ratio", "calmar_ratio", "data_points",
+            for k in ("return_pct", "annualized_return_pct", "max_drawdown_pct",
+                      "volatility_pct", "sharpe_ratio", "calmar_ratio", "data_points",
                       "window_target_days", "fallback"):
                 assert k in m
     # 日期与账户 perf 一致（NAV / 快照都在 2024-01-06）

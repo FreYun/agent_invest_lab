@@ -354,21 +354,23 @@ function performanceBlock(perf: PerformanceData): string {
 ${lines.join('\n')}`
 }
 
-// 区间业绩 5 档（1m/3m/6m/1y/since_inception）。所有指标"区间口径不年化"，
-// 与 fund_bot_performance 的存储一致。fallback=true 标识窗口数据不足、退化为
-// since_inception，bot 看到 fallback 标记就知道这一行别太当真。
+// 区间业绩 5 档（1m/3m/6m/1y/since_inception）。统一年化口径：收益/MDD 是区间原值，
+// 年化收益/波动/Sharpe/Calmar 按 252 交易日年化——与 fund_bot_performance 的存储一致。
+// fallback=true 标识窗口数据不足、退化为 since_inception，bot 看到 fallback 标记
+// 就知道这一行别太当真。
 function intervalMetricsBlock(rows: IntervalMetricRow[], asOfPerfDate: string | null, rfAnnualPct: number): string {
   if (rows.length === 0) return ''
-  const header = '区间               收益%       MDD%        波动%       Sharpe       Calmar      样本数      备注'
+  const header = '区间               收益%      年化收益%      MDD%      年化波动%     Sharpe       Calmar      样本数      备注'
   const lineRows = rows.map(r => {
+    const annRet = r.annualized_return_pct == null ? 'n/a' : fmtPct(r.annualized_return_pct)
     const calmar = r.calmar_ratio === null ? 'n/a' : fmtNum(r.calmar_ratio, 4)
     const note = r.fallback ? '⚠ 窗口数据不足，退化 since_inception' : ''
-    return `  ${r.period.padEnd(16)} ${fmtPct(r.return_pct).padStart(8)}   ${fmtPct(r.max_drawdown_pct).padStart(8)}   ${fmtPct(r.volatility_pct).padStart(8)}   ${fmtNum(r.sharpe_ratio, 4).padStart(8)}   ${calmar.padStart(8)}   ${String(r.data_points).padStart(6)}   ${note}`
+    return `  ${r.period.padEnd(16)} ${fmtPct(r.return_pct).padStart(8)}   ${annRet.padStart(9)}   ${fmtPct(r.max_drawdown_pct).padStart(8)}   ${fmtPct(r.volatility_pct).padStart(9)}   ${fmtNum(r.sharpe_ratio, 4).padStart(8)}   ${calmar.padStart(8)}   ${String(r.data_points).padStart(6)}   ${note}`
   })
   const asOf = asOfPerfDate ? `截至 ${asOfPerfDate}` : ''
   return `
 
-【区间业绩（${asOf}，区间口径不年化，rf=${fmtPct(rfAnnualPct, 2)} 年化）】
+【区间业绩（${asOf}，年化收益/波动/Sharpe/Calmar 按252交易日年化，rf=${fmtPct(rfAnnualPct, 2)} 年化）】
 ${header}
 ${lineRows.join('\n')}`
 }

@@ -271,7 +271,16 @@ portfolio_get_my_performance(bot_id, as_of_date, daily_series_limit=120)
   "daily_series": [{ "trade_date", "total_value", "net_value",
                       "daily_return_pct", "cumulative_return_pct",
                       "max_drawdown_pct" }],
-  "daily_series_truncated", "daily_series_total"
+  "daily_series_truncated", "daily_series_total",
+  "interval_metrics": {
+    "as_of_perf_date", "rf_annual_pct", "rf_daily_pct", "trading_days_per_year",
+    "metrics": {  // 账户级 5 个 period：1m/3m/6m/1y/since_inception
+      "<period>": { "return_pct", "annualized_return_pct", "max_drawdown_pct",
+                    "volatility_pct", "sharpe_ratio", "calmar_ratio",
+                    "data_points", "window_target_days", "fallback" }
+    },
+    "holdings_performance": { "<fund_code>": { /* 同结构 metrics + 持仓信息 */ } }
+  }
 }
 ```
 
@@ -280,6 +289,11 @@ portfolio_get_my_performance(bot_id, as_of_date, daily_series_limit=120)
 - `total_proceeds` = 同周期内所有 SELL 单 `confirmed_amount` 之和
 - `return_pct` = `(proceeds - invested) / invested × 100`
 - `as_of_date` 之前没有任何 daily snapshot 时返回 `summary: null` + 友好 message
+- `interval_metrics` 统一年化口径（2026-06-11 起，与 backtest-dashboard 对齐）：
+  `annualized_return_pct = (1+return)^(252/区间交易日数) - 1`、
+  `volatility_pct = stdev_daily × √252`、`sharpe_ratio = (mean_d - rf_d)/stdev_d × √252`、
+  `calmar_ratio = annualized_return_pct / |max_drawdown_pct|`；
+  `return_pct` / `max_drawdown_pct` 保持区间原值（回撤不年化）
 
 ---
 

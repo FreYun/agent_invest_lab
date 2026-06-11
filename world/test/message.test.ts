@@ -210,8 +210,8 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
         intervals: {
           as_of_perf_date: '2024-03-16', rf_annual_pct: 1.8, rf_daily_pct: 0.007143, trading_days_per_year: 252,
           rows: [
-            { period: '1m', return_pct: 0.02, max_drawdown_pct: -0.05, volatility_pct: 0.18, sharpe_ratio: 0.0033, calmar_ratio: 0.4, data_points: 2, window_target_days: 21, fallback: true },
-            { period: 'since_inception', return_pct: 0.02, max_drawdown_pct: -0.05, volatility_pct: 0.18, sharpe_ratio: 0.0033, calmar_ratio: 0.4, data_points: 2, window_target_days: null, fallback: false },
+            { period: '1m', return_pct: 0.02, annualized_return_pct: 5.17, max_drawdown_pct: -0.05, volatility_pct: 2.86, sharpe_ratio: 0.0524, calmar_ratio: 103.4, data_points: 2, window_target_days: 21, fallback: true },
+            { period: 'since_inception', return_pct: 0.02, annualized_return_pct: 5.17, max_drawdown_pct: -0.05, volatility_pct: 2.86, sharpe_ratio: 0.0524, calmar_ratio: 103.4, data_points: 2, window_target_days: null, fallback: false },
           ],
         },
         completedPositions: [
@@ -270,10 +270,12 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   assert.match(withCtx, /已平仓持仓/)
   assert.match(withCtx, /510880.*红利ETF.*2024-02-01.*2024-03-05/)
   assert.match(withCtx, /\+5\.50%/)
-  // Interval metrics block — both periods + fallback marker
+  // Interval metrics block — both periods + fallback marker + 年化口径标注/列
   assert.match(withCtx, /区间业绩（截至 2024-03-16/)
-  assert.match(withCtx, /1m\s+\+0\.02%/)
-  assert.match(withCtx, /since_inception\s+\+0\.02%/)
+  assert.match(withCtx, /按252交易日年化/)
+  assert.match(withCtx, /年化收益%/)
+  assert.match(withCtx, /1m\s+\+0\.02%\s+\+5\.17%/)
+  assert.match(withCtx, /since_inception\s+\+0\.02%\s+\+5\.17%/)
   assert.match(withCtx, /窗口数据不足/)
   // Held NAV block
   assert.match(withCtx, /持仓基金近 20 交易日 NAV/)

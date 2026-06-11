@@ -274,10 +274,13 @@ def _calc_max_drawdown(nav_list: list[float]) -> float:
 
 # fund_bot_performance 区间业绩计算的常量。
 # rf 1% 年化由用户指定；交易日按 252 天换算到日化 rf。
-# 所有指标都是区间口径（不年化），用户明确要求"区间波动率，不要年化"。
+# 2026-06-11 起统一年化口径（与 backtest-dashboard 对齐）：
+#   vol/sharpe ×√252、calmar = 年化收益/|MDD|、另存 annualized_return_pct；
+#   return_pct / max_drawdown_pct 仍是区间原值（回撤不年化）。
 _BOT_PERF_RF_ANNUAL_PCT = 1
 _BOT_PERF_TRADING_DAYS_PER_YEAR = 252
 _BOT_PERF_RF_DAILY_PCT = _BOT_PERF_RF_ANNUAL_PCT / _BOT_PERF_TRADING_DAYS_PER_YEAR
+_BOT_PERF_ANN_FACTOR = _BOT_PERF_TRADING_DAYS_PER_YEAR ** 0.5  # √252，日频比率年化系数
 # 窗口口径（交易日，不是自然日）。since_inception 取全量序列。
 _BOT_PERF_PERIODS: list[tuple[str, int | None]] = [
     ("1m", 21),
@@ -298,16 +301,31 @@ def _stdev(values: list[float]) -> float:
     return var ** 0.5
 
 
+def _annualize_return_pct(return_pct: float, span_days: int) -> float | None:
+    """区间收益（%）按交易日数复利年化：((1+r)^(252/span) - 1) * 100。
+
+    span_days = 区间内净值变动的交易日数（净值点数 - 1）。
+    span<=0 或 1+r<=0（净值亏穿，幂运算无意义）→ None。
+    """
+    if span_days <= 0:
+        return None
+    base = 1 + return_pct / 100
+    if base <= 0:
+        return None
+    return (base ** (_BOT_PERF_TRADING_DAYS_PER_YEAR / span_days) - 1) * 100
+
+
 def _compute_bot_performance(conn, bot_id: str, trade_date: str, run_id: str = "") -> None:
     """从 fund_bot_daily_snapshots 的 net_value/daily_return_pct 序列计算区间业绩，写
     fund_bot_performance 5 行（period = 1m/3m/6m/1y/since_inception）。
 
-    区间口径（不年化）：
-      - return_pct          = end_nav / start_nav - 1
-      - volatility_pct      = stdev(daily_return_pct in window)   ← 不乘 √252
-      - sharpe_ratio        = (mean(daily) - rf_daily) / stdev(daily)
-      - calmar_ratio        = return_pct / abs(max_drawdown_pct)
-      - max_drawdown_pct    = peak-to-trough on net_value within the window
+    统一年化口径（与 backtest-dashboard 对齐；return/MDD 保持区间原值）：
+      - return_pct            = end_nav / start_nav - 1（区间原值，不年化）
+      - annualized_return_pct = ((1+return_pct)^(252/(data_points-1)) - 1)
+      - volatility_pct        = stdev(daily_return_pct in window) × √252（年化）
+      - sharpe_ratio          = (mean(daily) - rf_daily) / stdev(daily) × √252（年化）
+      - calmar_ratio          = annualized_return_pct / abs(max_drawdown_pct)
+      - max_drawdown_pct      = peak-to-trough on net_value within the window（不年化）
 
     不满窗口（如建仓 10 天 < 21 天 1m）→ 兜底使用 since_inception 全量序列，fallback=1 标识。
 
@@ -352,37 +370,41 @@ def _compute_bot_performance(conn, bot_id: str, trade_date: str, run_id: str = "
         nav_list = [float(r["net_value"]) for r in window if r["net_value"] is not None]
         max_dd_pct = _calc_max_drawdown(nav_list) if nav_list else 0.0
 
-        # 区间波动率 + 区间夏普（都不年化）
+        # 年化收益：年化基数 = 净值端点跨越的交易日数（点数 - 1）
+        annualized_return_pct = _annualize_return_pct(return_pct, data_points - 1)
+
+        # 年化波动率 + 年化夏普（×√252）
         daily_returns = [float(r["daily_return_pct"]) for r in window if r["daily_return_pct"] is not None]
         volatility_pct: float | None
         sharpe_ratio: float | None
         if len(daily_returns) >= 2:
             mean_d = sum(daily_returns) / len(daily_returns)
             std_d = _stdev(daily_returns)
-            volatility_pct = std_d
+            volatility_pct = std_d * _BOT_PERF_ANN_FACTOR
             if std_d > 1e-9:
-                sharpe_ratio = (mean_d - _BOT_PERF_RF_DAILY_PCT) / std_d
+                sharpe_ratio = (mean_d - _BOT_PERF_RF_DAILY_PCT) / std_d * _BOT_PERF_ANN_FACTOR
             else:
                 sharpe_ratio = None
         else:
             volatility_pct = None
             sharpe_ratio = None
 
-        # 区间卡玛：MDD≈0 → NULL（避免无穷大）
-        if max_dd_pct is not None and abs(max_dd_pct) > 1e-9:
-            calmar_ratio: float | None = return_pct / abs(max_dd_pct)
+        # 年化卡玛 = 年化收益 / |MDD|：MDD≈0 → NULL（避免无穷大）
+        if max_dd_pct is not None and abs(max_dd_pct) > 1e-9 and annualized_return_pct is not None:
+            calmar_ratio: float | None = annualized_return_pct / abs(max_dd_pct)
         else:
             calmar_ratio = None
 
         conn.execute(
             "INSERT OR REPLACE INTO fund_bot_performance "
-            "(bot_id, trade_date, run_id, period, return_pct, max_drawdown_pct, "
-            " volatility_pct, sharpe_ratio, calmar_ratio, data_points, "
+            "(bot_id, trade_date, run_id, period, return_pct, annualized_return_pct, "
+            " max_drawdown_pct, volatility_pct, sharpe_ratio, calmar_ratio, data_points, "
             " window_target_days, fallback, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
             (
                 bot_id, trade_date, run_id or "", period,
                 _r(return_pct, 4),
+                _r(annualized_return_pct, 4) if annualized_return_pct is not None else None,
                 _r(max_dd_pct, 4) if max_dd_pct is not None else None,
                 _r(volatility_pct, 6) if volatility_pct is not None else None,
                 _r(sharpe_ratio, 6) if sharpe_ratio is not None else None,
@@ -398,13 +420,17 @@ def _compute_fund_nav_performance(conn, fund_code: str, trade_date: str) -> None
     """从 fund_nav 的 acc_nav/daily_return_pct 序列计算单基金的区间业绩，写
     fund_nav_performance 5 行（period = 1m/3m/6m/1y/since_inception）。
 
-    与 _compute_bot_performance 的口径完全对齐（区间，不年化，rf=1%/252）：
-      - 用 acc_nav（累计净值）算 return_pct 和 max_drawdown_pct（含分红再投资）
-      - 用 daily_return_pct 算 volatility_pct 和 sharpe_ratio（已含分红的口径）
+    与 _compute_bot_performance 的口径完全对齐（统一年化口径，rf=1%/252）：
+      - 用 COALESCE(acc_nav, nav) 算 return_pct 和 max_drawdown_pct（区间原值）。
+        本库 acc_nav 实际恒空、复权单位净值落在 nav 列（复权净值已含分红再投，
+        等价 acc_nav 的收益口径）——与 scripts/fund-pool-ingest.py 同口径；
+        之前严格用 acc_nav 会算出 return=0/MDD=0 的废行。
+      - annualized_return_pct / volatility_pct(×√252) / sharpe_ratio(×√252) /
+        calmar_ratio(年化收益/|MDD|) 全部年化
       - 不满窗口 → fallback 到 since_inception 全量
     """
     rows = conn.execute(
-        "SELECT nav_date, acc_nav, daily_return_pct FROM fund_nav "
+        "SELECT nav_date, COALESCE(acc_nav, nav) AS acc_nav, daily_return_pct FROM fund_nav "
         "WHERE fund_code = ? AND nav_date <= ? ORDER BY nav_date",
         (fund_code, trade_date)
     ).fetchall()
@@ -439,37 +465,41 @@ def _compute_fund_nav_performance(conn, fund_code: str, trade_date: str) -> None
         acc_navs = [float(r["acc_nav"]) for r in window if r["acc_nav"] is not None]
         max_dd_pct = _calc_max_drawdown(acc_navs) if acc_navs else 0.0
 
-        # 区间波动 + 区间夏普（不年化）
+        # 年化收益：年化基数 = 净值端点跨越的交易日数（点数 - 1）
+        annualized_return_pct = _annualize_return_pct(return_pct, data_points - 1)
+
+        # 年化波动 + 年化夏普（×√252）
         daily_returns = [float(r["daily_return_pct"]) for r in window if r["daily_return_pct"] is not None]
         volatility_pct: float | None
         sharpe_ratio: float | None
         if len(daily_returns) >= 2:
             mean_d = sum(daily_returns) / len(daily_returns)
             std_d = _stdev(daily_returns)
-            volatility_pct = std_d
+            volatility_pct = std_d * _BOT_PERF_ANN_FACTOR
             if std_d > 1e-9:
-                sharpe_ratio = (mean_d - _BOT_PERF_RF_DAILY_PCT) / std_d
+                sharpe_ratio = (mean_d - _BOT_PERF_RF_DAILY_PCT) / std_d * _BOT_PERF_ANN_FACTOR
             else:
                 sharpe_ratio = None
         else:
             volatility_pct = None
             sharpe_ratio = None
 
-        # 区间卡玛
-        if max_dd_pct is not None and abs(max_dd_pct) > 1e-9:
-            calmar_ratio: float | None = return_pct / abs(max_dd_pct)
+        # 年化卡玛 = 年化收益 / |MDD|
+        if max_dd_pct is not None and abs(max_dd_pct) > 1e-9 and annualized_return_pct is not None:
+            calmar_ratio: float | None = annualized_return_pct / abs(max_dd_pct)
         else:
             calmar_ratio = None
 
         conn.execute(
             "INSERT OR REPLACE INTO fund_nav_performance "
-            "(fund_code, trade_date, period, return_pct, max_drawdown_pct, "
-            " volatility_pct, sharpe_ratio, calmar_ratio, data_points, "
+            "(fund_code, trade_date, period, return_pct, annualized_return_pct, "
+            " max_drawdown_pct, volatility_pct, sharpe_ratio, calmar_ratio, data_points, "
             " window_target_days, fallback, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
             (
                 fund_code, trade_date, period,
                 _r(return_pct, 4),
+                _r(annualized_return_pct, 4) if annualized_return_pct is not None else None,
                 _r(max_dd_pct, 4) if max_dd_pct is not None else None,
                 _r(volatility_pct, 6) if volatility_pct is not None else None,
                 _r(sharpe_ratio, 6) if sharpe_ratio is not None else None,
@@ -1082,10 +1112,12 @@ async def get_fund_perf(fund_code: str) -> str:
       intervals          → 老 fund_performance 表的外部 upsert 业绩（含同类排名）；
                             按最新 as_of_date 取该日全部 period 行。
       nav_intervals      → fund_nav_performance 表的 NAV 派生业绩（与 bot 账户业绩同口径，
-                            区间不年化，rf=1%/252）；按最新 trade_date 取该日全部 period 行。
-                            字段：return_pct / max_drawdown_pct / volatility_pct /
-                            sharpe_ratio / calmar_ratio / data_points / window_target_days /
-                            fallback（1=数据不足兜底到 since_inception）。
+                            年化：vol/sharpe ×√252、calmar=年化收益/|MDD|，rf=1%/252；
+                            return_pct/max_drawdown_pct 为区间原值）；
+                            按最新 trade_date 取该日全部 period 行。
+                            字段：return_pct / annualized_return_pct / max_drawdown_pct /
+                            volatility_pct / sharpe_ratio / calmar_ratio / data_points /
+                            window_target_days / fallback（1=数据不足兜底到 since_inception）。
     任一表无数据时对应字段返回空列表；两个都没数据才认为是真"无绩效"。
     """
     with get_conn() as conn:
@@ -1102,7 +1134,7 @@ async def get_fund_perf(fund_code: str) -> str:
             intervals = []
 
         nav_rows = conn.execute(
-            "SELECT trade_date, period, return_pct, max_drawdown_pct, "
+            "SELECT trade_date, period, return_pct, annualized_return_pct, max_drawdown_pct, "
             " volatility_pct, sharpe_ratio, calmar_ratio, "
             " data_points, window_target_days, fallback "
             "FROM fund_nav_performance WHERE fund_code = ? ORDER BY trade_date DESC",
@@ -1981,17 +2013,20 @@ async def portfolio_get_my_performance(
                          metrics              → 账户级（fund_bot_performance），5 个 period 一次性返回：
                                                  - 1m / 3m / 6m / 1y：21/63/126/252 个交易日窗口；不满窗口兜底到 since_inception，fallback=true 标识
                                                  - since_inception：建仓以来全量
-                                                 每个 period 返回 {return_pct, max_drawdown_pct, volatility_pct,
-                                                 sharpe_ratio, calmar_ratio, data_points, window_target_days, fallback}
+                                                 每个 period 返回 {return_pct, annualized_return_pct, max_drawdown_pct,
+                                                 volatility_pct, sharpe_ratio, calmar_ratio, data_points, window_target_days, fallback}
                          holdings_performance → 当前 active 持仓的每只基金（fund_nav_performance），
                                                  key = fund_code，value 含 {fund_name, asset_class, role,
                                                  market_value, actual_weight, holding_days, unrealized_pnl_pct,
                                                  perf_as_of_date, metrics: {1m, 3m, 6m, 1y, since_inception}}
                                                  日期对齐 as_of_perf_date；个别基金当日没 perf 时 perf_as_of_date
                                                  回退到 ≤ as_of_perf_date 的最近一日（不越过 as_of_date 偷看未来）
-                         所有指标都是**区间口径不年化**；rf=1% 年化按 252 个交易日折算到日化 rf。
-                         sharpe = (mean_daily_return - rf_daily) / stdev_daily_return；
-                         calmar = return_pct / abs(max_drawdown_pct)。
+                         统一年化口径（return_pct/max_drawdown_pct 为区间原值）；
+                         rf=1% 年化按 252 个交易日折算到日化 rf。
+                         annualized_return_pct = (1+return)^(252/区间交易日数) - 1；
+                         volatility = stdev_daily × √252；
+                         sharpe = (mean_daily_return - rf_daily) / stdev_daily_return × √252；
+                         calmar = annualized_return_pct / abs(max_drawdown_pct)。
                          账户业绩源 = fund_bot_daily_snapshots.net_value 序列；
                          基金业绩源 = fund_nav.acc_nav + daily_return_pct 序列。
 
@@ -2134,7 +2169,8 @@ async def portfolio_get_my_performance(
             "max_drawdown_pct": _r(float(s["max_drawdown_pct"] or 0.0), 4),
         } for s in series_rows]
 
-        # 区间业绩（fund_bot_performance；区间口径不年化；rf=1% 年化按 252 个交易日折算到日化）
+        # 区间业绩（fund_bot_performance；vol/sharpe/calmar 年化，return/MDD 区间原值；
+        # rf=1% 年化按 252 个交易日折算到日化）
         # 取本 run 最新一日的 5 个 period 行（trade_date < as_of_date，禁止偷看未来）。
         perf_date_row = conn.execute(
             "SELECT MAX(trade_date) AS d FROM fund_bot_performance "
@@ -2145,7 +2181,8 @@ async def portfolio_get_my_performance(
         interval_metrics: dict = {}
         if perf_anchor_date:
             perf_rows = conn.execute(
-                "SELECT period, return_pct, max_drawdown_pct, volatility_pct, sharpe_ratio, "
+                "SELECT period, return_pct, annualized_return_pct, max_drawdown_pct, "
+                "  volatility_pct, sharpe_ratio, "
                 "  calmar_ratio, data_points, window_target_days, fallback "
                 "FROM fund_bot_performance "
                 "WHERE bot_id = ? AND trade_date = ? AND run_id = ?",
@@ -2154,6 +2191,7 @@ async def portfolio_get_my_performance(
             for pr in perf_rows:
                 interval_metrics[pr["period"]] = {
                     "return_pct": pr["return_pct"],
+                    "annualized_return_pct": pr["annualized_return_pct"],
                     "max_drawdown_pct": pr["max_drawdown_pct"],
                     "volatility_pct": pr["volatility_pct"],
                     "sharpe_ratio": pr["sharpe_ratio"],
@@ -2187,7 +2225,8 @@ async def portfolio_get_my_performance(
                 metrics: dict = {}
                 if fund_perf_date:
                     for r in conn.execute(
-                        "SELECT period, return_pct, max_drawdown_pct, volatility_pct, "
+                        "SELECT period, return_pct, annualized_return_pct, max_drawdown_pct, "
+                        "       volatility_pct, "
                         "       sharpe_ratio, calmar_ratio, data_points, "
                         "       window_target_days, fallback "
                         "FROM fund_nav_performance "
@@ -2196,6 +2235,7 @@ async def portfolio_get_my_performance(
                     ).fetchall():
                         metrics[r["period"]] = {
                             "return_pct": r["return_pct"],
+                            "annualized_return_pct": r["annualized_return_pct"],
                             "max_drawdown_pct": r["max_drawdown_pct"],
                             "volatility_pct": r["volatility_pct"],
                             "sharpe_ratio": r["sharpe_ratio"],
@@ -2253,7 +2293,8 @@ async def portfolio_get_my_performance(
         "daily_series": daily_series,
         "daily_series_truncated": len(snaps) > len(daily_series),
         "daily_series_total": len(snaps),
-        # 区间业绩（fund_bot_performance + fund_nav_performance）；区间口径全部不年化。
+        # 区间业绩（fund_bot_performance + fund_nav_performance）；
+        # vol/sharpe/calmar/annualized_return_pct 年化，return/MDD 区间原值。
         # account.metrics             → 整个账户的 5 个 period 指标
         # account.holdings_performance → 当前 active 持仓的每只基金各 5 个 period 指标
         # 日期对齐 as_of_perf_date；个别基金当日没 perf 时 perf_as_of_date 会回退到最近一日，
@@ -3880,7 +3921,7 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
              ps["weight"], _r(ps["daily_pnl"]), _r(ps["cumulative_return_pct"], 4), ps["holding_days"])
         )
 
-    # 区间业绩表（5 个 period 的 return/MDD/vol/sharpe/calmar，区间口径不年化）
+    # 区间业绩表（5 个 period 的 return/年化收益/MDD/vol/sharpe/calmar，年化口径）
     # 必须在 fund_bot_daily_snapshots 写入今日行之后调用——_compute_bot_performance 依赖那一行。
     _compute_bot_performance(conn, bot_id, trade_date, run_id=run_id)
 
@@ -4234,7 +4275,7 @@ async def upsert_fund_nav(navs_json: str) -> str:
     写完 fund_nav 后**自动级联刷新 fund_nav_performance**：对本批次出现的每个
     (fund_code, MAX(nav_date)) 组合调一次 _compute_fund_nav_performance。
     意味着 daily-refresh 每天灌 NAV 之后，区间业绩表（1m/3m/6m/1y/since_inception）
-    会随之刷新——区间口径不年化，rf=1%/252（与 fund_bot_performance 同口径）。
+    会随之刷新——统一年化口径，rf=1%/252（与 fund_bot_performance 同口径）。
     """
     try:
         navs = json.loads(navs_json)

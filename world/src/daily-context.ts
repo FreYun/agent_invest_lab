@@ -93,18 +93,18 @@ export interface BenchmarkSeries {
   name: string                                    // e.g. '沪深300'，or '买池 N 只等权 B&H' for multi-fund
   pointsByDate: Record<string, number>            // ISO date → cumulative % since runStartDate (run-start day = 0)
   latestCumulativePct: number | null              // convenience: cumulative pct at the last available trading date < asOfDate
-  // since-inception 区间口径风险调整指标，口径完全对齐 bot 的 _compute_bot_performance
-  // since_inception 行（rf=1%/252，波动/夏普不年化，calmar=return/|mdd|）——让 daily prompt
+  // since-inception 区间风险调整指标，口径完全对齐 bot 的 _compute_bot_performance
+  // since_inception 行（rf=1%/252，vol/sharpe ×√252、calmar=年化收益/|mdd|）——让 daily prompt
   // 能并排打出"你 vs 不择时躺平"的 Sharpe / Calmar / 回撤 / 波动，而不仅是累计收益。
   metrics?: BenchmarkMetrics
 }
 
 export interface BenchmarkMetrics {
-  return_pct: number                              // (last_nv / first_nv - 1) * 100
+  return_pct: number                              // (last_nv / first_nv - 1) * 100（区间原值）
   max_drawdown_pct: number                        // peak-to-trough on the B&H net-value series
-  volatility_pct: number | null                   // stdev(daily%) 不年化（样本 N-1），<2 个日收益 → null
-  sharpe_ratio: number | null                     // (mean_daily - rf_daily) / std_daily，不年化
-  calmar_ratio: number | null                     // return_pct / |mdd|；mdd≈0 → null
+  volatility_pct: number | null                   // stdev(daily%) × √252（年化，样本 N-1），<2 个日收益 → null
+  sharpe_ratio: number | null                     // (mean_daily - rf_daily) / std_daily × √252（年化）
+  calmar_ratio: number | null                     // 年化收益 / |mdd|；mdd≈0 → null
   data_points: number                             // 参与计算的 NAV 点数（= 交易日数）
 }
 
@@ -160,6 +160,7 @@ export interface TradesSummary {
 export interface IntervalMetricRow {
   period: '1m' | '3m' | '6m' | '1y' | 'since_inception'
   return_pct: number
+  annualized_return_pct: number | null
   max_drawdown_pct: number
   volatility_pct: number
   sharpe_ratio: number
@@ -383,6 +384,7 @@ function parseIntervalMetrics(raw: unknown): IntervalMetrics | null {
     rows.push({
       period: p,
       return_pct: Number(mr.return_pct ?? 0),
+      annualized_return_pct: mr.annualized_return_pct === null || mr.annualized_return_pct === undefined ? null : Number(mr.annualized_return_pct),
       max_drawdown_pct: Number(mr.max_drawdown_pct ?? 0),
       volatility_pct: Number(mr.volatility_pct ?? 0),
       sharpe_ratio: Number(mr.sharpe_ratio ?? 0),
@@ -610,6 +612,7 @@ const DEFAULT_BENCHMARK = { code: '000300.SH', name: '沪深300' }
 const BENCH_RF_ANNUAL_PCT = 1
 const BENCH_TRADING_DAYS_PER_YEAR = 252
 const BENCH_RF_DAILY_PCT = BENCH_RF_ANNUAL_PCT / BENCH_TRADING_DAYS_PER_YEAR
+const BENCH_ANN_FACTOR = Math.sqrt(BENCH_TRADING_DAYS_PER_YEAR)  // √252，对齐 _BOT_PERF_ANN_FACTOR
 
 // 样本标准差（N-1 分母）——对齐 server.py:_stdev。<2 点返回 0。
 function sampleStdev(values: number[]): number {
@@ -634,11 +637,12 @@ function maxDrawdownPct(navList: number[]): number {
 }
 
 // 从 B&H 净值序列（norm = nav/base，runStartDate 起锚定 1.0）算 since-inception 区间指标。
-// 口径完全对齐 bot 的 _compute_bot_performance since_inception：
-//   - return_pct = (last/first - 1)*100
+// 口径完全对齐 bot 的 _compute_bot_performance since_inception（统一年化口径）：
+//   - return_pct = (last/first - 1)*100（区间原值）
 //   - 日收益序列首日补 0（对齐 bot Day-1 snapshot 的 daily_return_pct=0：prev_total=initial→0），
 //     使日收益点数 = 交易日数 N，mean/std 与 bot 同口径
-//   - volatility = stdev(daily%) 不年化；sharpe = (mean - rf_daily)/std；calmar = return/|mdd|
+//   - volatility = stdev(daily%) × √252；sharpe = (mean - rf_daily)/std × √252；
+//     calmar = 年化收益/|mdd|（年化基数 = 净值点数 - 1，对齐 server.py）
 function computeBenchmarkMetrics(navSeries: number[]): BenchmarkMetrics | undefined {
   if (navSeries.length < 2) return undefined
   const first = navSeries[0]
@@ -656,10 +660,16 @@ function computeBenchmarkMetrics(navSeries: number[]): BenchmarkMetrics | undefi
   if (daily.length >= 2) {
     const mean = daily.reduce((a, b) => a + b, 0) / daily.length
     const std = sampleStdev(daily)
-    volatility_pct = std
-    sharpe_ratio = std > 1e-9 ? (mean - BENCH_RF_DAILY_PCT) / std : null
+    volatility_pct = std * BENCH_ANN_FACTOR
+    sharpe_ratio = std > 1e-9 ? (mean - BENCH_RF_DAILY_PCT) / std * BENCH_ANN_FACTOR : null
   }
-  const calmar_ratio = Math.abs(mdd) > 1e-9 ? return_pct / Math.abs(mdd) : null
+  // 年化收益（仅用于 calmar；1+r<=0 时幂运算无意义 → null）
+  const span = navSeries.length - 1
+  const annBase = 1 + return_pct / 100
+  const annReturn = span > 0 && annBase > 0
+    ? (Math.pow(annBase, BENCH_TRADING_DAYS_PER_YEAR / span) - 1) * 100
+    : null
+  const calmar_ratio = Math.abs(mdd) > 1e-9 && annReturn !== null ? annReturn / Math.abs(mdd) : null
   return { return_pct, max_drawdown_pct: mdd, volatility_pct, sharpe_ratio, calmar_ratio, data_points: navSeries.length }
 }
 

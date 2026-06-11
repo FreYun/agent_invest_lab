@@ -318,11 +318,15 @@ def upsert_nav_rows(conn: sqlite3.Connection, rows: list[dict]) -> int:
 
 # --------------------- fund_nav_performance（从 nav 派生区间业绩）---------------------
 # 口径逐字对齐 fund-portfolio-mcp/server.py 的 _compute_fund_nav_performance：
-#   区间不年化、rf=1.8%/252、回撤 peak-to-trough、波动率/夏普用样本 std(N-1)、
+#   统一年化口径（vol/sharpe ×√252、calmar=年化收益/|MDD|、另存 annualized_return_pct；
+#   return/MDD 区间原值）、rf=1%/252（对齐 server.py 的 _BOT_PERF_RF_ANNUAL_PCT）、
+#   回撤 peak-to-trough、波动率/夏普用样本 std(N-1)、
 #   窗口按交易日 21/63/126/252、since_inception 取全量、不满窗 fallback。
 # 唯一差异：本库 acc_nav 恒空、复权单位净值落在 nav 列，故累计序列用
 # COALESCE(acc_nav, nav)（复权净值已含分红再投，等价 acc_nav 的收益口径）。
-_NAVPERF_RF_DAILY_PCT = 1.8 / 252
+_NAVPERF_RF_DAILY_PCT = 1.0 / 252
+_NAVPERF_TRADING_DAYS = 252
+_NAVPERF_ANN_FACTOR = _NAVPERF_TRADING_DAYS ** 0.5
 _NAVPERF_PERIODS: list[tuple[str, int | None]] = [
     ("1m", 21), ("3m", 63), ("6m", 126), ("1y", 252), ("since_inception", None),
 ]
@@ -386,27 +390,40 @@ def compute_nav_perf(conn: sqlite3.Connection, fund_code: str, trade_date: str) 
         cum_series = [float(r["cum"]) for r in window if r["cum"] is not None]
         max_dd = _calc_max_drawdown(cum_series) if cum_series else 0.0
 
+        # 年化收益：年化基数 = 净值端点跨越的交易日数（点数 - 1）；1+r<=0 时无意义
+        span = data_points - 1
+        ann_base = 1 + return_pct / 100
+        ann_return = (
+            (ann_base ** (_NAVPERF_TRADING_DAYS / span) - 1) * 100
+            if span > 0 and ann_base > 0 else None
+        )
+
         drs = [float(r["dr"]) for r in window if r["dr"] is not None]
         if len(drs) >= 2:
             mean_d = sum(drs) / len(drs)
             std_d = _stdev(drs)
-            vol = std_d
-            sharpe = (mean_d - _NAVPERF_RF_DAILY_PCT) / std_d if std_d > 1e-9 else None
+            vol = std_d * _NAVPERF_ANN_FACTOR
+            sharpe = (mean_d - _NAVPERF_RF_DAILY_PCT) / std_d * _NAVPERF_ANN_FACTOR if std_d > 1e-9 else None
         else:
             vol = None
             sharpe = None
 
-        calmar = return_pct / abs(max_dd) if (max_dd is not None and abs(max_dd) > 1e-9) else None
+        calmar = (
+            ann_return / abs(max_dd)
+            if (max_dd is not None and abs(max_dd) > 1e-9 and ann_return is not None) else None
+        )
 
         conn.execute(
             "INSERT OR REPLACE INTO fund_nav_performance "
-            "(fund_code, trade_date, period, return_pct, max_drawdown_pct, "
+            "(fund_code, trade_date, period, return_pct, annualized_return_pct, "
+            " max_drawdown_pct, "
             " volatility_pct, sharpe_ratio, calmar_ratio, data_points, "
             " window_target_days, fallback, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
             (
                 fund_code, trade_date, period,
                 _r(return_pct, 4),
+                _r(ann_return, 4) if ann_return is not None else None,
                 _r(max_dd, 4) if max_dd is not None else None,
                 _r(vol, 6) if vol is not None else None,
                 _r(sharpe, 6) if sharpe is not None else None,
