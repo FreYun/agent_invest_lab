@@ -106,3 +106,30 @@ donchian 不灵的成长指数，trail_dd 能做「降回撤但不增收益」�
 
 **待办**：据此修正 `battery.md` / `nev.md`（补 DD-first 绿灯，删除"趋势失效→纯定性"的误判）、`solar.md`（补 mom_60 动量优于 donchian）。
 - 大盘价值（上证50 已测）趋势/突破/dd_ladder/trail_dd 全部 OOS 跑输，**勿重挖**。
+
+## 九、TMT/主题 9 指数全因子族复扫（2026-06-11，为 7 份新 methodology 做的）
+
+脚本 `screen_7idx_allfactors.py`（数据探查 `probe_7idx.py`）：9 指数 × 全 44 因子
+IS(起点–2021)/OOS(2022–2026.06) + validation（bootstrap 600、wf 5 窗、5bp、T+1）。
+**§七"勿重挖清单"再次部分翻案**——donchian 在通信/云计算/动漫/国证芯片确实❌（不矛盾），
+但 DD-止损族 / 动量族在这些指数上大面积绿灯（与 §八 新能源教训同构）。
+注意：simworld 指数 quote 全部无 high/low，chand_* / donch*_trail 的 ATR 用 close 代理
+**偏乐观、仅参考**；下表只列**纯 close 因子**（trail_dd / dd_ladder / mom / donchian /
+bearonly / deepdd / rsi 均纯 close，可靠）。
+
+| 指数 | 代码 | 样本 | 最佳纯close绿灯(OOS) | 关键数字 | 备注 |
+|---|---|---|---|---|---|
+| 通信设备 | 931160.CSI | 11.5y | **trail_dd10_p120** | OOS Cal 1.74 vs BH 1.04、DD −22% vs −39%、CI[0.09,1.23]、wf4/5 | dd_ladder_7_15 / trail_dd15 也绿，**DD-止损整族绿灯** |
+| 通信技术 | 931144.CSI | 10.4y | **donchian_60** + mom_20 | donchian: dCal+0.06 但 IS_dCal+0.19、flips 仅10、CI[0.15,1.32] wf4/5；mom_20 wf5/5 | 趋势突破+动量两族正交都绿 |
+| CS人工智 | 930713.CSI | 10.8y | mom_20（🟢近绿） | OOS Cal 0.61 vs 0.31、CI[−0.02,1.18] 含0、p+97%、wf5/5 | **唯一赢家、无族佐证 → 只能黄灯用** |
+| 创业板人工智能 | 970070.SZ | 7.4y | dl_bearonly_150 | OOS Cal 1.31 vs 0.82、CI[0.30,1.80]、wf5/5 | 备选口径 |
+| 科创芯片 | 000685.SH | 6.4y(IS<3y) | **无** | IS 是 2020–21 单边牛（BH IS_cal 0.90），任何择时都输 IS | **纯定性，勿包装**；探索性记 regime_lever OOS dCal+0.41 |
+| 国证芯片 | 980017.SZ | 14.4y | mom_20 / rsi_panic_re_entry | mom_20: IS_dCal+0.48 OOS+0.20 CI[0.39,1.47] wf4/5；rsi: wf5/5 exp0.73 | donch120_trail exp 仅 0.09，不实用 |
+| 中证半导 | 931865.CSI | 9.4y | **rsi_panic_re_entry** + mom_20 | rsi: OOS Cal 0.59 vs 0.43、CI[0.15,1.47] wf4/5；donchian_60 降级🟡(wf3/5) | §二"近绿"复核后改 rsi/mom 更优 |
+| 云计算 | 930851.CSI | 13.9y | **mom_20** | OOS Cal 0.89 vs 0.21（dCal+0.68）、DD −25% vs −52%、CI[0.28,1.36]、**wf5/5** | bearonly/deepdd 也绿；§七翻案 |
+| 动漫游戏 | 930901.CSI | 13.4y | **dl_deepdd15_p120** | OOS Cal 0.55 vs **−0.02**、DD −26% vs −58%、CI[0.05,1.14]、wf4/5 | trail_dd10_p60/deepdd20 也绿，DD 族级；§七翻案 |
+
+**选择偏差提示**：单指数 44 选 1 必然 inflate；上表凡"整族绿灯"（通信设备 DD 族、动漫游戏 DD 族、
+云计算多族）有族级鲁棒性背书；**单因子赢家（930713 mom_20）只能当黄灯/第二意见写进 methodology**。
+产物：7 份 methodology 见 `strategies/index-products/`（telecom-equipment / telecom-tech / ai /
+chip / semiconductor-industry / cloud / game）。

@@ -117,6 +117,49 @@ strategies:
     target_index: "399997.SZ"
     default_buyable_fund_codes: ["012414"]
 
+  # —— TMT/主题 7 框架（2026-06-11 新增，因子定级见 research/index_timing/RESULT-index-timing-factor-screen.md §九）——
+  telecom_equipment:
+    title: 通信设备指数投资框架
+    methodology: telecom-equipment.md
+    target_index: "931160.CSI"
+    default_buyable_fund_codes: ["007818"]   # 国泰中证全指通信设备ETF联接C（对应 ETF 515880）
+
+  telecom_tech:
+    title: 通信技术主题指数投资框架
+    methodology: telecom-tech.md
+    target_index: "931144.CSI"
+    default_buyable_fund_codes: ["008327"]   # 东财通信C（西藏东财中证通信技术主题指数，已核实跟踪 931144）
+
+  ai:
+    title: 人工智能指数投资框架
+    methodology: ai.md
+    target_index: "930713.CSI"
+    default_buyable_fund_codes: ["012734"]   # 易方达中证人工智能主题ETF联接C（对应 ETF 159819）
+
+  chip:
+    title: 芯片指数投资框架（科创芯片主口径 + 国证芯片研究锚）
+    methodology: chip.md
+    target_index: "000685.SH"
+    default_buyable_fund_codes: ["017470"]   # 嘉实上证科创板芯片ETF发起联接C（对应 ETF 588200）；副口径 980017 可用 008888
+
+  semiconductor_industry:
+    title: 半导体产业指数投资框架
+    methodology: semiconductor-industry.md
+    target_index: "931865.CSI"
+    default_buyable_fund_codes: ["020839"]   # 南方中证半导体产业指数发起A
+
+  cloud:
+    title: 云计算与大数据指数投资框架
+    methodology: cloud.md
+    target_index: "930851.CSI"
+    default_buyable_fund_codes: ["014130"]   # 融通中证云计算与大数据主题指数(LOF)C
+
+  game:
+    title: 动漫游戏指数投资框架
+    methodology: game.md
+    target_index: "930901.CSI"
+    default_buyable_fund_codes: ["012769"]   # 华夏中证动漫游戏ETF发起式联接C（对应 ETF 159869）
+
   multi_equity_high:
     title: 多指数权益基金投资框架（高风险偏好）
     methodology: multi-equity-high.md
