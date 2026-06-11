@@ -5,17 +5,6 @@ description: 市场主线识别方法论（独立引擎）。回答"今天市场
 
 # 市场主线识别 /market-mainline
 
-## v5 数据源强制口径（复刻 `主线回测_v5`）
-
-凡是用于 bot101 / reporter-mainline / market_reports 的“主线选择、regime、核心/卫星组合”，必须先调用 `strategy-mcp.get_v5_mainline_plan(bot_id="bot101")`，并以返回的 `regime`、`top15`、`v4_holdings`、`portfolio`、`fund_matches` 为唯一主线与基金映射真值。
-
-- 权威数据源是 scout：`/home/rooot/.openclaw/scout/board_trend_daily`、`/home/rooot/.openclaw/scout/coarse_themes.json`、`index_daily` 的沪深300/MA120。
-- 板块代码是 scout 概念板代码，如 `BK1138.DC 液冷概念`、`BK1128.DC CPO概念`、`BK0927.DC 免税概念`；不要把它改写成 simworld 行业代码如 `BK000067 白色家电`。
-- 禁止用 `mcp__simworld_data__sector_search` / `sector_factor` / `sector_market` 重新选主线或重排 top15。这些工具只能用于报告里的辅助解释、成分/基金匹配补充，不得覆盖 v5 结果。
-- §七的板块→基金池直接使用 `get_v5_mainline_plan.fund_matches`（由 scout `board_fund_match.py` 计算）；不得把 scout `.DC` 概念板代码传给 simworld `sector_constituents`/`sector_index_match` 重新匹配。
-
-2025-01 的校验锚点：`get_v5_mainline_plan` 在 2025-01-02 应返回 `regime.name=抱主线·v4`，主导组 `算力 / AI / 数据`，`v4_holdings` 为 `液冷概念[卫星] | CPO概念[卫星] | 免税概念[卫星]`，`fund_matches.selected` 为 `515400 | 020691 | 004642`。
-
 **触发词**: `/market-mainline`、"今天的主线是什么"、"识别市场主线"、"哪个板块是主线"
 **执行时机**: 每日 risk_state（market-context）判定之后、仓位/选品决策之前
 **两步定位**:
