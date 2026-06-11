@@ -5,6 +5,17 @@ description: 市场主线识别方法论（独立引擎）。回答"今天市场
 
 # 市场主线识别 /market-mainline
 
+## v5 数据源强制口径（复刻 `主线回测_v5`）
+
+本 reporter 生成 `market_mainline` 时，主线选择、regime、top15、核心/卫星组合和基金映射必须先调用 `strategy-mcp.get_v5_mainline_plan(bot_id="reporter-mainline")`，并以返回 JSON 为唯一真值。
+
+- 权威数据源是 scout：`board_trend_daily`、`coarse_themes.json`、`index_daily` 的沪深300/MA120。
+- 输出板块使用 scout 概念板代码，如 `BK1138.DC 液冷概念`，不得替换成 simworld 行业板代码。
+- 禁止用 `sector_search` / `sector_factor` / `sector_market` 重新选择主线或改写 top15；这些工具只可作为解释、成分、基金匹配的补充材料。
+- `market_mainline.structured_json.mainline_sectors` 应来自 `portfolio` 或 `v4_holdings`；`fund_pool` 和 `bottom_line_product` 必须来自 `fund_matches[].selected`，候选解释来自 `fund_matches[].candidates`；不得用 simworld `sector_constituents`/`sector_index_match` 给 scout `.DC` 概念板重做基金映射。`mainline_theme` 在 `regime=抱主线·v4` 时取 `regime.concentration.dominant_group`，否则取 `无主线` / `防御`。
+
+2025-01 校验锚点：2025-01-02 应为 `抱主线·v4`，主导组 `算力 / AI / 数据`，组合为 `液冷概念[卫星] | CPO概念[卫星] | 免税概念[卫星]`；基金映射为 `液冷→515400 大数据ETF富国`、`CPO→020691 博时中证全指通信设备指数发起式A`、`免税→004642 南方中证房地产ETF发起联接A`。
+
 **触发词**: `/market-mainline`、"今天的主线是什么"、"识别市场主线"、"哪个板块是主线"
 **执行时机**: 每日 risk_state（market-context）判定之后、仓位/选品决策之前
 **两步定位**:

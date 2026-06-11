@@ -819,6 +819,41 @@ test('requestStop on a paused run flips it straight to aborted (no STOP sentinel
 })
 
 
+test("runWorld 系统预读注入三份市场研报 for bot102，不再注入 skill", async () => {
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ["bot102"], dates: ["2024-03-14"] })
+  // 即便 bot 仍带 skill 目录，也不该被注入（INJECT_PIPELINE_SKILLS 已清空）。
+  const botRoot = join(dirname(worldRoot), "bots", "bot102")
+  for (const id of ["market-context", "market-mainline", "mainline-rotation", "fund-screening"]) {
+    const dir = join(botRoot, "skills", id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "SKILL.md"), `# ${id}\nrequired body for ${id}\n`)
+  }
+  config.shadowInclude = ["SOUL.md", "skills"]
+
+  // 在 fund.db(P.fundDbFile) 种三份 PIT 报告（as_of 2024-03-01 ≤ 决策日 2024-03-14）。
+  const dbPath = P.fundDbFile(worldRoot)
+  mkdirSync(dirname(dbPath), { recursive: true })
+  const ddl = "CREATE TABLE IF NOT EXISTS market_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, report_type TEXT, as_of_date TEXT, scope TEXT DEFAULT 'global', content_md TEXT, structured_json TEXT, agent_run_id TEXT, generated_at TEXT, UNIQUE(report_type, as_of_date, scope));"
+  const ins = (rt: string, body: string) => `INSERT OR REPLACE INTO market_reports(report_type,as_of_date,scope,content_md) VALUES('${rt}','2024-03-01','global','${body}');`
+  const seed = ddl + ins("market_context", "CTX-REGIME-BODY") + ins("market_mainline", "MAINLINE-POOL-BODY") + ins("mainline_rotation", "ROTATION-SKELETON-BODY")
+  const r = spawnSync("sqlite3", [dbPath], { input: seed, encoding: "utf8" })
+  assert.equal(r.status, 0, `seed fund.db failed: ${r.stderr}`)
+
+  await runWorld({ worldRoot, config, runId: "inject-r1", startBotServer: stubStartBotServer })
+
+  const sent = readFileSync(P.sentFile(worldRoot, "inject-r1", "2024-03-14", "bot102"), "utf8")
+  // 注入市场研报块 + 三份正文
+  assert.match(sent, /【市场研究报告（系统预生成/)
+  assert.match(sent, /CTX-REGIME-BODY/)
+  assert.match(sent, /MAINLINE-POOL-BODY/)
+  assert.match(sent, /ROTATION-SKELETON-BODY/)
+  // 不再注入判断管线 skill 块
+  assert.doesNotMatch(sent, /【判断管线 skill/)
+  assert.doesNotMatch(sent, /────────── skill: market-context/)
+  cleanup()
+})
+
+
 test('runWorld installs assigned strategy as active shadow METHODOLOGY and writes assignment audit', async () => {
   const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot7', 'bot11'], dates: ['2024-03-14'] })
   const lib = join(dirname(worldRoot), 'strategies', 'index-products')

@@ -1,0 +1,66 @@
+research_loop: /home/rooot/.openclaw/research-loop/ts
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
+
+# ── market_context 回补专用 pre-pass 配置（2026-06-10）──────────────────────────
+# 只跑 reporter-context（LLM 判读）。market_mainline / mainline_rotation 已由
+# src/market-reports/backfill-deterministic.ts 确定性回补，不再走 LLM。
+# prepass-driver 按 (report_type, as_of_date) 幂等跳过已存在报告（含 2025-02-05 旧版）。
+reporter_mode: true
+
+bots: [reporter-context]
+
+replay:
+  from: "2025-02-01"
+  to: "2026-06-09"
+
+calendar: ../runtime/calendar.json
+
+concurrency: 1
+chat_step_mode: monthly
+chat_monthly_nth: 1
+per_bot_timeout_seconds: 900
+research_day_every: 0
+research_day_timeout_seconds: 1200
+
+simworld_upstream_url: http://127.0.0.1:18078/mcp
+
+# 指定 reporter-context 用 qwen3.6-plus（与 bot101 同模型，便于口径对齐）
+bot_models:
+  reporter-context:
+    provider: openai_compatible
+    base_url: https://dd-ai-api.eastmoney.com/v1
+    model: qwen3.6-plus
+    api_key_from_openclaw: zai-coding-plan
+
+shadow_include:
+  - IDENTITY.md
+  - SOUL.md
+  - AGENTS.md
+  - USER.md
+  - METHODOLOGY.md
+  - RESEARCH.md
+  - MEMORY.md
+  - EQUIPPED_SKILLS.md
+  - TOOLS.md
+  - skills
+  - FUND_UNIVERSE.md
+  - config/mcporter.json
+
+# 预激活工具：reporter-context METHODOLOGY §三 所需子集（行情/估值/温度/VIX/宏观/债/商品/研报）。
+simworld_tools:
+  - name: market_index_quote
+  - name: market_index_val
+  - name: market_index_gzxjb
+  - name: market_temperature
+  - name: option_vix
+  - name: option_gvspread_signal
+  - name: macro_data
+  - name: macro_nowcasting_snapshot
+  - name: macro_50etf_vix
+  - name: macro_indicator_search
+  - name: macro_indicator_value
+  - name: bond_yield_curve
+  - name: commodity_market
+  - name: research_search
+  - name: research_view
+  - name: quant_factor

@@ -39,6 +39,15 @@ export interface DailyMessageContext {
   // tradingDays = 距上次决策的交易日数；sinceDate = 上次决策日；benchMovePct = 期间基准篮子累计涨跌（可空）。
   // undefined / tradingDays<=1 → 跳过整块（日度运行即此，行为不变）。
   periodInfo?: { tradingDays: number; sinceDate: string; benchMovePct: number | null }
+  // 直接注入进 daily prompt 的"判断管线 skill"全文（不靠 load_skill——research-loop 的 system prompt
+  // 每文件截 10000 字，4 个 skill 合计 ~27k 字塞不下且会被截断；改在 daily message 里整篇注入，
+  // 保证 bot 每个决策日开头就读到完整 skill 算法/工具表）。由 run.ts 按 bot 读取 shadow skills 填充。
+  // 空/缺省 → 跳过整块（绝大多数 bot 即此，行为不变）。
+  injectedSkills?: { id: string; content: string }[]
+  // 系统预读注入的三份市场研报 content_md（PIT：as_of_date<=世界日的最新一期）。bot101/102/103
+  // 用：替代旧的 skill 注入自跑流水线——主线/regime/组合骨架由系统预生成，bot 直接消费、不自己识别。
+  // 由 run.ts 从 fund.db 的 market_reports 表读出填充。空/缺省 → 跳过整块。
+  marketReports?: { context: string; mainline: string; rotation: string }
 }
 
 export function weekdayOf(isoDate: string): string {
@@ -77,7 +86,7 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
 
 【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。注意：mem0_search / mem0_add / list_skills / load_skill 是裸名工具，**不带 mcp__ 前缀**（\`mcp__simworld_data__mem0_search\` 这种名字不存在，调了必报错）。文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。
 
-【skill 体系】list_skills 看有哪些可加载的研究框架，load_skill <name> 把 skill 内容直接载入当前对话当思考脚手架。目前 workspace 里只有 tmt-research（TMT 行业研究指南）——研究科技/媒体/电信主题基金或个股时先 load 一下，按它的框架来思考再去查数据。
+【skill 体系】list_skills 看本 bot 装了哪些可加载的研究/判断框架，load_skill <name>（参数名 \`skill_id\`，传 skill 目录名）把 skill 内容直接载入当前对话当思考脚手架。**如果你的 METHODOLOGY 顶部标了「技能驱动」判断管线，每个决策日必须先按它列的顺序 load_skill 把那几个 skill 读进来照做，再做判断和下单——没 load 就凭印象决策 = 没按流程。** 不确定本 bot 装了哪些就先 list_skills 确认。
 
 【数据预取】当日账户/持仓/累计绩效/区间业绩/已平仓 P&L/近 N 日 PnL 走势/持仓基金近 20 日 NAV/5 大指数 MA 已经在下方"【...】"块里全量灌好。**不要重复调用 mcp__fund_portfolio_mcp__portfolio_get_my_history / mcp__fund_portfolio_mcp__portfolio_get_my_performance / mcp__fund_portfolio_mcp__portfolio_get_my_trades** 查这些；也不要为持仓基金或这 5 大指数重复调 mcp__simworld_data__fund_nav / mcp__simworld_data__market_index_quote——直接读上下文。
 
@@ -94,6 +103,7 @@ function briefRules(date: string, weekday: string, botId: string): string {
 
 今天的节奏（按顺序）：
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
+  ①′ **若下方有【判断管线 skill】块**（已直接注入 skill 全文）：**严格按那些 skill 的算法和工具表实操判断**（主线/市场环境要真的调 skill 里写的 sector_*/market_temperature 等工具做出来，别只看预注入数据块拍脑袋）。没有该块、但 METHODOLOGY 标了管线的 bot，用 \`load_skill\` 读进来照做。都没有就跳过这步。
   ② **调至少 1 个非 mem0 工具拉今日新数据**：从工具列表里的 mcp__simworld_data__* 工具中选择，你需要按实际市场情况来选择工具调用，你 methodology 五视角里今天还没覆盖的那个——估值 / 趋势 / 景气度 / 资金面 / 证伪 **这一步缺，整天等于没做。**
   ③ mem0_search 拉过去 thesis / 决策，与今天的数据对比是 still valid 还是已破。**默认会按"最近优先"衰减打分（τ=30 天），近一周的记录天然浮在前面**；想只看最近几天就传 \`start_date=YYYY-MM-DD\`（比如今天往前 7 天），想关掉衰减拉全历史就传 \`recency_tau_days=0\`。
   ④ 决策（**请参考你的 AGENTS.md**——角色与决策风格总纲；以及 METHODOLOGY.md——本轮 active 产品策略与仓位管理方法论） + 下单（如有）。
@@ -227,7 +237,7 @@ function multiFundPoolBlock(codes: string[], meta: BuyablePoolMeta): string {
 
 ${lines.join('\n')}
 
-**你是多基金 bot**——按 METHODOLOGY 的"主线 → 候选 → 选品"三步收敛：先看上面的主题分布锁定主题（步 1），再按 size_style/invest_style 因子收敛（步 2），最后对剩 1-3 只候选调 \`get_fund_detail\` 拉 3y/5y 业绩深查（步 3）。**别再只看宽基相对强弱、PE 分位就下单——那是单基金 bot 的玩法。**
+**你是多基金 bot**——若下方有【判断管线 skill】块，**今天先按那些 skill 实操判断再决策**（主线识别要真的用 sector_* 工具选出主线板块，不能只看上面的主题分布拍脑袋）。然后按 METHODOLOGY 的"主线 → 候选 → 选品"三步收敛：先看上面的主题分布锁定主题（步 1），再按 size_style/invest_style 因子收敛（步 2），最后对剩 1-3 只候选调 \`get_fund_detail\` 拉 3y/5y 业绩深查（步 3）。**别再只看宽基相对强弱、PE 分位就下单——那是单基金 bot 的玩法。**
 下单时 fund_code 必须从本 bot 当前产品可买池里选（实际校验的是完整 ${codes.length} 只池子，不限于上面展示的 top-K）；不在池里的会被 mcp__fund_portfolio_mcp__portfolio_place_buy_order 直接拒。`
 }
 
@@ -540,11 +550,56 @@ function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): s
   return `\n\n${lines.join('\n')}`
 }
 
+// 把"判断管线 skill"整篇拼成一个 daily-message 区块。直接注入 = bot 无需 load_skill 即可读到，
+// 内容就是各 skill 的 SKILL.md 全文（自算版：自己调 sector_*/regime 等工具做判断，不依赖外部研报）。
+function injectedSkillsBlock(skills?: { id: string; content: string }[]): string {
+  if (!skills || !skills.length) return ''
+  const order = skills.map(s => s.id).join(' → ')
+  const bodies = skills
+    .map(s => `────────── skill: ${s.id} ──────────\n${s.content.trim()}`)
+    .join('\n\n')
+  return `\n\n【判断管线 skill（已直接注入，今天必须照这些 skill 的算法与工具表实操，无需 load_skill）】
+下面 ${skills.length} 个 skill 是你的判断流程，按顺序照做：${order}。**主线/regime 判断要真的调用 skill 里写的工具（如 sector_search / sector_factor / market_temperature 等）做出来，不是只看预注入数据块拍脑袋。**
+
+${bodies}
+【判断管线 skill 结束】`
+}
+
+// 系统预读注入三份市场研报（PIT）。bot101/102/103 用：主线/regime/组合骨架已由系统预生成，
+// bot 直接消费报告结论做仓位与下单决策，不自己跑主线识别。三类全缺 → 空串（跳过整块）。
+function marketReportsBlock(reports?: { context: string; mainline: string; rotation: string }): string {
+  if (!reports) return ''
+  const part = (label: string, body: string): string =>
+    `────────── ${label} ──────────\n${body && body.trim() ? body.trim() : '（截至今日暂无该报告——按 METHODOLOGY 保守处理）'}`
+  const bodies = [
+    part('market_context（行情 / regime / risk_state）', reports.context),
+    part('market_mainline（主线板块 + 可投基金池）', reports.mainline),
+    part('mainline_rotation（核心/卫星组合骨架 + 今日动作）', reports.rotation),
+  ].join('\n\n')
+  return `\n\n【市场研究报告（系统预生成 · PIT · 全市场共享）】
+下面三份报告是系统在每月初按 v5 方法论预生成的当期市场判断，**是你今天 regime / 主线 / 组合骨架的权威结论，直接采用**：
+- **不要**自己再调 \`sector_search\`/\`sector_factor\`/\`market_temperature\` 去重跑主线识别或 regime 判断——那套流程系统已替你做完；
+- mainline_rotation 已给出核心/卫星组合骨架与每板块双测度选好的基金（fund_pool），照它执行即可；
+- 你的职责 = 基于这三份报告 + 你的 METHODOLOGY（仓位/风险闸门/配置区间/回撤纪律）做**目标仓位与下单**决策。
+
+${bodies}
+【市场研究报告 结束】`
+}
+
 export function renderDailyMessage(ctx: DailyMessageContext): string {
   const weekday = weekdayOf(ctx.date)
-  const contextBlocks = dailyContextBlocks(ctx.dailyContext)
-  // 可买池每天都播报；single-fund / multi-fund 文案分两套，由 botId 推断（解耦池子大小与 bot 决策风格）。
+  // bot 类型决定"判断管线块"怎么注入（单基金 vs 多基金 分开处理）：
+  // - multi-fund（bot101/102/103，多基金权益组合）：注入系统预生成的三份市场研报，直接消费、不自跑主线识别；
+  // - single-fund / multi-asset：走旧的 skill 注入路径（INJECT_PIPELINE_SKILLS 当前为空，故实际为空块）。
   const kind = botKindOf(ctx.botId)
+  let pipelineBlock: string
+  if (kind === 'multi-fund') {
+    pipelineBlock = marketReportsBlock(ctx.marketReports)
+  } else {
+    pipelineBlock = injectedSkillsBlock(ctx.injectedSkills)
+  }
+  const contextBlocks = dailyContextBlocks(ctx.dailyContext)
+  // 可买池每天都播报；single-fund / multi-fund 文案分两套，复用上面的 kind（解耦池子大小与 bot 决策风格）。
   const buyable = ctx.buyableFundCodes && ctx.buyableFundCodes.length
     ? buyableFundsBlock(ctx.buyableFundCodes, kind, ctx.dailyContext?.buyablePoolMeta)
     : ''
@@ -557,7 +612,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${buyable}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${buyable}${pipelineBlock}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -566,5 +621,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const review = strategyReviewBlock(ctx.dailyContext, ctx.botId)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${buyable}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${buyable}${pipelineBlock}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${review}\n`
 }

@@ -72,15 +72,17 @@ async function rpcSse(url: string, body: Rpc, sessionId?: string): Promise<{ sta
 // 每个 test 起一个独立的临时 worldRoot + strategy-server，通过 t.after() 确保
 // 即使 assertion fail 也会关 server / 清目录——否则未关的 HTTP server 会让
 // node:test 进程不退出，整个 suite 挂。
-async function freshServer(t: TestContext, opts: { day?: () => string } = {}): Promise<{ s: StrategyServerHandle; worldRoot: string; runId: string }> {
+async function freshServer(t: TestContext, opts: { day?: () => string } = {}): Promise<{ s: StrategyServerHandle; worldRoot: string; runId: string; fundDbPath: string }> {
   const worldRoot = mkdtempSync(join(tmpdir(), 'strat-'))
   const runId = 'r1'
-  const s = await createStrategyServer({ worldRoot, runId, getCurrentDate: opts.day ?? (() => '2024-03-15') })
+  // 临时 fund.db（market_reports 读写指向它，避免落到真实 <repo>/data/fund.db）。
+  const fundDbPath = join(worldRoot, 'market_reports_test.db')
+  const s = await createStrategyServer({ worldRoot, runId, fundDbPath, getCurrentDate: opts.day ?? (() => '2024-03-15') })
   t.after(async () => {
     await s.close()
     rmSync(worldRoot, { recursive: true, force: true })
   })
-  return { s, worldRoot, runId }
+  return { s, worldRoot, runId, fundDbPath }
 }
 
 test('initialize returns full capabilities (experimental/prompts/resources/tools), instructions, and mints mcp-session-id header', async (t) => {
@@ -136,7 +138,7 @@ test('tools/list returns FastMCP-style tool declarations: title on properties + 
   assert.equal(status, 200)
   const tools = ((body as { result: { tools: Array<Record<string, unknown>> } }).result).tools
   const names = tools.map(t => t.name as string).sort()
-  assert.deepEqual(names, ['get_active_strategy', 'get_my_strategy', 'get_strategy', 'list_strategies', 'update_my_strategy'])
+  assert.deepEqual(names, ['get_active_strategy', 'get_market_report', 'get_my_strategy', 'get_strategy', 'get_v5_mainline_plan', 'list_strategies', 'submit_market_report', 'update_my_strategy'])
 
   const update = tools.find(t => t.name === 'update_my_strategy')!
   // FastMCP 风格：inputSchema 自带 title
@@ -309,7 +311,7 @@ test('health endpoint returns ok with tools list (smoke / dashboard helper)', as
   assert.equal(r.status, 200)
   const j = await r.json() as { status: string; tools: string[] }
   assert.equal(j.status, 'ok')
-  assert.deepEqual(j.tools.sort(), ['get_active_strategy', 'get_my_strategy', 'get_strategy', 'list_strategies', 'update_my_strategy'])
+  assert.deepEqual(j.tools.sort(), ['get_active_strategy', 'get_market_report', 'get_my_strategy', 'get_strategy', 'get_v5_mainline_plan', 'list_strategies', 'submit_market_report', 'update_my_strategy'])
 })
 
 
@@ -344,4 +346,116 @@ test('strategy-server lists shared strategies, reads shared strategy, and reads 
   const activeResult = (active.body as { result: { content: Array<{ text: string }>; isError?: boolean } }).result
   assert.ok(!activeResult.isError)
   assert.match(activeResult.content[0].text, /# Active methodology/)
+})
+
+// ── market_reports（get/submit_market_report）────────────────────────────────
+
+function callTool(url: string, id: number, name: string, args: Record<string, unknown>) {
+  return rpc(url, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })
+}
+function toolResult(r: { body: unknown }) {
+  return (r.body as { result: { content: Array<{ text: string }>; isError?: boolean } }).result
+}
+
+test('tools/list includes get_market_report + submit_market_report with PIT-relevant schemas', async (t) => {
+  const { s } = await freshServer(t)
+  const { body } = await rpc(s.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+  const tools = ((body as { result: { tools: Array<Record<string, unknown>> } }).result).tools
+  const get = tools.find(t => t.name === 'get_market_report')!
+  const getIn = get.inputSchema as { required: string[] }
+  assert.deepEqual(getIn.required.sort(), ['bot_id', 'report_type'])
+  const sub = tools.find(t => t.name === 'submit_market_report')!
+  const subIn = sub.inputSchema as { required: string[] }
+  assert.deepEqual(subIn.required.sort(), ['bot_id', 'content_md', 'report_type'])
+})
+
+test('submit_market_report writes (reporter only) and get_market_report reads back the same day', async (t) => {
+  const { s } = await freshServer(t, { day: () => '2024-03-15' })
+  const sub = await callTool(s.url, 1, 'submit_market_report', {
+    bot_id: 'reporter-context', report_type: 'market_context',
+    content_md: '# 行情报告\nregime: 震荡\nrisk_state: neutral',
+    structured_json: JSON.stringify({ regime: 'range', risk_state: 'neutral' }),
+  })
+  const subRes = toolResult(sub)
+  assert.ok(!subRes.isError, JSON.stringify(subRes))
+  assert.match(subRes.content[0].text, /已写入：market_context @ 2024-03-15/)
+
+  const get = await callTool(s.url, 2, 'get_market_report', { bot_id: 'bot101', report_type: 'market_context' })
+  const getRes = toolResult(get)
+  assert.ok(!getRes.isError)
+  assert.match(getRes.content[0].text, /regime: 震荡/)
+  assert.match(getRes.content[0].text, /report_type=market_context as_of=2024-03-15/)
+})
+
+test('get_market_report enforces PIT: never returns a report dated after the world day', async (t) => {
+  // 注意：用 mainline_rotation 而非 market_mainline——后者 submit 时强制走 v5 确定性规范化
+  // （调 scripts/v5_mainline_plan.py），测试夹具的临时 worldRoot 调不到该脚本会直接 err。
+  // PIT 语义与 report_type 无关，换不走规范化的类型测同一件事。
+  let day = '2024-03-15'
+  const { s } = await freshServer(t, { day: () => day })
+  // 在 03-15 写一份
+  const s1 = toolResult(await callTool(s.url, 1, 'submit_market_report', { bot_id: 'reporter-rotation', report_type: 'mainline_rotation', content_md: '主线@0315' }))
+  assert.ok(!s1.isError, JSON.stringify(s1))
+  // 时间前移到 04-15 再写一份
+  day = '2024-04-15'
+  const s2 = toolResult(await callTool(s.url, 2, 'submit_market_report', { bot_id: 'reporter-rotation', report_type: 'mainline_rotation', content_md: '主线@0415' }))
+  assert.ok(!s2.isError, JSON.stringify(s2))
+
+  // 世界日回到 03-20：只能读到 03-15 那份，绝不能读到未来的 04-15
+  day = '2024-03-20'
+  const g1 = toolResult(await callTool(s.url, 3, 'get_market_report', { bot_id: 'bot101', report_type: 'mainline_rotation' }))
+  assert.match(g1.content[0].text, /主线@0315/)
+  assert.doesNotMatch(g1.content[0].text, /主线@0415/)
+
+  // 世界日到 05-01：读到最近一期 04-15
+  day = '2024-05-01'
+  const g2 = toolResult(await callTool(s.url, 4, 'get_market_report', { bot_id: 'bot101', report_type: 'mainline_rotation' }))
+  assert.match(g2.content[0].text, /主线@0415/)
+})
+
+test('submit_market_report(market_mainline) errs when v5 plan source is unavailable (规范化 fail-fast)', async (t) => {
+  const { s } = await freshServer(t, { day: () => '2024-03-15' })
+  const r = toolResult(await callTool(s.url, 1, 'submit_market_report', { bot_id: 'reporter-mainline', report_type: 'market_mainline', content_md: '主线正文' }))
+  assert.equal(r.isError, true)
+  assert.match(r.content[0].text, /v5 规范化失败/)
+})
+
+test('submit_market_report is idempotent: same (type,as_of) overwrites', async (t) => {
+  const { s } = await freshServer(t, { day: () => '2024-03-15' })
+  await callTool(s.url, 1, 'submit_market_report', { bot_id: 'reporter-rotation', report_type: 'mainline_rotation', content_md: 'v1' })
+  await callTool(s.url, 2, 'submit_market_report', { bot_id: 'reporter-rotation', report_type: 'mainline_rotation', content_md: 'v2-覆盖' })
+  const g = toolResult(await callTool(s.url, 3, 'get_market_report', { bot_id: 'bot101', report_type: 'mainline_rotation' }))
+  assert.match(g.content[0].text, /v2-覆盖/)
+  assert.doesNotMatch(g.content[0].text, /v1/)
+})
+
+test('get_market_report report_type=all returns all three, with placeholder for missing', async (t) => {
+  const { s } = await freshServer(t, { day: () => '2024-03-15' })
+  await callTool(s.url, 1, 'submit_market_report', { bot_id: 'reporter-context', report_type: 'market_context', content_md: 'CTX正文' })
+  const g = toolResult(await callTool(s.url, 2, 'get_market_report', { bot_id: 'bot101', report_type: 'all' }))
+  assert.match(g.content[0].text, /CTX正文/)
+  assert.match(g.content[0].text, /\[market_mainline\] 暂无报告/)
+  assert.match(g.content[0].text, /\[mainline_rotation\] 暂无报告/)
+})
+
+test('submit_market_report rejects non-reporter bot_id, bad report_type, bad json', async (t) => {
+  const { s } = await freshServer(t)
+  const notReporter = toolResult(await callTool(s.url, 1, 'submit_market_report', { bot_id: 'bot101', report_type: 'market_context', content_md: 'x' }))
+  assert.equal(notReporter.isError, true)
+  assert.match(notReporter.content[0].text, /仅供系统 reporter agent/)
+
+  const badType = toolResult(await callTool(s.url, 2, 'submit_market_report', { bot_id: 'reporter-x', report_type: 'nope', content_md: 'x' }))
+  assert.equal(badType.isError, true)
+  assert.match(badType.content[0].text, /非法/)
+
+  const badJson = toolResult(await callTool(s.url, 3, 'submit_market_report', { bot_id: 'reporter-x', report_type: 'market_context', content_md: 'x', structured_json: '{not json' }))
+  assert.equal(badJson.isError, true)
+  assert.match(badJson.content[0].text, /合法 JSON/)
+})
+
+test('get_market_report returns placeholder (not error) when no report exists yet', async (t) => {
+  const { s } = await freshServer(t)
+  const g = toolResult(await callTool(s.url, 1, 'get_market_report', { bot_id: 'bot101', report_type: 'market_context' }))
+  assert.ok(!g.isError)
+  assert.match(g.content[0].text, /暂无报告/)
 })
