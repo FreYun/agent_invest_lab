@@ -1,5 +1,9 @@
 /runtime/
+# 临时回测/回填的独立 runtime 目录（runtime-bot101-v5-test、runtime-prepass 等）
+/runtime-*/
 /node_modules/
 *.log
 config/world.yaml
 config/openclaw.json
+# openclaw.json 的时间戳备份（含明文 key，绝不入库）
+config/openclaw.json.bak*
