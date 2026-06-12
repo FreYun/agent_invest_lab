@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "simworld-data": {
+      "url": "${SIMWORLD_PROXY_URL}",
+      "transport": "streamable-http"
+    },
+    "strategy-mcp": {
+      "url": "${STRATEGY_SERVER_URL}",
+      "transport": "streamable-http"
+    }
+  },
+  "imports": []
+}

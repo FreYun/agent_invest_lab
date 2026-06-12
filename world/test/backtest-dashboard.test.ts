@@ -223,6 +223,14 @@ test('pickBenchmarkFund: 未建仓退到默认指数沪深300', () => {
   assert.equal(pickBenchmarkFund([] as never[], [] as never[]), '510300')
 })
 
+test('pickBenchmarkFund: 多指数权益基金 bot 固定用沪深300ETF华泰柏瑞', () => {
+  const actions = [{ side: 'buy', fund_code: '012543' }] as unknown as Parameters<typeof pickBenchmarkFund>[0]
+  const holdings = [{ fund_code: '001592' }] as unknown as Parameters<typeof pickBenchmarkFund>[1]
+  assert.equal(pickBenchmarkFund(actions, holdings, 'bot101'), '510300')
+  assert.equal(pickBenchmarkFund(actions, holdings, 'bot102'), '510300')
+  assert.equal(pickBenchmarkFund(actions, holdings, 'bot103'), '510300')
+})
+
 test('allocateQuota: 单池上限封顶到候选数', () => {
   const q = allocateQuota(new Map([['A', 12]]), 10)
   assert.equal(q.get('A'), 10)

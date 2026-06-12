@@ -58,7 +58,7 @@
 - `stock_alpha`
 - `commodity_market`
 - `research_view`
-- `ttjj_research_search`
+- `research_search`
 - `fund_nav`
 - `fund_basic_info`
 

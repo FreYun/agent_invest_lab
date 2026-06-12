@@ -8,14 +8,14 @@ import { loadCalendar, computeTradingDates } from './calendar.ts'
 import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
 import { buildShadowWorkspace } from './shadowWorkspace.ts'
-import { renderDailyMessage } from './message.ts'
+import { renderDailyMessage, botKindOf } from './message.ts'
 import { fetchDailyContext } from './daily-context.ts'
 import { buildHistoryWindow } from './history-window/index.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
 import { createSimworldProxy, HIDDEN_TOOLS, type SimworldProxyHandle } from './simworld-proxy/server.ts'
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
-import { createStrategyServer, type StrategyServerHandle } from './strategy-server/server.ts'
+import { createStrategyServer, type StrategyServerHandle, runSqlite, sqlStr } from './strategy-server/server.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
 import * as P from './paths.ts'
@@ -115,6 +115,47 @@ export function botServerArgv(config: WorldConfig, botId: string, workspace: str
   }
   const serverEntry = join(config.researchLoop, 'server.ts')
   return [process.execPath, '--experimental-strip-types', serverEntry, '--bot-id', botId, '--workspace', workspace, '--config', loopConfigPath]
+}
+
+// 哪些 bot 要把"判断管线 skill"整篇直接注入 daily prompt（不靠 load_skill）。
+// 值 = 该 bot 要注入的 skill 目录名，按数组顺序就是判断流程顺序。
+// 2026-06-11：bot101/102/103 改为「系统预读注入三份市场研报」(见 REPORT_CONSUMING_BOTS)，
+// 不再注入 skill 让其自跑主线识别流水线（遵循度低、退化成只查持仓板块）。此表清空，机制保留备用。
+const INJECT_PIPELINE_SKILLS: Record<string, string[]> = {}
+
+/** 系统侧从 fund.db 预读三份市场研报的 content_md（PIT：as_of_date<=世界日，各取最新一期）。
+ *  与 strategy-server.get_market_report 同口径，但走系统注入而非 bot 工具调用。
+ *  三类全缺 → 返回 undefined（message.ts 不渲染该块）。 */
+function readMarketReportsForInjection(fundDbPath: string, worldDate: string): { context: string; mainline: string; rotation: string } | undefined {
+  const readOne = (type: string): string => {
+    const sql = `SELECT content_md FROM market_reports WHERE report_type=${sqlStr(type)} AND scope='global' `
+      + `AND as_of_date<=${sqlStr(worldDate)} ORDER BY as_of_date DESC LIMIT 1;`
+    try {
+      const out = runSqlite(fundDbPath, sql).trim()
+      const rows = out ? (JSON.parse(out) as { content_md: string }[]) : []
+      return rows[0]?.content_md ?? ''
+    } catch { return '' }
+  }
+  const context = readOne('market_context')
+  const mainline = readOne('market_mainline')
+  const rotation = readOne('mainline_rotation')
+  if (!context && !mainline && !rotation) return undefined
+  return { context, mainline, rotation }
+}
+
+/** 读取某 bot 要直接注入的判断管线 skill 全文（从其 shadow workspace 的 skills/<id>/SKILL.md）。
+ *  没配置注入 / 文件缺失 → 返回 undefined / 跳过，message.ts 自然不渲染该块（行为不变）。 */
+function readInjectedPipelineSkills(worldRoot: string, runId: string, botId: string): { id: string; content: string }[] | undefined {
+  const ids = INJECT_PIPELINE_SKILLS[botId]
+  if (!ids || !ids.length) return undefined
+  const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
+  const out: { id: string; content: string }[] = []
+  for (const id of ids) {
+    const p = join(shadow, 'skills', id, 'SKILL.md')
+    try { out.push({ id, content: readFileSync(p, 'utf8') }) }
+    catch { /* skill 未装则跳过，不阻断当日决策 */ }
+  }
+  return out.length ? out : undefined
 }
 
 /** Build env supplement so child Node fetch() honors the parent's HTTP(S)_PROXY.
@@ -220,7 +261,7 @@ function installStrategyLibraryInShadow(opts: {
   }
 }
 
-function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string, memoryUrl: string, openclawDir: string): void {
+export function generateRlConfig(config: WorldConfig, worldRoot: string, runId: string, memoryUrl: string, openclawDir: string): void {
   let base: Record<string, unknown>
   try { base = JSON.parse(readFileSync(config.rlConfigBase, 'utf8')) as Record<string, unknown> }
   catch (err) { throw new Error(`cannot read rl_config_base ${config.rlConfigBase}: ${err instanceof Error ? err.message : String(err)}`) }
@@ -259,7 +300,7 @@ function readBotModelOverride(botsRoot: string, botId: string): Record<string, u
   return null
 }
 
-function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow: string, memoryUrl: string, openclawDir: string): void {
+export function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow: string, memoryUrl: string, openclawDir: string): void {
   let base: Record<string, unknown>
   try { base = JSON.parse(readFileSync(config.rlConfigBase, 'utf8')) as Record<string, unknown> }
   catch (err) { throw new Error(`cannot read rl_config_base ${config.rlConfigBase}: ${err instanceof Error ? err.message : String(err)}`) }
@@ -1033,6 +1074,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           botId: b.botId,
           quotesPath: quotesAbs,
           buyableFundCodes: botBuyableFundCodes,
+          injectedSkills: readInjectedPipelineSkills(worldRoot, runId, b.botId),
+          // 系统预读注入三份市场研报：仅多基金权益 bot（multi-fund，bot101/102/103）——与 message.ts
+          // 的注入分流口径一致（botKindOf）；single-fund / multi-asset 不读、不注入，省一次 DB 查询。
+          marketReports: botKindOf(b.botId) === 'multi-fund'
+            ? readMarketReportsForInjection(P.fundDbFile(worldRoot), date)
+            : undefined,
           dailyContext,
           historyWindow,
           beliefBlock,

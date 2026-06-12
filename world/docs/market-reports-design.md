@@ -136,19 +136,24 @@ DDL 见 `scripts/sql/market_reports.sql`；strategy-server 启动时幂等 ensur
 | 2 | `get/submit_market_report` 工具 | `src/strategy-server/server.ts`（+ 测试） | ✅ |
 | 3 | 报告契约 | 本文档 | ✅ |
 | 4 | 3 个 reporter agent 工作区 | `bots/reporter-{context,mainline,rotation}/` | ✅ |
-| 5 | pre-pass 月初日历驱动 | `src/market-reports/run-prepass.ts` + `config/world-market-reports.yaml` + `reporterMode`(config.ts/run.ts) + reporter 工作区 `FUND_UNIVERSE.md` | ✅ 代码完成/已验证；⏳ 实跑待确认 |
+| 5 | pre-pass 独立驱动（不走 world 引擎） | `src/market-reports/prepass-driver.ts` + `config/world-market-reports.yaml` + reporter 工作区 `FUND_UNIVERSE.md`；输出独立目录 `world/runtime-prepass` | ✅ 已验证；全窗生成进行中 |
 | 6 | bot 侧三个 skill 改薄 | `bots/bot101/skills/market-*`（消费端） | ✅ bot101 三个已改；其余 11 bot 的 market-context（不同变体）待你定是否一并铺开 |
 
-## 7. 运行方式
+## 7. 运行方式（独立驱动，不走 world 引擎）
 
 ```bash
 cd world
-npm run prepass                              # 用 config/world-market-reports.yaml 新建 run，全窗生成
-npm run prepass -- --run-id <id> --resume    # 续跑（幂等：submit 覆盖同期；resume 从 cursor 接）
+npm run prepass                              # = src/market-reports/prepass-driver.ts，默认 config/world-market-reports.yaml
+npm run prepass -- --out-dir <dir> --run-id <id> --retries 2 --from 2024-01-01 --to 2026-05-29
 ```
 
-- 复用 `runWorld`：`reporter_mode: true` + 不设 `fund_mcp_cli` 把交易回测切成研报生成；`chat_step_mode: monthly` 每月首个交易日唤起；`concurrency: 1` + bots 顺序 = 同日 context→mainline→rotation 顺序执行。
-- 与主 bot 回测物理解耦：**先跑 pre-pass 生成报告，再跑 bot 回测读取**。报告 scope=global、PIT 确定 → 全历史只生成一次、所有 run/bot 复用。
+- **`prepass-driver.ts` 自己编排月度循环，不调 `runWorld`/`runLoop`**（那套含交易/结算/belief/每日消息的日度引擎）。只复用组件级模块（simworld-proxy / strategy-server / memory-server / BotServer / 影子工作区 / research-loop.yaml 写入）当库。
+- **与 world 回测物理解耦**：run 目录写到独立的 `world/runtime-prepass`（`--out-dir`），不进 `world/runtime/runs`、不出现在 18888 看板、不与真回测共用 runtime；端口全随机。
+- **每月第一个交易日**逐 reporter 顺序跑（context→mainline→rotation，按 `config.bots` 顺序）；上游经 `get_market_report` 从 DB 读（PIT）。
+- **逐 reporter 落库校验 + 失败重试**（`--retries`，缺省 2）：submit 后查 DB 确认落库，没落就重试，消除 chat_error 静默留洞。**DB 幂等按 (日期,类型) 跳过**——中断后重跑同命令即续，无需 state.json。
+- 报告 scope=global、PIT 确定 → 全历史只生成一次、所有 run/bot 复用。先跑 pre-pass 生成，再跑 bot 回测读取。
+
+> 注：`config.ts`/`run.ts` 里的 `reporterMode` 分支是早期"复用 runWorld"方案的遗留，独立驱动不依赖它（仅用 `reporter_mode` 标志拒绝非 reporter 配置）；保留无害。
 
 ### 已知遗留 / 风险
 - **18078 必须跑 simworld-mcp（62 工具）**，不能跑 ttjj_data_pit_mcp.py（19 工具，无 sector_*）；`./restart.sh` 会误切到 ttjj 致 sector 系 bot+reporter 全挂。详见 §1 发现 A。

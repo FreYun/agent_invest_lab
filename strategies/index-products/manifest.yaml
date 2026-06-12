@@ -10,33 +10,35 @@ strategies:
     title: 上证50指数投资框架
     methodology: sse50.md
     target_index: "000016.SH"
-    default_buyable_fund_codes: ["013286"]
+    default_buyable_fund_codes: ["005733"]   # 华夏上证50ETF联接C（对应 ETF 510050；原 013286 为富国上证综指联接，跟错指数已换）
 
-  a500:
-    title: 中证A500指数投资框架
-    methodology: a500.md
-    target_index: "000510.SH"
-    default_buyable_fund_codes: ["159338", "512050"]
+  # —— 以下 4 条为占位：方法论 .md 尚未撰写。manifest 加载（dashboard 与 world 两侧）
+  # 对缺失文件 fail-fast，登记进来会挡掉全部新建回测；写好对应 .md 后再取消注释。——
+  # a500:
+  #   title: 中证A500指数投资框架
+  #   methodology: a500.md
+  #   target_index: "000510.SH"
+  #   default_buyable_fund_codes: ["159338", "512050"]
 
-  zz500:
-    title: 中证500指数投资框架
-    methodology: zz500.md
-    target_index: "000905.SH"
-    default_buyable_fund_codes: ["110020", "510500"]
+  # zz500:
+  #   title: 中证500指数投资框架
+  #   methodology: zz500.md
+  #   target_index: "000905.SH"
+  #   default_buyable_fund_codes: ["110020", "510500"]
 
-  sp500:
-    title: 标普500指数投资框架
-    methodology: sp500.md
-    target_index: "SPX.GI"
-    # QDII / 跨境 ETF（跟踪美股，非 A 股标的；交易系统是否支持 QDII 另行确认）
-    default_buyable_fund_codes: ["050025", "513500"]
+  # sp500:
+  #   title: 标普500指数投资框架
+  #   methodology: sp500.md
+  #   target_index: "SPX.GI"
+  #   # QDII / 跨境 ETF（跟踪美股，非 A 股标的；交易系统是否支持 QDII 另行确认）
+  #   default_buyable_fund_codes: ["050025", "513500"]
 
-  nasdaq100:
-    title: 纳斯达克100指数投资框架
-    methodology: nasdaq100.md
-    target_index: "NDX.GI"
-    # QDII / 跨境 ETF（跟踪美股，非 A 股标的；交易系统是否支持 QDII 另行确认）
-    default_buyable_fund_codes: ["040046", "513100"]
+  # nasdaq100:
+  #   title: 纳斯达克100指数投资框架
+  #   methodology: nasdaq100.md
+  #   target_index: "NDX.GI"
+  #   # QDII / 跨境 ETF（跟踪美股，非 A 股标的；交易系统是否支持 QDII 另行确认）
+  #   default_buyable_fund_codes: ["040046", "513100"]
 
   semiconductor:
     title: 半导体设备指数投资框架
@@ -105,11 +107,9 @@ strategies:
     target_index: "931152.CSI"
     default_buyable_fund_codes: ["012738"]
 
-  nonferrous:
-    title: 有色金属指数投资框架
-    methodology: nonferrous.md
-    target_index: "000819.CSI"
-    default_buyable_fund_codes: ["004433"]
+  # —— 有色金属 nonferrous(000819 广义有色) 已于 2026-06-11 拆分替换 ——
+  #   旧笼统框架归档到 _archive/nonferrous.md；按子板块细分为下方「资源周期」组的
+  #   industrial_metals / rare_earth / rare_metals（+ 独立的 chemical），各自完整方法论 + 已验证因子。
 
   baijiu:
     title: 中证白酒投资框架
@@ -177,3 +177,163 @@ strategies:
     methodology: multi-equity-low.md
     target_index: "buyable-pool"
     default_buyable_fund_codes: ["000051", "000962", "001592", "161907", "001550", "001552", "001617", "004854", "005223", "012543"]
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # 权威 51 指数清单 · 未覆盖占位（方法论 .md 待撰写）
+  #   · target_index 均经 research/index_timing/probe_coverage.py 在 18078 验证可用
+  #     （截至 2026-06-05；唯一例外 港股通创新药 987018 无 PIT，需另接源）
+  #   · 铁律：写好对应 .md 之前保持注释。manifest 两侧（dashboard+world）对缺失
+  #     文件 fail-fast，提前登记会挡掉全部新建回测。写完 .md 再逐条取消注释。
+  #   · 基金池（default_buyable_fund_codes）由用户管，占位先留 []，撰写时再配。
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # —— 宽基(3) ——
+  # bse50:
+  #   title: 北证50指数投资框架
+  #   methodology: bse50.md
+  #   target_index: "899050.BJ"        # PIT 仅 2022-04 起（rows≈993），样本偏短
+  #   default_buyable_fund_codes: []
+  # chinext:
+  #   title: 创业板指投资框架
+  #   methodology: chinext.md
+  #   target_index: "399006.SZ"
+  #   default_buyable_fund_codes: []
+  # star50:
+  #   title: 科创50指数投资框架
+  #   methodology: star50.md
+  #   target_index: "000688.SH"        # PIT 2019-12 起（rows≈1556）
+  #   default_buyable_fund_codes: []
+
+  # —— 科技TMT(5) ——
+  # internet50:
+  #   title: 中国互联网50指数投资框架
+  #   methodology: internet50.md
+  #   target_index: "H30533.CSI"       # 注：H30533=中国互联网50，非风电（清单已纠错）
+  #   default_buyable_fund_codes: []
+  # chinext_ai:
+  #   title: 创业板人工智能指数投资框架
+  #   methodology: chinext-ai.md
+  #   target_index: "970070.SZ"        # PIT 2018-12 起（rows≈1800）；与 ai.md(930713 CS人工智)互补
+  #   default_buyable_fund_codes: []
+  # defense:
+  #   title: 中证军工指数投资框架
+  #   methodology: defense.md
+  #   target_index: "399967.SZ"
+  #   default_buyable_fund_codes: []
+  # satellite:
+  #   title: 卫星通信指数投资框架
+  #   methodology: satellite.md
+  #   target_index: "980018.SZ"
+  #   default_buyable_fund_codes: []
+  # robot:
+  #   title: 机器人指数投资框架
+  #   methodology: robot.md
+  #   target_index: "H30590.CSI"
+  #   default_buyable_fund_codes: []
+
+  # —— 资源周期(4)：2026-06-11 由广义有色 nonferrous 拆分 + 独立化工，已启用 ——
+  #   因子定级见 research/index_timing/RESULT-index-timing-factor-screen.md §十。
+  #   default_buyable_fund_codes 留 [] 待用户配基金池（或在 dashboard 新建回测时手选）。
+  industrial_metals:
+    title: 工业有色指数投资框架
+    methodology: industrial-metals.md
+    target_index: "H11059.CSI"
+    default_buyable_fund_codes: []   # 工业金属(铜铝钼)主轴；trail_dd10_p120 绿灯
+  rare_earth:
+    title: 稀土产业指数投资框架
+    methodology: rare-earth.md
+    target_index: "930598.CSI"
+    default_buyable_fund_codes: []   # 稀土永磁；mom_20 动量绿灯
+  rare_metals:
+    title: CS稀金属指数投资框架
+    methodology: rare-metals.md
+    target_index: "930632.CSI"
+    default_buyable_fund_codes: []   # 锂钴能源金属；无干净绿灯,仓位纪律优先
+  chemical:
+    title: 细分化工指数投资框架
+    methodology: chemical.md
+    target_index: "000813.CSI"
+    default_buyable_fund_codes: []   # 独立基础化工；trail_dd10_p120+vt15 绿灯,裸持有负收益
+
+  # —— 消费医药(4) ——
+  # 注：现有 innodrug(931152 创新药) 已启用；下列 生物医药/中证医疗/港股通创新药
+  #     是清单的相邻标的，与 931152 是「拆分 or 并存」待用户定。
+  # consumer800:
+  #   title: 800消费指数投资框架
+  #   methodology: consumer800.md
+  #   target_index: "000932.SH"
+  #   default_buyable_fund_codes: []
+  # biopharma:
+  #   title: 生物医药指数投资框架
+  #   methodology: biopharma.md
+  #   target_index: "399441.SZ"
+  #   default_buyable_fund_codes: []
+  # medical:
+  #   title: 中证医疗指数投资框架
+  #   methodology: medical.md
+  #   target_index: "399989.SZ"
+  #   default_buyable_fund_codes: []
+  # hk_innodrug:
+  #   title: 港股通创新药指数投资框架
+  #   methodology: hk-innodrug.md
+  #   target_index: "987018.CSI"       # ✗ 18078 无 PIT 数据，需另接港股源后才可回测
+  #   default_buyable_fund_codes: []
+
+  # —— 金融(3) ——
+  # insurance:
+  #   title: 保险主题指数投资框架
+  #   methodology: insurance.md
+  #   target_index: "399809.SZ"
+  #   default_buyable_fund_codes: []
+  # bank:
+  #   title: 中证银行指数投资框架
+  #   methodology: bank.md
+  #   target_index: "399986.SZ"
+  #   default_buyable_fund_codes: []
+  # securities:
+  #   title: 证券公司指数投资框架
+  #   methodology: securities.md
+  #   target_index: "399975.SZ"
+  #   default_buyable_fund_codes: []
+
+  # —— 红利现金流(2) ——（注：dividend 000922 中证红利已启用）
+  # free_cashflow:
+  #   title: 自由现金流指数投资框架
+  #   methodology: free-cashflow.md
+  #   target_index: "980092.SZ"
+  #   default_buyable_fund_codes: []
+  # dividend_lowvol:
+  #   title: 红利低波指数投资框架
+  #   methodology: dividend-lowvol.md
+  #   target_index: "H30269.CSI"
+  #   default_buyable_fund_codes: []
+
+  # —— 黄金(1) ——
+  # gold_stocks:
+  #   title: SSH黄金股票指数投资框架
+  #   methodology: gold-stocks.md
+  #   target_index: "931238.CSI"
+  #   default_buyable_fund_codes: []
+
+  # —— 海外/黄金(4) ——（market=cn 不覆盖，需另接 hk/us/商品 数据源；
+  #    sp500/nasdaq100 已写方法论、见文件上方占位）——
+  # hstech:
+  #   title: 恒生科技指数投资框架
+  #   methodology: hstech.md
+  #   target_index: "HSTECH"
+  #   default_buyable_fund_codes: []
+  # hsi:
+  #   title: 恒生指数投资框架
+  #   methodology: hsi.md
+  #   target_index: "HSI"
+  #   default_buyable_fund_codes: []
+  # gold_au9999:
+  #   title: 黄金9999投资框架
+  #   methodology: gold-au9999.md
+  #   target_index: "AU9999"
+  #   default_buyable_fund_codes: []
+  # sp_ashare_lowvol:
+  #   title: 标普A股红利低波50指数投资框架
+  #   methodology: sp-ashare-lowvol.md
+  #   target_index: "SPCLLHCP"
+  #   default_buyable_fund_codes: []

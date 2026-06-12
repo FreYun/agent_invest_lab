@@ -10,26 +10,25 @@
 
 > **总原则：先审旧仓、再考虑动。** 主线是月级的事，绝大多数交易日的结论应是"维持昨天的核心结构不动"。每天跑流程是为了识别真风险切换、真主线切换和再入场条件，不是为了天天调仓。
 
-> **技能驱动（强制）**：本框架是"总纲 + 索引"，具体判断写在四个判断管线 skill 里。它们的全文已直接注入在 daily prompt 的【判断管线 skill】块里（无需 load_skill），每个决策日必须按它们的算法和工具表实操，不能凭印象跳过。管线顺序固定：
-> 1. **market-context** → 判 **regime / risk_state**（敢不敢上仓的总环境）。
-> 2. **market-mainline** → 识别主线板块（sector_* 三证据 x 三闸门）+ 筛主线对应可投基金池。
-> 3. **mainline-rotation** → 第0层 regime 开关 + 核心/卫星组合 + 换仓纪律（决定今天动不动）。
-> 4. **fund-screening** → 候选基金精排选最终载体。
+> **报告驱动（系统预生成）**：本框架是"总纲 + 索引"。今日的市场判断（regime / risk_state）、主线识别、核心/增强组合骨架、每板块选好的基金，已由系统按 v5 方法论预生成在 daily prompt 的【市场研究报告（系统预生成 · PIT）】块里。三份报告就是权威结论，你直接消费：
+> 1. **market_context** → regime / risk_state（敢不敢上仓的总环境）。
+> 2. **market_mainline** → 主线板块（9 类 + 确信度）+ 可投基金池（fund_pool，双测度选好）。
+> 3. **mainline_rotation** → 第0层 regime 开关 + 核心/卫星组合骨架 + 今日动作（动不动）。
 >
-> 不按注入的 skill 实操、只看预注入数据块就直接下单 = 没按流程。主线识别必须真的调 `sector_search` / `sector_factor` / `sector_market` / `sector_constituents` 做出来，不是看指数块拍脑袋。
+> 不要自己再调 `sector_search` / `sector_factor` / `sector_market` / `market_temperature` 去重跑主线识别或 regime 判断——系统已替你做完。把精力放在「步 5：仓位/风控/下单」。
 
-| 步 | 做什么 | 对应注入的 skill | 落到本文哪节 |
+| 步 | 做什么 | 数据来源 | 落到本文哪节 |
 |---|---|---|---|
-| **0 读预注入** | 持仓 NAV、账户绩效、回撤、主要指数、可买池主题分布 → 都在 daily prompt 顶部，先读不重复拉 | - | 数据边界 |
-| **1 判断市场环境（regime）** | risk_state + market_regime + valuation_anchor + 沪深300是否站年线 | **market-context** | 一、§1 |
-| **2 判断主线 + regime 开关** | 用 sector_* 识别主线；按 regime 开关决定打法：抱主线 / 无主线退宽基 / 破年线退红利 | **market-mainline** + **mainline-rotation** | 一、§2 + §4 |
-| **3 维护核心/增强组合** | 核心仓低换手；增强仓只在确认窗口触发时换；卖出必须有再入场条件 | **mainline-rotation** | 三 + 五 |
-| **4 选基金载体** | 用可买池主题分布 + 双测度可行项 + `get_fund_detail` 精排 1-3 只 | **market-mainline** + **fund-screening** | 二 |
-| **5 定总仓位 + 风控 + 下单** | risk_state x 主线档 → 总仓位档；铺核心/增强/现金；过回撤闸门；按目标权重调仓、落 mem0 | - | 一§5 + 三/六 |
+| **0 读预注入** | 持仓 NAV、账户绩效、回撤、主要指数、可买池主题分布 → 都在 daily prompt 顶部，先读不重复拉 | daily prompt 顶部 | 数据边界 |
+| **1 判断市场环境（regime）** | 直接读报告：risk_state + market_regime + valuation_anchor + 沪深300是否站年线 | **market_context 报告** | 一、§1 |
+| **2 判断主线 + regime 开关** | 直接读报告：主线主题；regime 开关打法：抱主线 / 无主线退宽基 / 破年线退红利 | **market_mainline + mainline_rotation 报告** | 一、§2 + §4 |
+| **3 维护核心/增强组合** | 直接采用报告核心/卫星组合骨架与今日动作；核心仓低换手、增强仓确认窗口才换、卖出必须有再入场条件 | **mainline_rotation 报告** | 三 + 五 |
+| **4 选基金载体** | 直接用报告 fund_pool 双测度选好的基金；只在可买池内核对可买性，必要时 `get_fund_detail` 复核 | **mainline_rotation / market_mainline 报告 fund_pool** | 二 |
+| **5 定总仓位 + 风控 + 下单** | risk_state x 主线档 → 总仓位档；铺核心/增强/现金；过回撤闸门；按目标权重调仓、落 mem0 | **← 这是你的核心职责** | 一§5 + 三/六 |
 
-**漏斗纪律**：第1步不是 risk_on 就不打开增强仓；第2步无主线就增强仓置 0；任一步给"降/退"信号，后面就别加仓。
+**漏斗纪律**：第1步报告不是 risk_on 就不打开增强仓；第2步报告无主线就增强仓置 0；任一步报告给"降/退"信号，后面就别加仓。
 
-> **回测工具边界**：market-mainline 的「成分重叠」侧若依赖回测白名单外工具（如 `idx_constituents`）且调不到，则跳过成分重叠，使用 `fund_nav` 净值相关 + daily prompt 的可买池主题分布 + `get_fund_detail` 做主线到基金映射。主线识别本身的 sector_* 流程不受影响，必须照做。
+> **职责边界**：主线识别、regime 判断、板块选基已由系统在报告里完成——你不重复做、也不必调 `sector_*`。你的核心职责是步 5：把报告结论翻成总仓位档、核心/增强/现金配比、风控闸门与下单。报告缺失时才回退到自行保守判断。下文相关 §节保留作为理解报告口径的背景，不是要你重跑的流程。
 
 ## 核心认知
 

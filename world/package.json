@@ -10,7 +10,8 @@
     "start": "node --experimental-strip-types main.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "check": "node --experimental-strip-types main.ts --help && tsc -p tsconfig.json --noEmit",
-    "backtest": "node --experimental-strip-types src/backtest-dashboard/server.ts"
+    "backtest": "node --experimental-strip-types src/backtest-dashboard/server.ts",
+    "prepass": "node --experimental-strip-types src/market-reports/prepass-driver.ts"
   },
   "engines": {
     "node": ">=22.6.0"

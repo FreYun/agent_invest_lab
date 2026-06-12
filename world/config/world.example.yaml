@@ -81,3 +81,12 @@ research_day_timeout_seconds: 300
 # bot 的 config/mcporter.json 用 ${SIMWORLD_PROXY_URL} 占位符引用代理监听 URL，
 # buildShadowWorkspace 拷贝时会替换为实际 URL。
 simworld_upstream_url: http://127.0.0.1:18078/mcp
+
+strategy_library_root: ../../strategies/index-products
+bot_assignments:
+  bot101:
+    strategy_id: multi_equity_high
+  bot102:
+    strategy_id: multi_equity_medium
+  bot103:
+    strategy_id: multi_equity_low

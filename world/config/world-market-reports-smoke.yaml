@@ -1,0 +1,83 @@
+# 【SMOKE】1 个月窗口的烟雾验证配置，仅生成 2025-06 一期，验证端到端链路。
+research_loop: /home/rooot/.openclaw/research-loop/ts
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
+
+# ── market-reports pre-pass：预生成全局共享的三类市场研究报告 ──────────────────────
+# 三个 reporter agent（非投资者）每个决策日各产出一份研报并 submit_market_report 落库。
+# 回测的各投资 bot 之后经 get_market_report（PIT）读取。设计见 docs/market-reports-design.md。
+#
+# - reporter_mode: 不交易、无账户；daily message 换成精简「产出本期研报」提示（run.ts 门控）。
+# - 不设 fund_mcp_cli → 不 init/settle/close 基金账户。
+# - chat_step_mode: monthly → 每个自然月第一个交易日唤起一次（月度生成；架构支持改 daily）。
+# - concurrency: 1 + bots 顺序 [context, mainline, rotation] → 同一决策日顺序执行，
+#   保证 mainline/rotation 能 get_market_report 读到当日刚 submit 的上游报告。
+reporter_mode: true
+
+bots: [reporter-context, reporter-mainline, reporter-rotation]
+
+replay:
+  from: "2025-06-03"
+  to: "2025-06-13"
+
+calendar: ../runtime/calendar.json
+
+concurrency: 1
+chat_step_mode: monthly
+chat_monthly_nth: 1
+per_bot_timeout_seconds: 900
+research_day_every: 0
+research_day_timeout_seconds: 1200
+
+simworld_upstream_url: http://127.0.0.1:18078/mcp
+
+# reporter 工作区里 FUND_UNIVERSE.md（被动指数型基金全集，§七 候选宇宙）随影子工作区拷入。
+# reporter-context 没有该文件 → buildShadowWorkspace 自动跳过。
+shadow_include:
+  - IDENTITY.md
+  - SOUL.md
+  - AGENTS.md
+  - USER.md
+  - METHODOLOGY.md
+  - RESEARCH.md
+  - MEMORY.md
+  - EQUIPPED_SKILLS.md
+  - TOOLS.md
+  - skills
+  - FUND_UNIVERSE.md
+  - config/mcporter.json
+
+# 预激活的 simworld 工具（免 discover_tools 试错风暴）。覆盖三个 skill 所需全集：
+# 行情/估值/温度/VIX、sector_*、idx_constituents、宏观、债/商品、研报、quant_factor、fund_*。
+simworld_tools:
+  - name: market_index_quote
+  - name: market_index_val
+  - name: market_index_gzxjb
+  - name: market_temperature
+  - name: option_vix
+  - name: option_gvspread_signal
+  - name: sector_search
+  - name: sector_market
+  - name: sector_factor
+  - name: sector_factor_detail
+  - name: sector_constituents
+  - name: sector_index_match
+  - name: idx_constituents
+  - name: stock_profile
+  - name: stock_market
+  - name: stock_capital_flow
+  - name: stock_ownership
+  - name: stock_financial_quality
+  - name: stock_alpha
+  - name: stock_events
+  - name: macro_data
+  - name: macro_nowcasting_snapshot
+  - name: macro_50etf_vix
+  - name: macro_indicator_search
+  - name: macro_indicator_value
+  - name: bond_yield_curve
+  - name: commodity_market
+  - name: research_search
+  - name: research_view
+  - name: quant_factor
+  - name: fund_nav
+  - name: fund_basic_info

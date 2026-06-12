@@ -133,3 +133,22 @@ bearonly / deepdd / rsi 均纯 close，可靠）。
 云计算多族）有族级鲁棒性背书；**单因子赢家（930713 mom_20）只能当黄灯/第二意见写进 methodology**。
 产物：7 份 methodology 见 `strategies/index-products/`（telecom-equipment / telecom-tech / ai /
 chip / semiconductor-industry / cloud / game）。
+
+## 十、资源4子板块全因子族复扫（2026-06-11，为拆分 nonferrous 广义有色而做）
+
+把广义有色 `nonferrous(000819)` 拆成 **工业有色 H11059 / 稀土 930598 / CS稀金属 930632** 三个细分 + 独立的
+**细分化工 000813**。脚本 `screen_resource4_allfactors.py`（复用 ne6 模板）：4 指数 × 全 44 因子
+IS(起点–2021)/OOS(2022–2026.06) + validation（bootstrap 600、wf 5 窗、5bp、T+1）。
+4 个指数 quote 均无 high/low → chand_* 的 ATR 用 close 代理**偏乐观、仅参考**；下表只锚**纯 close 因子**
+（trail_dd / dd_ladder / mom / vt / donchian 可靠）。
+
+| 指数 | 代码 | 样本 | 最佳纯close绿灯(OOS) | 关键数字 | 备注 |
+|---|---|---|---|---|---|
+| 工业有色 | H11059.CSI | 12.4y | **trail_dd10_p120** | OOS Cal 0.34 vs BH 0.10、dCal+0.24、DD −28% vs −52%、CI[0.03,1.11]、wf5/5 | donch60_trail / mom_20 近绿；DD-止损族有效，最直接继承 nonferrous 工业金属逻辑 |
+| 稀土产业 | 930598.CSI | 11.3y | **mom_20** | OOS Cal 0.62 vs BH 0.11、dCal+0.52、DD −23% vs −53%、CI[0.04,1.18]、wf4/5 | 动量最优；trail_dd10 / dd_ladder 近绿；行政配额 + 磁材需求驱动 |
+| CS稀金属 | 930632.CSI | 11.1y | **无（全黄灯）** | chand_22 OOS 0.53 但 wf 仅3/5 + ATR偏乐观；mom_20 wf3/5 | BH OOS DD **−62%（四者最惨）**；无 wf≥4 绿灯 → 择时只降回撤、仓位纪律优先 |
+| 细分化工 | 000813.CSI | 12.4y | **trail_dd10_p120 + vt15_x_trend200** | trail_dd10: OOS Cal 0.22 vs BH **−0.12**、dCal+0.33、wf4/5、CI[0.09,1.25]；vt15: OOS DD 仅 **−10%**、wf4/5，但 flips254 换手高 | **BH 裸持有负收益 → 择时价值四者最大**；非有色、独立化工周期 |
+
+**诚实分级**：工业有色(DD族)、稀土(动量)、细分化工(DD+vt族)有纯 close 绿灯且 wf≥4；**CS稀金属无干净绿灯**
+——chand 的高 IS/OOS 数值被 wf3/5 + ATR偏乐观双重打折，只能当降回撤刻度，不写成 alpha。
+产物：4 份 methodology（industrial-metals / rare-earth / rare-metals / chemical），原 `nonferrous.md` 归档到 `_archive/`。

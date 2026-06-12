@@ -41,3 +41,12 @@ buyable_fund_codes:
   - "012543"   # 嘉实中证新能源汽车指数A
 
 simworld_upstream_url: http://127.0.0.1:18078/mcp
+
+strategy_library_root: ../../strategies/index-products
+bot_assignments:
+  bot101:
+    strategy_id: multi_equity_high
+  bot102:
+    strategy_id: multi_equity_medium
+  bot103:
+    strategy_id: multi_equity_low

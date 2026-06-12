@@ -52,6 +52,11 @@ export interface WorldConfig {
   // monthly 模式下决策落在每月第几个交易日。正数=从月初数（1=月初）；负数=从月末倒数（-1=月末）。
   // 越界自动夹到当月首/末交易日。缺省=1（月初，历史行为）。
   chatMonthlyNth?: number
+  // reporter 模式（market-reports pre-pass 专用）：bot 不是投资者而是「市场研究员」，每个决策日
+  // 只产出一份研报并 submit_market_report，不交易、无账户。开启后 daily message 换成精简的
+  // 「产出本期研报」提示（不注入持仓/buyable/交易规则/belief schema），其余 plumbing（PIT 日期注入、
+  // simworld 工具预激活、影子工作区、mem0）全部复用。配合不设 fund_mcp_cli（不交易）使用。
+  reporterMode?: boolean
   loop: 'research-loop' | 'openclaw-pi'
   openclawRoot?: string
   piServerEntry?: string
@@ -222,6 +227,7 @@ export function loadWorldConfig(path: string): WorldConfig {
   const chatWeekday = typeof raw.chat_weekday === 'number' && raw.chat_weekday >= 1 && raw.chat_weekday <= 5 ? Math.floor(raw.chat_weekday) : undefined
   // monthly：第 N 个交易日（正=从月初、负=从月末倒数，不能为 0）；非法/缺省 → undefined（回落到月初）。
   const chatMonthlyNth = typeof raw.chat_monthly_nth === 'number' && Number.isFinite(raw.chat_monthly_nth) && Math.trunc(raw.chat_monthly_nth) !== 0 ? Math.trunc(raw.chat_monthly_nth) : undefined
+  const reporterMode = raw.reporter_mode === true
   const rlConfigBase = typeof raw.rl_config_base === 'string' && raw.rl_config_base.trim()
     ? resolveMaybe(baseDir, raw.rl_config_base)
     : resolveMaybe(baseDir, '../config/trading-rl-config.base.json')
@@ -345,5 +351,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
   }
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
 }

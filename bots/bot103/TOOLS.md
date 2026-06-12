@@ -129,3 +129,9 @@ mem0_search(query: "黄金ETF写过哪些角度", scope: "self")
 - 每日先读 prompt 注入的可买池主题分布，再按方法论收敛候选。
 - 不用 `get_fund_detail` 扫全池，只对最终 1-3 只候选拉全量画像。
 - 每笔交易都必须留下可审计理由，理由要包含风险状态、主线判断、仓位结构变化。
+
+---
+
+## 联网搜索
+
+- 联网搜索通过 browser 工具访问搜索引擎或目标站点（使用前先读 `skills/browser-base/SKILL.md`）
