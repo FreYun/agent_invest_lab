@@ -310,23 +310,30 @@ export function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow
   // > 全局 rlConfigBase。语义是字段级合并——override 提供的 provider/base_url/model/api_key* 盖过 base，
   // 没提供的继续从 base.primary 继承（LLM 调用参数等都在 base 里，不必每个 bot 重复写）。
   const override = config.botModels?.[botId] ?? readBotModelOverride(config.botsRoot, botId) ?? {}
-  // override 换了模型/端点时，旧的明文 api_key 不能跟着继承（会拿错 key）——只要 override 带了
-  // api_key_from_openclaw 或 base_url，就丢掉 base 里可能残留的明文 api_key，下面按引用重新解析。
   const primary = { ...basePrimary, ...override } as Record<string, unknown>
-  if (('api_key_from_openclaw' in override || 'base_url' in override) && !('api_key' in override)) {
-    delete primary.api_key
-  }
-  // api_key_from_openclaw → 明文 api_key：新 rust 版按名取 key 的逻辑已删，必须落明文。
+  // 单一真相源（SSOT）：provider（api_key_from_openclaw）唯一决定 base_url + key，二者都取自
+  // openclaw.json 的同一 provider 条目 → base_url 与 key 不可能脱钩。model.yaml 里手写的 base_url
+  // 一律忽略（历史上它和 key 引用各自维护、git revert 一翻就错配：火山网关收到 eastmoney key → 401）。
+  // 同名模型 id 可能挂多个 provider（kimi-k2.6 同时在 zai-coding-plan/kimi-volc），故判别器必须是
+  // provider 名而非模型名。两个 key 消费者都要喂：rust chat（config.rs::merge_from_data）只认
+  // api_key_from_openclaw（查 providers.<name>.apiKey）、完全不读明文 api_key；TS 端 history-window
+  // 压缩（compact.ts::resolveLlmEndpointFromRlConfig）只读明文 api_key + base_url。
   const provName = typeof primary.api_key_from_openclaw === 'string' ? primary.api_key_from_openclaw : ''
-  if (provName && typeof primary.api_key !== 'string') {
+  if (provName) {
+    let prov: { baseUrl?: string; apiKey?: string } | undefined
     try {
       const oc = JSON.parse(readFileSync(join(openclawDir, 'openclaw.json'), 'utf8')) as Record<string, unknown>
-      const providers = (((oc.models as Record<string, unknown> | undefined)?.providers) ?? {}) as Record<string, { apiKey?: string }>
-      const key = providers[provName]?.apiKey
-      if (typeof key === 'string' && key) primary.api_key = key
-    } catch { /* 非致命：解析不到则留空，server 会报 "LLM API not configured" */ }
+      const providers = (((oc.models as Record<string, unknown> | undefined)?.providers) ?? {}) as Record<string, { baseUrl?: string; apiKey?: string }>
+      prov = providers[provName]
+    } catch (err) {
+      throw new Error(`writeResearchLoopYaml(${botId}): 读不到 ${openclawDir}/openclaw.json — ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (!prov || typeof prov.baseUrl !== 'string' || !prov.baseUrl || typeof prov.apiKey !== 'string' || !prov.apiKey) {
+      throw new Error(`writeResearchLoopYaml(${botId}): provider "${provName}" 在 openclaw.json 查无 baseUrl/apiKey —— model.yaml 的 api_key_from_openclaw 写错了？`)
+    }
+    primary.base_url = prov.baseUrl   // base_url 由 provider 派生，无视手写值（SSOT）
+    primary.api_key = prov.apiKey     // 明文给压缩端；api_key_from_openclaw 原样保留给 rust
   }
-  delete primary.api_key_from_openclaw
   model.primary = primary
   base.model = model
   const mcp = (typeof base.mcp === 'object' && base.mcp ? base.mcp : {}) as Record<string, unknown>

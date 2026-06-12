@@ -2,7 +2,6 @@
   "model": {
     "primary": {
       "provider": "openai_compatible",
-      "base_url": "https://dd-ai-api.eastmoney.com/v1",
       "model": "qwen3.6-plus",
       "api_key_from_openclaw": "zai-coding-plan"
     }
