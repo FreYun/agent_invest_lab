@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import { botDayDir, hiddenRecordsFile, replyFile, runDir, sentFile, universeContaminationFile } from '../paths.ts'
+import { botDayDir, hiddenRecordsFile, replyFile, runDir, sentFile, shadowWorkspaceDir, universeContaminationFile } from '../paths.ts'
 import { readRunModel, type RunModelInfo } from '../run-model.ts'
 import { listControllableRuns, type WorldState } from '../state.ts'
 import { requestPause, requestStop } from '../run-control.ts'
@@ -893,6 +893,28 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
           return
         }
         sendJson(res, 200, loadReflection(worldRoot, runId, botId, tradeDate))
+        return
+      }
+      // bot 用户画像（USER.md）——优先读 run 快照 workspaces/<bot>/USER.md（与该次
+      // 回测实际投喂 bot 的版本一致），缺失时回退仓库 bots/<bot>/USER.md 当前版。
+      // ID 走白名单正则，挡掉 ../ 路径穿越；找不到文件返回空 content，前端兜底提示。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/bot-user-md') {
+        const botId = url.searchParams.get('bot_id') ?? ''
+        const runId = url.searchParams.get('run_id') ?? ''
+        const idRe = /^[A-Za-z0-9._-]+$/
+        if (!idRe.test(botId)) { sendJson(res, 400, { error: 'bot_id required and must be well-formed' }); return }
+        let content = ''
+        let source = ''
+        if (runId && idRe.test(runId)) {
+          const snap = join(shadowWorkspaceDir(worldRoot, runId, botId), 'USER.md')
+          if (existsSync(snap)) { content = readFileSync(snap, 'utf8'); source = 'run-snapshot' }
+        }
+        if (!content) {
+          // worldRoot 默认 = <repo>/world/runtime → ../../bots 即 agent_invest_lab/bots
+          const fallback = join(worldRoot, '..', '..', 'bots', botId, 'USER.md')
+          if (existsSync(fallback)) { content = readFileSync(fallback, 'utf8'); source = 'bots-dir' }
+        }
+        sendJson(res, 200, { botId, runId, source, content })
         return
       }
       // Live run control: list controllable runs (running/paused) read from per-run
