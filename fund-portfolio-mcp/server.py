@@ -3734,6 +3734,13 @@ def _historical_holding_meta(conn, bot_id: str, fund_code: str, trade_date: str)
     return _fund_info_defaults(conn, fund_code)
 
 
+# 卖出「全部」时按金额折算份额、取整后会留下 <1 份的零碎份额（市值几分钱），交易系统
+# 未归零、份额 > 1e-6 故不算 closed，于是每天的持仓快照都照抄一遍。市值低于此阈值的
+# 仓视为清仓残值，仍计入总资产/净值口径（保持账户口径不变），但不写入持仓快照、不计入
+# 资产权重——避免「最新持仓」面板被一堆几分钱的尘埃仓刷屏。
+DUST_MV_THRESHOLD = 1.0  # 元
+
+
 def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "") -> dict:
     """单 bot 某交易日的快照计算 + 写库（fund_bot_daily_snapshots / fund_bot_position_snapshots /
     更新 fund_bot_holdings 现态）。这是系统层唯一的基金账户业绩计算入口。
@@ -3819,6 +3826,11 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
         daily_pnl = mv - prev_mv
         invested_value += mv
         ac = current.get("asset_class") or meta.get("asset_class") or ""
+        # 清仓残值（市值 < DUST_MV_THRESHOLD 的零碎份额）：市值已计入 invested_value 保持
+        # 账户/净值口径不变，但不计入资产权重、不写持仓快照——否则「最新持仓」会被一堆
+        # 几分钱的尘埃仓刷屏。
+        if mv < DUST_MV_THRESHOLD:
+            continue
         if ac in asset_weights:
             asset_weights[ac] += mv
 
