@@ -39,7 +39,9 @@ export interface Belief {
 export const ACTIVITY_ALIVE_THRESHOLD = 0.05;
 export const ACTIVITY_DEAD_THRESHOLD = 0.03;
 export const BRIER_BASELINE_DEFAULT = 0.25;
-export const HISTORY_WINDOW_DAYS = 21;
+// 42 个日历日：daily bot ≈ 30 条；weekly bot ≈ 6-8 条——保证 weekly 节奏也能攒够
+// suggestions() 的 n≥5 触发阈值（21 天窗口下 weekly bot 只有 ~3 条，偏差建议永远不触发）。
+export const HISTORY_WINDOW_DAYS = 42;
 
 // === Parsers / Validators ===
 

@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-BASE = Path("/home/rooot/agent_invest_lab/research/index_timing")
+BASE = Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing")
 DATA = BASE / "data"
 
 UNIVERSE = [

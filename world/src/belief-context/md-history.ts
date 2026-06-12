@@ -10,7 +10,9 @@ export interface BeliefRecord {
   source: "md" | "reply"; // 多基金 bot 从 MD frontmatter, 单基金 bot 从 reply.json
 }
 
-const RUNS_ROOT = "/home/rooot/agent_invest_lab/world/runtime/runs";
+// 从模块位置自推导（world/src/belief-context → world/runtime/runs），不依赖部署机的 HOME 布局。
+// 曾硬编码 /home/rooot/...（迁移后死路径）→ scanRecentBeliefs 永远扫空 → 校准反馈整轮"首日运行"。
+const RUNS_ROOT = path.resolve(import.meta.dirname, "..", "..", "runtime", "runs");
 const MAX_RUN_DIRS = 30;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 

@@ -1,5 +1,6 @@
-import { HORIZONS, type Horizon } from "./schema.ts";
+import { HORIZONS, HISTORY_WINDOW_DAYS, type Horizon } from "./schema.ts";
 import type { CalibrationStats, HorizonStats } from "./brier.ts";
+import type { BeliefRecord } from "./md-history.ts";
 
 // 第一原则提醒: 这个反馈块**不是计分卡**, 真目标是绝对收益 + 控回撤 (账户面板自见).
 // 这里展示的是 belief 质量的诊断数据, 帮你看自己 reasoning 是不是漂; 别为优化 Brier 而扭曲决策.
@@ -96,20 +97,34 @@ function suggestions(stats: CalibrationStats): string {
   return ["▍ 建议 (服务于绝对收益 + 控回撤这个第一原则):", ...items.map((s) => `  - ${s}`)].join("\n");
 }
 
-export function formatCalibrationBlock(stats: CalibrationStats, botId: string): string {
+export function formatCalibrationBlock(
+  stats: CalibrationStats,
+  botId: string,
+  lastRecord?: BeliefRecord,
+): string {
   void botId;
   if (stats.n_records === 0) {
     return [
-      "【信念校准 · 近 21 日反馈】",
+      `【信念校准 · 近 ${HISTORY_WINDOW_DAYS} 日反馈】`,
       "",
       "首日运行: 尚无 belief 历史, 今天按 schema 输出第一份.",
       "提醒: 这份信念是工具不是 KPI; 你的真目标是**账户的绝对收益 + 回撤控制**, 信念帮你想清楚, 决策再服务这个目标.",
     ].join("\n");
   }
   const lines: string[] = [];
-  lines.push("【信念校准 · 近 21 日反馈】");
+  lines.push(`【信念校准 · 近 ${HISTORY_WINDOW_DAYS} 日反馈】`);
   lines.push("");
   lines.push(`▍ 历史记录: ${stats.n_records} 条 belief (target = ${stats.target_index ?? "n/a"})`);
+  if (lastRecord) {
+    // 每日会话无状态——bot 看不到自己昨天写了什么, prior_p_up/delta 只能瞎填 null。
+    // 这里回显上一条 belief 的三档 p_up, 让 prior/delta 有据可填, 活性检测才有数据。
+    const h = lastRecord.belief.horizons;
+    lines.push(
+      `▍ 上一条 belief (${lastRecord.date}): t+1 p_up=${fmtNum(h["t+1"]?.p_up ?? null)}, ` +
+      `t+5 p_up=${fmtNum(h["t+5"]?.p_up ?? null)}, t+20 p_up=${fmtNum(h["t+20"]?.p_up ?? null)} ` +
+      `→ 今天的 prior_p_up 按这个填, delta = 今日 − 上述值`,
+    );
+  }
   lines.push("");
   lines.push("▍ Brier 评分 (校准误差, 0=完美, 0.25≈随机, 越小说明你 ex-ante 概率越贴近事后实际)");
   for (const h of HORIZONS) {

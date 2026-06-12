@@ -1,10 +1,10 @@
 import sys
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np,pandas as pd
 from pathlib import Path
 import local_sweep as L
 from backtest.validation import bootstrap_sharpe_ci, walk_forward_analysis
-DATA=Path("/home/rooot/agent_invest_lab/research/index_timing/data")
+DATA=Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing/data")
 FULL_S,FULL_E="2018-06-01","2026-06-06"
 
 def build(px,erp):

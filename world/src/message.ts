@@ -509,6 +509,12 @@ function periodBlock(p: DailyMessageContext['periodInfo']): string {
 这是一次**周期再平衡决策**，不是单日操作。下方所有数据块覆盖的是从上次决策到今天的**整段区间**——请按区间视角判断趋势与回撤，把"这段时间发生了什么"作为决策依据，不要把累计涨跌误读成单日波动。中间的交易日你没有被唤起，系统只做了结算与收盘核算；这段错过的行情不能补做交易，今天的决策要把整段区间一并考虑进去。`
 }
 
+// 复盘升级条款阈值：累计跑输躺平 ≥10pct 且当前仓位 <20% → 选项②（论证维持）失效，必须走①重写。
+// 教训（dash-2026-06-10T03-20-05 bot5）：150+ 交易日 0% 仓位踏空 +30%，每次复盘都靠"回撤优于躺平"
+// 选②混过去——对照只看回撤时，空仓永远自评有效。把"长期空仓踏空"对称纳入失效判据。
+const ESCALATE_ALPHA_PP = -10
+const ESCALATE_POS_WEIGHT = 0.2
+
 function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): string {
   if (!isReviewDay(dc)) return ''
   const s = dc!.performance!.summary!
@@ -520,6 +526,10 @@ function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): s
   lines.push('')
   lines.push('▍ 第一步 · 先对当前市场大趋势做一句话定性判断：上行（牛市 / 主升段）｜ 下行（熊市 / 主跌段）｜ 震荡（盘整 / 磨底 / 筑顶）。依据已注入的主要指数长均线排列（MA60/120/200 多空）+ 你持仓标的所处位置，别用单日涨跌代替趋势。趋势 regime 变了而方法论没跟上，是最典型的失效——先锚定它，再看下面的业绩对照。')
   lines.push('')
+  let escalate = false
+  // 当前仓位权重（账户快照取自今日 settle 后）。account 缺失时无法判定，不触发升级。
+  const acct = dc!.account?.account
+  const posWeight = acct && acct.total_value > 0 ? acct.market_value / acct.total_value : null
   if (m) {
     const alpha = s.total_return_pct - m.return_pct
     const ddGap = s.max_drawdown_pct - m.max_drawdown_pct  // 回撤都是负数；你的更负=回撤更深=ddGap<0
@@ -528,14 +538,22 @@ function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): s
     lines.push(`  累计收益：你 ${fmtPct(s.total_return_pct)} ｜ 躺平 ${fmtPct(m.return_pct)} ｜ 超额 ${fmtSignedPP(alpha)}（${verdict}）`)
     lines.push(`  最大回撤：你 ${fmtPct(s.max_drawdown_pct)} ｜ 躺平 ${fmtPct(m.max_drawdown_pct)} ｜ 差 ${fmtSignedPP(ddGap)}（负=你回撤更深）`)
     lines.push('  → 你做了一通择时/选品，结果若既没跑赢躺平、回撤又更深，方法论大概率已失效。')
+    lines.push('  → 对照是双向的："回撤比躺平浅"不能单独证明方法论有效——空仓时回撤天然小，代价是上面那行超额。**长期低仓位 + 大幅跑输 = 踏空，和持仓回撤一样是失效证据。**')
+    escalate = alpha <= ESCALATE_ALPHA_PP && posWeight !== null && posWeight < ESCALATE_POS_WEIGHT
   } else {
     lines.push(`▍ 第二步 · 你 · 自 Day 1 起累计：收益 ${fmtPct(s.total_return_pct)} ｜ 最大回撤 ${fmtPct(s.max_drawdown_pct)}`)
     lines.push('  （本轮无躺平基准对照，按绝对收益是否达标、回撤是否失控自判方法论有效性。）')
   }
   lines.push('')
-  lines.push('▍ 第三步 · 今天必须二选一（不允许沉默跳过——既不改也不论证 = 违约）：')
-  lines.push(`  ① 判断方法论已失效 → 调 \`mcp__strategy_mcp__update_my_strategy(bot_id="${botId}", strategy, reason)\` 完整重写 METHODOLOGY.md（整篇新版本，不是 diff）。reason 写清：哪条 thesis 破了、被什么数据证伪、新版怎么改。`)
-  lines.push('  ② 判断方法论仍成立 → mem0_add 写下"复盘结论：方法论仍有效"，并逐条反驳上面每个负面信号（为什么跑输只是暂时、回撤在容忍内、thesis 仍未破），给出数据依据——不是空喊"再观察"。')
+  if (escalate) {
+    lines.push(`▍ 第三步 · ⛔ 升级条款已触发（累计跑输躺平 ≥${Math.abs(ESCALATE_ALPHA_PP)}pct 且当前仓位 ${fmtNum((posWeight ?? 0) * 100, 1)}% < ${ESCALATE_POS_WEIGHT * 100}%）——选项②今天不可用：`)
+    lines.push('  长期不出手本身就是被证伪的 thesis："等条件满足再进场"的条件被市场反复路过而你从未进场，说明触发器定义有结构性问题（典型：分位/温度类指标"涨=贵=过热=偏空"，趋势市里永远投反对票，凑不齐同号确认）。')
+    lines.push(`  今天必须调 \`mcp__strategy_mcp__update_my_strategy(bot_id="${botId}", strategy, reason)\` 完整重写 METHODOLOGY.md。新版必须回答三件事：① 哪个维度长期投反对票导致永不建仓，怎么改；② 中性档对应多少基准仓位（0% 不是中性，是满仓押注下跌）；③ 什么客观硬信号下允许右侧追入。若论证后仍认为该空仓，就把"为何此环境 0% 最优 + 何时必须重新进场的客观触发器"写进新版——空仓可以是结论，不能是惯性。`)
+  } else {
+    lines.push('▍ 第三步 · 今天必须二选一（不允许沉默跳过——既不改也不论证 = 违约）：')
+    lines.push(`  ① 判断方法论已失效 → 调 \`mcp__strategy_mcp__update_my_strategy(bot_id="${botId}", strategy, reason)\` 完整重写 METHODOLOGY.md（整篇新版本，不是 diff）。reason 写清：哪条 thesis 破了、被什么数据证伪、新版怎么改。`)
+    lines.push('  ② 判断方法论仍成立 → mem0_add 写下"复盘结论：方法论仍有效"，并逐条反驳上面每个负面信号（为什么跑输只是暂时、回撤在容忍内、thesis 仍未破），给出数据依据——不是空喊"再观察"。注意：连续多次复盘都选②而超额持续恶化，是"用纪律包装惯性"的红旗——跑输扩大到升级线（跑输 ≥10pct 且仓位 <20%）时②会被直接禁用。')
+  }
   lines.push('判据别只盯一天涨跌：结合上方【信念校准】块的 Brier / 活性 + 第一步的趋势定性 + 第二步的累计对照一起判。该改就改，别用"不轻易改"麻痹自己。')
   return `\n\n${lines.join('\n')}`
 }

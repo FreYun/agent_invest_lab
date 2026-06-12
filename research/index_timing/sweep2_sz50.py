@@ -1,9 +1,9 @@
 import sys,json,urllib.request
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np,pandas as pd
 from pathlib import Path
 import local_sweep as L
-DATA=Path("/home/rooot/agent_invest_lab/research/index_timing/data")
+DATA=Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing/data")
 IS_S,IS_E="2018-06-01","2023-12-31"; OOS_S,OOS_E="2024-01-01","2026-06-06"
 URL="http://127.0.0.1:18078/mcp";H={"Content-Type":"application/json","Accept":"application/json, text/event-stream"}
 def call(m,p,sid=None):

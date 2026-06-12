@@ -1,10 +1,10 @@
 import sys
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np,pandas as pd
 from pathlib import Path
 import local_sweep as L
 from backtest.validation import bootstrap_sharpe_ci, walk_forward_analysis
-DATA=Path("/home/rooot/agent_invest_lab/research/index_timing/data")
+DATA=Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing/data")
 # 复用已缓存数据 + 重新拉温度/gv (缓存)
 import json,urllib.request
 URL="http://127.0.0.1:18078/mcp";H={"Content-Type":"application/json","Accept":"application/json, text/event-stream"}

@@ -1,11 +1,11 @@
 import sys
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np,pandas as pd
 from pathlib import Path
 import local_sweep as L
 from backtest.validation import bootstrap_sharpe_ci, walk_forward_analysis
 from backtest.loaders.akshare_loader import DataLoader
-DATA=Path("/home/rooot/agent_invest_lab/research/index_timing/data");SR=Path("/home/rooot/agent_invest_lab/research/sr_factor/data")
+DATA=Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing/data");SR=Path("/home/ubuntu/rooot/agent_invest_lab/research/sr_factor/data")
 ld=DataLoader()
 if not (DATA/"588000.SH.csv").exists(): ld.fetch(["588000.SH"],"2020-01-01","2026-06-06")["588000.SH"].to_csv(DATA/"588000.SH.csv")
 def load(p):df=pd.read_csv(p,parse_dates=[0],index_col=0).sort_index();df.index.name="date";return df

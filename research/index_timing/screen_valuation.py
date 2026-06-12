@@ -1,7 +1,7 @@
 """估值因子族找绿灯：用 simworld 指数行情自带的 PE/PB，构造分位 contrarian + 估值×趋势因子，
 对 6 个新能源子板块 validation。重点验证公用事业(绿电/电力)的估值锚是否是它们的绿灯。"""
 import sys,json,urllib.request
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np,pandas as pd
 from backtest.validation import bootstrap_sharpe_ci, walk_forward_analysis
 URL="http://127.0.0.1:18078/mcp";H={"Content-Type":"application/json","Accept":"application/json, text/event-stream"}

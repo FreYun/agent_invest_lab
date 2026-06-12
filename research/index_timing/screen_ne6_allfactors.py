@@ -1,7 +1,7 @@
 """对 6 个新能源子板块跑 local_sweep 全 44 因子 IS/OOS + validation，系统找绿灯。
 数据从 simworld 18078 拉指数全周期 OHLC（donchian/chandelier 需要 high/low）。"""
 import sys,json,urllib.request
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np,pandas as pd
 import local_sweep as L
 from backtest.validation import bootstrap_sharpe_ci, walk_forward_analysis

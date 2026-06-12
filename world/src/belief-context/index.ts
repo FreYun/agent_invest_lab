@@ -32,7 +32,8 @@ export async function buildBeliefContext(
   try {
     const records = await scanRecentBeliefs(botId, runId, currentDate, HISTORY_WINDOW_DAYS);
     const stats = await computeCalibration(records);
-    const block = formatCalibrationBlock(stats, botId);
+    // 末条 record 回显给 bot（prior_p_up 依据）——会话无状态，没有这条 bot 只能填 null。
+    const block = formatCalibrationBlock(stats, botId, records[records.length - 1]);
     return `${SCHEMA_REQUIREMENT_BLOCK}\n\n${block}`;
   } catch (err) {
     console.warn(`[belief-context] buildBeliefContext failed for ${botId}/${currentDate}: ${String(err)}`);

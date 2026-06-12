@@ -34,9 +34,9 @@ import os
 import subprocess
 from pathlib import Path
 
-BASE = Path("/home/rooot/agent_invest_lab/research/index_timing")
-SP = "/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages"
-PY = "/home/rooot/.local/share/uv/tools/vibe-trading-ai/bin/python"
+BASE = Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing")
+SP = "/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages"
+PY = "/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/bin/python"
 
 UNIVERSE = [
     ("hs300", "510300.SH"),

@@ -247,7 +247,8 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
     openclawRoot = typeof raw.openclaw_root === 'string' && raw.openclaw_root.trim()
       ? resolveMaybe(baseDir, raw.openclaw_root)
-      : '/home/rooot/.openclaw/openclaw'
+      // 缺省走 repo 根的 .openclaw 符号链接（baseDir=<world>/config → ../../.openclaw），不硬编码旧 HOME。
+      : resolveMaybe(baseDir, '../../.openclaw/openclaw')
     piServerEntry = typeof raw.pi_server_entry === 'string' && raw.pi_server_entry.trim()
       ? resolveMaybe(baseDir, raw.pi_server_entry)
       : join(openclawRoot, 'src/agents/agent_invest_pi_stdio_server.ts')

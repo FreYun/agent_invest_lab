@@ -12,13 +12,13 @@
 
 ```bash
 # 已经装好的位置
-VBA=/home/rooot/.local/share/uv/tools/vibe-trading-ai
+VBA=/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai
 PYTHON=$VBA/bin/python      # 这是 python 3.11，带 pandas/numpy/akshare/tushare 的完整环境
 CLI=$VBA/bin/vibe-trading   # CLI 入口
 MCP=$VBA/bin/vibe-trading-mcp  # MCP server 入口（暂未使用）
 
 # Python import 时用
-sys.path.insert(0, "/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0, "/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 # 或者直接用 venv python: $VBA/bin/python
 ```
 
@@ -96,7 +96,7 @@ backtest/
 #### 用 vibe-trading 的 loader 探数据
 ```python
 import sys
-sys.path.insert(0, "/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0, "/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 from backtest.loaders.akshare_loader import AkshareLoader
 
 loader = AkshareLoader()
@@ -162,7 +162,7 @@ for code, df in data.items():
 - `research/sr_factor/data/512480.SH.csv` 半导体 ETF 2019-2026
 - `research/sr_factor/data/588800.SH.csv` 双创50 ETF 2023-2026
 - `research/sr_factor/sr_daily.csv` 全市场基金申赎汇总 2024-07~2026-05
-- `/home/rooot/MCP/simworld-mcp/sr_cache.csv` 同上（MCP 跑时读这个）
+- `/home/ubuntu/rooot/MCP/simworld-mcp/sr_cache.csv` 同上（MCP 跑时读这个）
 
 ---
 
@@ -244,7 +244,7 @@ def backtest(df_window, sig, eval_start):
 
 ```python
 import sys
-sys.path.insert(0, "/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0, "/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 from backtest.validation import monte_carlo_test, bootstrap_sharpe_ci, walk_forward_analysis
 from backtest.models import TradeRecord  # 输入要这个格式
 
@@ -302,7 +302,7 @@ wf = walk_forward_analysis(equity_curve, trades, n_windows=5)
 ### 步骤 10：包装到 `quant_factor` + 同步 bot methodology
 
 #### simworld-mcp 的 `quant_factor` 工具
-位置：[`/home/rooot/MCP/simworld-mcp/server.py`](../../MCP/simworld-mcp/server.py) 末尾 `_QUANT_FACTORS` 注册表。两种 kind：
+位置：[`/home/ubuntu/rooot/MCP/simworld-mcp/server.py`](../../MCP/simworld-mcp/server.py) 末尾 `_QUANT_FACTORS` 注册表。两种 kind：
 
 ```python
 _QUANT_FACTORS = {
@@ -318,7 +318,7 @@ _QUANT_FACTORS = {
 ```
 
 #### 包完之后必做的 3 件事
-1. **重启 simworld-mcp**：`bash /home/rooot/MCP/simworld-mcp/restart.sh`
+1. **重启 simworld-mcp**：`bash /home/ubuntu/rooot/MCP/simworld-mcp/restart.sh`
 2. **smoke test**：`server.quant_factor(simulated_datetime="2026-05-26 15:30:00")` 几个历史时点
 3. **加进 world.yaml 的 `simworld_tools` 白名单**：[`world/config/world.yaml`](../world/config/world.yaml)（已有 `quant_factor` 条目就不用动）
 
@@ -391,11 +391,11 @@ _QUANT_FACTORS = {
 ### 工具 / 命令
 | 用途 | 命令 / 路径 |
 |---|---|
-| vibe-trading venv python | `/home/rooot/.local/share/uv/tools/vibe-trading-ai/bin/python` |
-| vibe-trading site-packages（import 路径） | `/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages` |
+| vibe-trading venv python | `/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/bin/python` |
+| vibe-trading site-packages（import 路径） | `/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages` |
 | vibe-trading CLI（交互/单次） | `vibe-trading` 或 `vibe-trading -p "..."` |
 | simworld-mcp 端口 | 18078 |
-| simworld-mcp 重启 | `bash /home/rooot/MCP/simworld-mcp/restart.sh` |
+| simworld-mcp 重启 | `bash /home/ubuntu/rooot/MCP/simworld-mcp/restart.sh` |
 | 系统 python（pandas 3.0 + numpy 2.4） | `/usr/bin/python3.12`（仅基础 pandas，不能 import backtest 包） |
 
 ### 已有研究产物（可直接读 / 改）
@@ -410,10 +410,10 @@ _QUANT_FACTORS = {
 | [sr_factor/robustness_full.csv](sr_factor/robustness_full.csv) | 576 配置完整 robustness 结果 |
 
 ### 关键文件位置速查
-- simworld-mcp 因子注册表：`/home/rooot/MCP/simworld-mcp/server.py`（末尾 `_QUANT_FACTORS`）
-- world 工具白名单：`/home/rooot/agent_invest_lab/world/config/world.yaml`
-- bot 通用模板：`/home/rooot/agent_invest_lab/bots/common/agents_common.md`
-- bot 方法论：`/home/rooot/agent_invest_lab/bots/botN/METHODOLOGY.md`
+- simworld-mcp 因子注册表：`/home/ubuntu/rooot/MCP/simworld-mcp/server.py`（末尾 `_QUANT_FACTORS`）
+- world 工具白名单：`/home/ubuntu/rooot/agent_invest_lab/world/config/world.yaml`
+- bot 通用模板：`/home/ubuntu/rooot/agent_invest_lab/bots/common/agents_common.md`
+- bot 方法论：`/home/ubuntu/rooot/agent_invest_lab/bots/botN/METHODOLOGY.md`
 
 ### vibe-trading 库内重要文件（看源码用）
 - `backtest/runner.py` — config schema + 入口

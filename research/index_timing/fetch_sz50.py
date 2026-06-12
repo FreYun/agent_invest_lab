@@ -1,8 +1,8 @@
 import sys, json, urllib.request
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import pandas as pd
 from pathlib import Path
-DATA=Path("/home/rooot/agent_invest_lab/research/index_timing/data"); DATA.mkdir(exist_ok=True)
+DATA=Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing/data"); DATA.mkdir(exist_ok=True)
 
 # ---------- 1) akshare: 510050 OHLCV ----------
 from backtest.loaders.akshare_loader import DataLoader

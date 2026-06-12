@@ -2,12 +2,12 @@
 共同窗口 IS 2018-06..2023-12 / OOS 2024-01..2026-06 (ERP从2018-03起)。
 5bp + T+1(shift1) + 砍warmup。Calmar 排名。"""
 import sys,json,urllib.request
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np, pandas as pd
 from pathlib import Path
 import local_sweep as L  # 复用 backtest/slice_range/GRID
 
-DATA=Path("/home/rooot/agent_invest_lab/research/index_timing/data")
+DATA=Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing/data")
 IS_S,IS_E="2018-06-01","2023-12-31"; OOS_S,OOS_E="2024-01-01","2026-06-06"
 
 # ---- 价格 ----

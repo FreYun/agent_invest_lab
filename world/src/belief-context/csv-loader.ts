@@ -1,14 +1,28 @@
 import { readFileSync, existsSync } from "node:fs";
 import { request } from "node:http";
+import path from "node:path";
 import type { IndexSymbol } from "./schema.ts";
+
+// CSV 数据目录从模块位置自推导（world/src/belief-context → <repo>/research/sr_factor/data），
+// 不依赖部署机的 HOME 布局（曾硬编码 /home/rooot/...，迁移后是死路径 → getActualUp 永远 null）。
+const SR_FACTOR_DATA_DIR = path.resolve(
+  import.meta.dirname, "..", "..", "..", "research", "sr_factor", "data",
+);
 
 // 1) 硬编码 index → CSV 路径（宽基指数走本地 CSV）
 const CSV_PATH_MAP: Record<string, string> = {
-  hs300: "/home/rooot/agent_invest_lab/research/sr_factor/data/510300.SH.csv",
-  zz1000: "/home/rooot/agent_invest_lab/research/sr_factor/data/512100.SH.csv",
-  csi500: "/home/rooot/agent_invest_lab/research/sr_factor/data/512100.SH.csv", // placeholder
-  chinext: "/home/rooot/agent_invest_lab/research/sr_factor/data/588800.SH.csv", // placeholder
-  sc50: "/home/rooot/agent_invest_lab/research/sr_factor/data/588800.SH.csv",
+  hs300: path.join(SR_FACTOR_DATA_DIR, "510300.SH.csv"),
+  zz1000: path.join(SR_FACTOR_DATA_DIR, "512100.SH.csv"),
+  chinext: path.join(SR_FACTOR_DATA_DIR, "588800.SH.csv"), // placeholder
+  sc50: path.join(SR_FACTOR_DATA_DIR, "588800.SH.csv"),
+};
+
+// 1b) 无本地 CSV 的指数 → simworld fund_nav 代理序列（跟踪基金复权净值近似指数方向）。
+//     zz500/csi500：本地无 510500 CSV，旧映射借 512100（中证1000 ETF）是错误标的，
+//     改用天弘中证500联接 000962（zz500 bot 的实际操作标的）。
+const FUND_NAV_FALLBACK: Record<string, string> = {
+  zz500: "000962",
+  csi500: "000962",
 };
 
 // 2) target → {dateISO → close/nav}; orderedDates 是按日期升序
@@ -161,7 +175,7 @@ export async function loadIndexClose(target: IndexSymbol): Promise<Map<string, n
   if (csvPath) {
     result = parseCsvCloses(csvPath);
   } else {
-    const fundCode = extractFundCode(target);
+    const fundCode = FUND_NAV_FALLBACK[target] ?? extractFundCode(target);
     if (fundCode) {
       result = await loadFundNavFromSimworld(fundCode);
     } else {

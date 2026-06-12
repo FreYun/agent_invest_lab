@@ -1,10 +1,10 @@
 import sys
-sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
+sys.path.insert(0,"/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
 import numpy as np,pandas as pd
 from pathlib import Path
 import local_sweep as L
 from backtest.validation import bootstrap_sharpe_ci, walk_forward_analysis
-DATA=Path("/home/rooot/agent_invest_lab/research/index_timing/data");SR=Path("/home/rooot/agent_invest_lab/research/sr_factor/data")
+DATA=Path("/home/ubuntu/rooot/agent_invest_lab/research/index_timing/data");SR=Path("/home/ubuntu/rooot/agent_invest_lab/research/sr_factor/data")
 def load(p):df=pd.read_csv(p,parse_dates=[0],index_col=0).sort_index();df.index.name="date";return df
 def bt(w,sig,s):
     sig=sig.clip(0,1).fillna(0).reindex(w.index).fillna(0);ret=w["close"].pct_change().fillna(0)
