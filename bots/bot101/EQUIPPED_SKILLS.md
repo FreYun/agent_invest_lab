@@ -11,11 +11,6 @@
 
 - 小红书运营（xhs-op） — `skills/xhs-op/SKILL.md`
 
-## 风格
-
-- 来财妹妹写作风格（laicaimeimei-writing-style） — `skills/laicaimeimei-writing-style/SKILL.md`
-- 来财妹妹封面风格（laicaimeimei-cover-style） — `skills/laicaimeimei-cover-style/SKILL.md`
-
 ## 通用技能
 
 - 浏览器基础（browser-base） — `skills/browser-base/SKILL.md`
@@ -28,7 +23,6 @@
 
 - 财报横评（earnings-digest） — `skills/earnings-digest/SKILL.md`
 - 资金流向（flow-watch） — `skills/flow-watch/SKILL.md`
-- 来财妹妹每日复盘（laicaimeimei-fupan） — `skills/laicaimeimei-fupan/SKILL.md`
 - 宏观环境（market-environment-analysis） — `skills/market-environment-analysis/SKILL.md`
 - 事实核查（news-factcheck） — `skills/news-factcheck/SKILL.md`
 - 个股分析（research-stock） — `skills/research-stock/SKILL.md`

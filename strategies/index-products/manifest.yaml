@@ -54,7 +54,7 @@ strategies:
     title: 中证1000指数投资框架
     methodology: zz1000.md
     target_index: "000852.SH"
-    default_buyable_fund_codes: ["015531"]
+    default_buyable_fund_codes: ["006487"]   # 广发中证1000ETF联接C（原 015531 鹏华稳福中短债债券C 是债基、跟错指数，已换）
 
   # —— 新能源已按子板块拆分（原 new_energy 930997 笼统框架已归档到 _archive/new-energy.md）——
   solar:
