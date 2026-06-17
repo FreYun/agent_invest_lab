@@ -477,3 +477,72 @@ test('Day N 复盘日（trading_days % 5 === 0）注入策略强制复盘硬契�
   assert.doesNotMatch(noReview, /策略强制复盘/)
   rmSync(w, { recursive: true, force: true })
 })
+
+test('belief↔仓位 言行一致核对：看多却空仓 / 看空却重仓 都硬拦；同向、中性、缺 belief、缺账户 → 不拦', () => {
+  // 病根 guard：bot 每天写 belief（t+20 上涨概率）却让仓位与它脱钩，可"嘴上看多、仓位空仓"两头都占
+  // → 长期踏空（bot6 军工 / bot10 黄金）。这块把仓位焊回 bot 自己说出口的信念，方向矛盾就每天硬拦。
+  const w = tmpWorldWithOverview('2024-03-20', 'overview')
+  const mkAcct = (marketValue: number) => ({
+    asOfDate: '2024-03-20',
+    account: { initial_capital: 1_000_000, cash_available: 1_000_000 - marketValue, cash_in_transit: 0, market_value: marketValue, total_value: 1_000_000 },
+    holdings: [], pendingOrders: [],
+  })
+  const flat = mkAcct(0)            // 0% 仓位
+  const heavy = mkAcct(600_000)     // 60% 仓位
+
+  // ① 看多(t+20=0.62)却空仓(0%) → 踏空，硬拦
+  const bullFlat = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { account: flat }, latestBelief: { tPlus5: 0.6, tPlus20: 0.62 },
+  })
+  assert.match(bullFlat, /【⚖ 言行一致核对（belief ↔ 仓位）· 今天必须消除矛盾】/)
+  assert.match(bullFlat, /净看多/)
+  assert.match(bullFlat, /把保守偷换成永久空仓/)
+  // 言行一致块在最末尾（非复盘日 review 为空，本块收尾，recency 最高）
+  assert.match(bullFlat.trimEnd(), /每天核对，不只复盘日。这不替你做方向判断，只禁止"想的"和"做的"打架。）$/)
+
+  // ② 看多且已在场(60%) → 一致，不拦
+  const bullIn = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { account: heavy }, latestBelief: { tPlus5: 0.6, tPlus20: 0.62 },
+  })
+  assert.doesNotMatch(bullIn, /言行一致核对/)
+
+  // ③ 看空(t+20=0.38)却重仓(60%) → 做错，硬拦
+  const bearHeavy = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { account: heavy }, latestBelief: { tPlus5: 0.4, tPlus20: 0.38 },
+  })
+  assert.match(bearHeavy, /净看空/)
+  assert.match(bearHeavy, /信号走坏却不撤/)
+
+  // ④ 看空且已空仓(0%) → 一致，不拦
+  const bearFlat = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { account: flat }, latestBelief: { tPlus5: 0.4, tPlus20: 0.38 },
+  })
+  assert.doesNotMatch(bearFlat, /言行一致核对/)
+
+  // ⑤ 中性(0.5) → 不拦
+  const neutral = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { account: flat }, latestBelief: { tPlus5: 0.5, tPlus20: 0.5 },
+  })
+  assert.doesNotMatch(neutral, /言行一致核对/)
+
+  // ⑥ 无 latestBelief → 无法判定，不拦
+  const noBelief = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { account: flat },
+  })
+  assert.doesNotMatch(noBelief, /言行一致核对/)
+
+  // ⑦ 有 belief 但缺账户快照 → 无法判定，不拦
+  const noAcct = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    latestBelief: { tPlus5: 0.6, tPlus20: 0.62 },
+  })
+  assert.doesNotMatch(noAcct, /言行一致核对/)
+
+  rmSync(w, { recursive: true, force: true })
+})

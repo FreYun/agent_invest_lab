@@ -1054,10 +1054,15 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         // build 失败不阻塞 chat 主流程——空串等于不渲染对应 section。
         // reporter 模式不注入 belief-context（那是投资 bot 的市场环境判断滚动摘要 + 输出 schema，
         // 对"市场研究员"是噪声/误导）。
-        const beliefBlock = config.reporterMode ? '' : await buildBeliefContext(b.botId, runId, date).catch((e: unknown) => {
-          log(worldRoot, runId, `[belief-context] bot ${b.botId} ${date} build failed: ${e instanceof Error ? e.message : String(e)}`)
-          return ''
-        })
+        const built = config.reporterMode
+          ? { block: '', latest: null }
+          : await buildBeliefContext(b.botId, runId, date).catch((e: unknown) => {
+              log(worldRoot, runId, `[belief-context] bot ${b.botId} ${date} build failed: ${e instanceof Error ? e.message : String(e)}`)
+              return { block: '', latest: null }
+            })
+        const beliefBlock = built.block
+        // 末条 standing belief 的 t+5/t+20 p_up，喂给 message.ts 的 belief↔仓位 言行一致核对块。
+        const latestBelief = built.latest
         // 周期块：仅当真的跳过了交易日（periodTradingDays > 1）才注入。区间涨跌直接复用
         // dailyContext.benchmark 的「自 run 起点累计 %」相减得到，无需另拉行情。
         let periodInfo: { tradingDays: number; sinceDate: string; benchMovePct: number | null } | undefined
@@ -1090,6 +1095,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           dailyContext,
           historyWindow,
           beliefBlock,
+          latestBelief,
           periodInfo,
           // 仅 Day 1 fullRules 用到——message.ts 自己门控；这里无脑传即可，Day N 会丢弃。
           tradingDaysTotal: setupRes.tradingDates.length,
