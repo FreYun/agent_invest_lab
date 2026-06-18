@@ -1314,6 +1314,8 @@ simworld_tools:
     description: 新闻 / 研报搜索。
   - name: research_view
     description: 研究观点。
+  - name: entity_extract
+    description: 从新闻/研报自然语言里抽取金融实体（基金/经理/公司/指数/主题）。把 research_search 命中的正文对回持仓/候选的代码与主题，无 PIT。
   - name: quant_factor
     description: 研究部离线挖出的单指数择时因子读数（PIT 在线计算）。返回每个因子建议仓位 ∈ [0, 1]，按标的前缀命名（如 zz1000_*）。
   - name: health_check
