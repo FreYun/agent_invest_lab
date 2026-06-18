@@ -313,18 +313,27 @@ strategies:
     target_index: "931238.CSI"
     default_buyable_fund_codes: ["021075"]   # 待配；跟踪 931238 的黄金股票ETF(159322 等)需 C 类联接进场外池
 
-  # —— 海外/黄金(4) ——（market=cn 不覆盖，需另接 hk/us/商品 数据源；
-  #    sp500/nasdaq100 已写方法论、见文件上方占位）——
-  # hstech:
-  #   title: 恒生科技指数投资框架
-  #   methodology: hstech.md
-  #   target_index: "HSTECH"
-  #   default_buyable_fund_codes: []
-  # hsi:
-  #   title: 恒生指数投资框架
-  #   methodology: hsi.md
-  #   target_index: "HSI"
-  #   default_buyable_fund_codes: []
+  # —— 港股(3)：2026-06-17 启用 ——
+  #   行情走 market_index_quote(market='hk', symbols=['*.HI'])；港股无估值数据、无 server 端
+  #   预算因子(ma200/donchian/ERP/拥挤度均不可用)，方法论靠「行情趋势位置(定性、未验证) +
+  #   macro_news 宏观外部面(承重)」两条腿，详见各 .md。target_index 用 .HI 后缀与 symbols 对齐。
+  hsi:
+    title: 恒生指数投资框架
+    methodology: hsi.md
+    target_index: "HSI.HI"
+    default_buyable_fund_codes: ["005659"]   # 南方恒生ETF联接C（亦可 005734 华夏沪港通恒生ETF联接C）
+  hscei:
+    title: 恒生中国企业指数投资框架
+    methodology: hscei.md
+    target_index: "HSCEI.HI"
+    default_buyable_fund_codes: ["005555"]   # 南方恒生国企ETF联接C
+  hstech:
+    title: 恒生科技指数投资框架
+    methodology: hstech.md
+    target_index: "HSTECH.HI"
+    default_buyable_fund_codes: ["013403"]   # 华夏恒生科技ETF发起式联接(QDII)C（2026-06-17 ingest 补入，跟踪恒生科技 HSTECH）
+
+  # —— 海外/黄金 ——（market=cn 不覆盖，需另接 us/商品 数据源；sp500/nasdaq100 已写方法论、见文件上方占位）——
   gold_au9999:
     title: 黄金（上海金 AU9999）投资框架
     methodology: gold-au9999.md
