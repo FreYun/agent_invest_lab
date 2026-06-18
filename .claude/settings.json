@@ -95,7 +95,16 @@
       "Bash(curl -fsS --max-time 10 \"https://registry.npmjs.org/@anthropic-ai/claude-code/latest\")",
       "Bash(curl -fsS --max-time 10 -o /dev/null -w \"%{http_code}\\\\n\" \"https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/stable\")",
       "Bash(npm config *)",
-      "Bash(/usr/bin/claude --version)"
+      "Bash(/usr/bin/claude --version)",
+      "WebFetch(domain:www.cnindex.com.cn)",
+      "Bash(git -C /home/ubuntu/rooot/MCP log --oneline -2)",
+      "Bash(git -C /home/ubuntu/rooot/.openclaw status --short -- research-loop/rust/src/compact.rs)",
+      "Bash(git -C /home/ubuntu/rooot/.openclaw log --oneline -1 -- research-loop/rust/src/compact.rs)",
+      "Bash(awk '{print $2, $9, $11, $12, $13, $14, $15}')",
+      "Bash(OPENCLAW_DIR=/home/ubuntu/rooot/.openclaw ./node_modules/.bin/tsx main.ts \"紫金矿业 601899 深度估值与交易策略研究：铜金利润贡献拆解、量价敏感性模型、产能达成率核实（卡莫事故影响）、宏观利率路径对矿企估值的二阶影响、资金筹码结构分析（融资盘/北向/机构博弈）、基于情景分析的目标价矩阵\" --workspace bot7 --once)"
+    ],
+    "additionalDirectories": [
+      "/home/ubuntu/rooot/.openclaw/research-loop/rust/src"
     ]
   }
 }

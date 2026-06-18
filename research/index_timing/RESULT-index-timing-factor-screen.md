@@ -152,3 +152,44 @@ IS(起点–2021)/OOS(2022–2026.06) + validation（bootstrap 600、wf 5 窗、
 **诚实分级**：工业有色(DD族)、稀土(动量)、细分化工(DD+vt族)有纯 close 绿灯且 wf≥4；**CS稀金属无干净绿灯**
 ——chand 的高 IS/OOS 数值被 wf3/5 + ATR偏乐观双重打折，只能当降回撤刻度，不写成 alpha。
 产物：4 份 methodology（industrial-metals / rare-earth / rare-metals / chemical），原 `nonferrous.md` 归档到 `_archive/`。
+
+## 十一、消费/医药 4 指数全因子族复扫（2026-06-12，为 4 份新 methodology 做的）
+
+中证酒 399987 / 800消费 000932 / 生物医药 399441 / 中证医疗 399989。脚本
+`screen_consumer4_allfactors.py`（数据探查 `probe_consumer4.py`，复用 resource4 模板）：
+4 指数 × 全 44 因子 IS(起点–2021)/OOS(2022–2026.06) + validation（bootstrap 600、wf 5 窗、5bp、T+1）。
+4 个指数 quote 均无 high/low → chand_* 的 ATR 用 close 代理**偏乐观、仅参考**。
+**共同背景：OOS 段（2022–2026.06）四者全是深熊**——BH OOS Calmar 全负、DD −52%~−64%，
+任何"赢家"赢的都是少亏，不是赚钱。
+
+| 指数 | 代码 | 样本 | 最佳纯close结论(OOS) | 关键数字 | 备注 |
+|---|---|---|---|---|---|
+| 中证酒 | 399987.SZ | 11.1y | mom_20（🟢近绿，无绿灯） | OOS Cal 0.01 vs BH −0.32、dCal+0.33、DD −23% vs −60%、CI[−0.01,1.16] 微含0、p+97%、wf4/5 | chand_22_k3 名义✅但 ATR close 代理偏乐观，降级参考；动量是最佳诚实候选 |
+| 800消费 | 000932.SH | 17.4y | **regime_lev_hi20_l50 / hi25_l30（双参数✅绿灯）** | hi20_l50: CI[0.12,1.10] wf4/5 DD −19% vs −52%；hi25_l30: CI[0.23,1.15] wf4/5 | 纯close（MA200趋势+20日波动门控）、两组参数都绿=小族级佐证；**OOS exp 仅~0.1，价值=深熊避坑不是增强** |
+| 生物医药 | 399441.SZ | 11.4y | **无（全黄灯）** | 最佳 donch120_trail dCal+0.30 但 exp 0.04、wf2/5；mom_20 CI[−0.12,1.01] wf3/5 | BH OOS DD **−64%（四者最惨）**；无 wf≥4 纯close 赢家 → 择时只写降回撤纪律 |
+| 中证医疗 | 399989.SZ | 11.1y | **无（全黄灯）** | BH **IS Calmar 0.00**（11 年裸持有不赚钱）；最佳 donch60_trail p+66% wf3/5 | 全部候选 CI 宽且含 0 → 无可包装因子，仓位纪律优先 |
+
+**诚实分级**：仅 800消费的 regime_lever 够绿灯（且要写清 exp~0.1 的含义：它在 MA200 下方一律空仓，
+深熊里基本不在场——是"别在熊市里"的机械化，不是 alpha）；中证酒 mom_20 只能当黄灯第二意见；
+**生物医药 / 中证医疗无干净绿灯，methodology 里不得写成已验证因子**，只能写回撤控仓纪律 + 基本面框架。
+产物：4 份 methodology（liquor / consumer800 / biopharma / medical）。
+
+## 十二、金融 3 指数全因子族复扫（2026-06-12，为 3 份新 methodology 做的）
+
+保险主题 399809 / 中证银行 399986 / 证券公司 399975。脚本 `screen_finance3_allfactors.py`
+（数据探查 `probe_finance3.py`，复用 consumer4 模板）：3 指数 × 全 44 因子
+IS(起点–2021)/OOS(2022–2026.06) + validation（bootstrap 600、wf 5 窗、5bp、T+1）。
+3 个指数 quote 均无 high/low → chand_*/donch*_trail 的 ATR 用 close 代理**偏乐观、仅参考**。
+**结果完美印证三子板块性质差异**——同样是金融，择时有效性天差地别。
+
+| 指数 | 代码 | 样本 | 最佳纯close结论(OOS) | 关键数字 | 备注 |
+|---|---|---|---|---|---|
+| 证券公司 | 399975.SH | 17.4y | **mom_20（✅绿灯）** | OOS Cal 0.49 vs BH **−0.13**、dCal+0.61、DD −17% vs −38%、CI[0.04,0.92]、**wf5/5**、flips89(≈20/年) | 券商高β强趋势→动量唯一稳健 edge；BH OOS 负收益→择时价值大；donch120_trail 近绿但 exp 仅0.05 不实用 |
+| 保险主题 | 399809.SZ | 14.5y | **无干净绿灯** | donchian_60 黄灯(CI含0 wf4/5)；vol_tgt 系近绿但 flips 1000+ 场外无法执行 | 弱趋势性；vol_tgt 的高换手在场外基金被早赎+申购费吃光→不可用；仓位纪律优先 |
+| 中证银行 | 399986.SZ | 17.4y | **无（整族全败）** | 无任何因子 IS+OOS 同时击败 BH；BH 本身 OOS Cal 0.14、DD 仅 −27%（三者最浅） | **低波动防御品种，价格择时无 edge**——这本身是结论：银行靠估值/股息/基本面,不靠趋势择时 |
+
+**诚实分级**：①证券 mom_20 是干净绿灯（wf5/5、CI 下界>0、翻转可接受），三指数里唯一可包装的 alpha；
+②保险无干净绿灯（vol_tgt 高换手不可执行、donchian CI 含 0）→ 写降回撤纪律 + 基本面框架；
+③**银行整族无 edge 是最强信号**——它本就是低回撤防御资产（BH OOS DD 仅 −27%），趋势/DD 择时在它身上
+反而磨损收益，methodology 必须明写"不要对银行做价格趋势择时，重心放股息/估值/基本面"。
+产物：3 份 methodology（insurance / bank / securities）。

@@ -253,46 +253,54 @@ strategies:
     target_index: "000813.CSI"
     default_buyable_fund_codes: ["020274"]   # 独立基础化工；trail_dd10_p120+vt15 绿灯,裸持有负收益
 
-  # —— 消费医药(4) ——
-  # 注：现有 innodrug(931152 创新药) 已启用；下列 生物医药/中证医疗/港股通创新药
-  #     是清单的相邻标的，与 931152 是「拆分 or 并存」待用户定。
-  # consumer800:
-  #   title: 800消费指数投资框架
-  #   methodology: consumer800.md
-  #   target_index: "000932.SH"
-  #   default_buyable_fund_codes: []
-  # biopharma:
-  #   title: 生物医药指数投资框架
-  #   methodology: biopharma.md
-  #   target_index: "399441.SZ"
-  #   default_buyable_fund_codes: []
-  # medical:
-  #   title: 中证医疗指数投资框架
-  #   methodology: medical.md
-  #   target_index: "399989.SZ"
-  #   default_buyable_fund_codes: []
+  # —— 消费医药(4+1)：2026-06-12 启用（liquor/consumer800/biopharma/medical）——
+  #   因子定级见 research/index_timing/RESULT-index-timing-factor-screen.md §十一。
+  #   default_buyable_fund_codes 留 [] 待用户配基金池（或在 dashboard 新建回测时手选）。
+  #   现有 innodrug(931152 创新药) 已启用；399441 与 931152 成分高重叠（CXO+生物药），按「并存」处理。
+  liquor:
+    title: 中证酒指数投资框架
+    methodology: liquor.md
+    target_index: "399987.SZ"
+    default_buyable_fund_codes: ["012043"]   # 鹏华酒C(ETF 512690)，已核实 fund.db 净值 2024-01~今；白酒~85-90%+啤酒；无纯close绿灯,mom_20仅近绿
+  consumer800:
+    title: 800消费指数投资框架
+    methodology: consumer800.md
+    target_index: "000932.SH"
+    default_buyable_fund_codes: ["012857"]   # 汇添富中证主要消费ETF联接C(ETF 159928)，已核实净值；白酒+食品+养殖拼盘；regime_lever 双参数绿灯(避坑型,exp~0.1)
+  biopharma:
+    title: 生物医药指数投资框架
+    methodology: biopharma.md
+    target_index: "399441.SZ"
+    default_buyable_fund_codes: ["011041"]   # 天弘国证生物医药ETF联接C(ETF 159859)，已核实净值；备选 161726 招商LOF(A,净值2021起)；国证编制,30只高集中；无干净绿灯,仓位纪律优先
+  medical:
+    title: 中证医疗指数投资框架
+    methodology: medical.md
+    target_index: "399989.SZ"
+    default_buyable_fund_codes: ["012323"]   # 华宝医疗ETF联接C(ETF 512170)，已核实净值；器械+服务+CXO；无干净绿灯,11年裸持有不赚钱,仓位纪律优先
   # hk_innodrug:
   #   title: 港股通创新药指数投资框架
   #   methodology: hk-innodrug.md
   #   target_index: "987018.CSI"       # ✗ 18078 无 PIT 数据，需另接港股源后才可回测
   #   default_buyable_fund_codes: []
 
-  # —— 金融(3) ——
-  # insurance:
-  #   title: 保险主题指数投资框架
-  #   methodology: insurance.md
-  #   target_index: "399809.SZ"
-  #   default_buyable_fund_codes: []
-  # bank:
-  #   title: 中证银行指数投资框架
-  #   methodology: bank.md
-  #   target_index: "399986.SZ"
-  #   default_buyable_fund_codes: []
-  # securities:
-  #   title: 证券公司指数投资框架
-  #   methodology: securities.md
-  #   target_index: "399975.SZ"
-  #   default_buyable_fund_codes: []
+  # —— 金融(3)：2026-06-12 启用（insurance/bank/securities）——
+  #   因子定级见 research/index_timing/RESULT-index-timing-factor-screen.md §十二。
+  #   三子板块择时有效性天差地别：券商 mom_20 绿灯、保险无干净绿灯、银行整族无 edge（防御资产）。
+  insurance:
+    title: 保险主题指数投资框架
+    methodology: insurance.md
+    target_index: "399809.SZ"
+    default_buyable_fund_codes: ["167301"]   # 方正富邦中证保险A(LOF,唯一跟踪品,无C类)，已核实净值2021起；五大险企~80%,平安顶格30%;利率敏感+权益弹性,无干净绿灯
+  bank:
+    title: 中证银行指数投资框架
+    methodology: bank.md
+    target_index: "399986.SZ"
+    default_buyable_fund_codes: ["001595"]   # 天弘中证银行ETF联接C(ETF 512800)，已核实净值；低估值高股息防御,价格择时整族无edge,靠PB/股息/基本面
+  securities:
+    title: 证券公司指数投资框架
+    methodology: securities.md
+    target_index: "399975.SZ"
+    default_buyable_fund_codes: ["008591"]   # 天弘中证全指证券公司ETF联接C(ETF)，已核实净值；牛市旗手高β,mom_20绿灯(三指数唯一)，承重
 
   # —— 红利现金流(2) ——（注：dividend 000922 中证红利已启用）
   # free_cashflow:
