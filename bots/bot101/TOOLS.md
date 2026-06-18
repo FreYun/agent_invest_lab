@@ -95,7 +95,7 @@ mem0_search(query: "黄金ETF写过哪些角度", scope: "self")
 
 
 
-# TOOLS.md - bot101（来财妹妹）工具配置
+# TOOLS.md - bot101（高风险多指数权益基金配置 bot）工具配置
 
 
 ---

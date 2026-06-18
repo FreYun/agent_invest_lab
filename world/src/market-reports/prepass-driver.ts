@@ -1,7 +1,7 @@
 // market-reports pre-pass —— 独立编排驱动（不使用 world 的 runWorld/runLoop 引擎）。
 //
 // 目标：预生成全局共享的三类市场研究报告（market_context / market_mainline / mainline_rotation），
-// 由三个 reporter agent 在每月第一个交易日各产出一份并经 strategy-server.submit_market_report 落
+// 由三个 reporter agent 在每个决策日各产出一份并经 strategy-server.submit_market_report 落
 // fund.db 的 market_reports 表。回测的各投资 bot 之后经 get_market_report（PIT）读取。
 //
 // 与 world 回测系统**物理解耦**：
@@ -106,7 +106,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       '  --out-dir <dir>   run 目录根，缺省 <cwd>/runtime-prepass（独立于 world/runtime）\n' +
       '  --run-id <id>     缺省 prepass-<ts>\n' +
       '  --from / --to     覆盖 config 的 replay 窗口（YYYY-MM-DD）\n' +
-      '  --freq <f>        决策日频率 monthly（缺省，每月第一个交易日）| weekly（每 ISO 周第一个交易日）\n' +
+      '  --freq <f>        决策日频率 monthly（缺省，每月第一个交易日）| weekly（每 ISO 周第一个交易日）| daily（每个交易日）\n' +
       '  --retries <n>     每个 reporter 落库失败重试次数，缺省 2\n')
     return 0
   }
@@ -123,7 +123,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   const from = argVal(argv, '--from') ?? config.replay.from
   const to = argVal(argv, '--to') ?? config.replay.to
   const freq = argVal(argv, '--freq') ?? 'monthly'
-  if (freq !== 'monthly' && freq !== 'weekly') { process.stderr.write(`refuse: --freq 只支持 monthly|weekly，得到 ${freq}。\n`); return 2 }
+  if (freq !== 'monthly' && freq !== 'weekly' && freq !== 'daily') { process.stderr.write(`refuse: --freq 只支持 monthly|weekly|daily，得到 ${freq}。\n`); return 2 }
 
   const reporters = config.bots.filter(b => b in REPORT_TYPE_BY_BOT)
   if (reporters.length === 0) { process.stderr.write('refuse: config.bots 里没有任何 reporter-*。\n'); return 2 }
@@ -131,9 +131,9 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   // ── 决策日 ──────────────────────────────────────────────────────────────
   const cal = loadCalendar(config.calendar)
   const tradingDates = computeTradingDates(cal, from, to)
-  const decisionDays = freq === 'weekly' ? weekFirstTradingDays(tradingDates) : monthFirstTradingDays(tradingDates)
+  const decisionDays = freq === 'daily' ? tradingDates : freq === 'weekly' ? weekFirstTradingDays(tradingDates) : monthFirstTradingDays(tradingDates)
   log(`run=${runId} out=${outRoot} db=${fundDbPath}`)
-  log(`窗口 ${tradingDates[0]}..${tradingDates[tradingDates.length - 1]} → ${decisionDays.length} 个${freq === 'weekly' ? '周度' : '月度'}决策日 × ${reporters.length} reporter`)
+  log(`窗口 ${tradingDates[0]}..${tradingDates[tradingDates.length - 1]} → ${decisionDays.length} 个${freq === 'daily' ? '日度' : freq === 'weekly' ? '周度' : '月度'}决策日 × ${reporters.length} reporter`)
 
   // ── 目录 + openclaw 凭据副本 ──────────────────────────────────────────────
   const rlOpenclawDir = P.rlOpenclawDir(outRoot, runId)

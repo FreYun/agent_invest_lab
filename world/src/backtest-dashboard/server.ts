@@ -15,6 +15,8 @@ const DEFAULT_DB = join(HERE, '../../../data/fund.db')
 // 仅用来定位每 run 的 universe-contamination.json marker 文件，不影响 DB 查询。
 const DEFAULT_WORLD_ROOT = join(HERE, '../../runtime')
 const DEFAULT_HTML = join(HERE, 'index.html')
+const DEFAULT_MARKET_REPORTS_HTML = join(HERE, 'market-reports.html')
+const DEFAULT_OOS_BOT101_HTML = join(HERE, 'oos-bot101.html')
 
 interface DailyRow {
   trade_date: string
@@ -66,6 +68,8 @@ interface ActionRow {
   nav_used: number | null
   reason: string | null
   bot_reason: string | null
+  /** 该笔动作对应订单的手续费（fund_bot_orders.fee，关联子查询带出；无匹配订单为 null）。 */
+  fee: number | null
   action_date: string
 }
 
@@ -150,6 +154,10 @@ interface BotDataset {
   sellCount: number
   holdCount: number
   holdingsCount: number
+  /** 本 run 全部订单的手续费合计（fund_bot_orders.fee，申购费 + 赎回费）。 */
+  totalFee: number
+  buyFee: number
+  sellFee: number
   equityWeight: number | null
   bondWeight: number | null
   goldWeight: number | null
@@ -196,6 +204,8 @@ interface Dataset {
     bestReturnPct: number
     worstBotId: string
     worstReturnPct: number
+    /** 全部 bot（各自当前展示 run）手续费合计。 */
+    totalFee: number
   }
   bots: BotDatasetSummary[]
 }
@@ -369,6 +379,10 @@ const DEFAULT_BENCHMARK_FUND = '510300'
 // 三个多指数权益基金 bot 是做多基金投资策略，统一用规模最大的沪深300 ETF
 // (510300 沪深300ETF华泰柏瑞) 作为比较基准，而不是首笔买入标的。
 const LONG_EQUITY_FUND_BOTS = new Set(['bot101', 'bot102', 'bot103'])
+const OOS_RUN_ID_PREFIXES = ['oos-', 'live-']
+function isOosRunId(runId: string): boolean {
+  return OOS_RUN_ID_PREFIXES.some(prefix => runId.startsWith(prefix))
+}
 
 export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[], botId = ''): string {
   if (LONG_EQUITY_FUND_BOTS.has(botId)) return DEFAULT_BENCHMARK_FUND
@@ -484,6 +498,7 @@ async function listRunsForBot(dbPath: string, worldRoot: string, botId: string):
   rows.sort((a, b) => (a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0))
   const hidden = loadHiddenSet(worldRoot)
   return rows
+    .filter(r => !isOosRunId(r.run_id))
     .filter(r => !hidden.has(hiddenKey(botId, r.run_id)))  // 隐藏的 (bot, run) 不进列表/选择器
     .map(r => {
       const ref: BotRunRef = { runId: r.run_id, latestDate: r.latest_date ?? '' }
@@ -646,12 +661,32 @@ async function loadBotForRun(dbPath: string, worldRoot: string, botId: string, r
                AND ( (a.action_type='ADD' AND o.order_type='buy')
                   OR (a.action_type='REDUCE' AND o.order_type='sell') )
              ORDER BY o.order_id ASC LIMIT 1) AS bot_reason,
+           (SELECT o.fee FROM fund_bot_orders o
+             WHERE o.bot_id = a.bot_id
+               AND o.fund_code = a.fund_code
+               AND o.order_date = a.action_date
+               AND o.settle_run_id = a.run_id
+               AND ( (a.action_type='ADD' AND o.order_type='buy')
+                  OR (a.action_type='REDUCE' AND o.order_type='sell') )
+             ORDER BY o.order_id ASC LIMIT 1) AS fee,
            a.action_date
     FROM fund_bot_actions a
     LEFT JOIN fund_info i ON i.fund_code = a.fund_code
     WHERE a.bot_id = ${botIdSql} AND a.run_id = ${runIdSql}
     ORDER BY a.action_date ASC, a.action_id ASC
   `)
+  // 手续费合计：按 (bot, run) 聚合 fund_bot_orders.fee。归属优先用 order_run_id（下单
+  // 所在 run）；老数据 order_run_id 为空时回退 settle_run_id，避免漏统计。
+  const feeRows = await queryRows<{ order_type: string; fee_sum: number | null }>(dbPath, `
+    SELECT order_type, SUM(COALESCE(fee, 0)) AS fee_sum
+    FROM fund_bot_orders
+    WHERE bot_id = ${botIdSql}
+      AND (order_run_id = ${runIdSql}
+        OR ((order_run_id IS NULL OR order_run_id = '') AND settle_run_id = ${runIdSql}))
+    GROUP BY order_type
+  `)
+  const buyFee = num(feeRows.find(r => r.order_type === 'buy')?.fee_sum)
+  const sellFee = num(feeRows.find(r => r.order_type === 'sell')?.fee_sum)
   const reviews = await queryRows<ReviewRow>(dbPath, `
     SELECT review_id, review_date, regime, decision, reason, turnover_ratio
     FROM fund_bot_reviews
@@ -698,6 +733,9 @@ async function loadBotForRun(dbPath: string, worldRoot: string, botId: string, r
     sellCount: actions.filter(a => a.side === 'sell').length,
     holdCount: actions.filter(a => a.side === 'hold').length,
     holdingsCount: holdings.length,
+    totalFee: buyFee + sellFee,
+    buyFee,
+    sellFee,
     equityWeight: latest?.equity_weight ?? null,
     bondWeight: latest?.bond_weight ?? null,
     goldWeight: latest?.gold_weight ?? null,
@@ -757,18 +795,107 @@ async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> 
       bestReturnPct: bots[0]?.cumulativeReturnPct ?? 0,
       worstBotId: bots[bots.length - 1]?.botId ?? '',
       worstReturnPct: bots[bots.length - 1]?.cumulativeReturnPct ?? 0,
+      totalFee: bots.reduce((sum, b) => sum + b.totalFee, 0),
     },
     bots,
   }
 }
 
+interface MarketReportRow {
+  id: number
+  report_type: string
+  as_of_date: string
+  scope: string
+  content_md: string
+  structured_json: string | null
+  agent_run_id: string | null
+  generated_at: string | null
+}
+
+interface MarketReportDateRow {
+  as_of_date: string
+  report_count: number
+  generated_at: string | null
+}
+
+const MARKET_REPORT_TYPES = ["market_context", "market_mainline", "mainline_rotation"] as const
+
+function parseStructuredJson(raw: string | null): unknown {
+  if (!raw || !raw.trim()) return null
+  try { return JSON.parse(raw) }
+  catch { return null }
+}
+
+function loadMarketReports(dbPath: string, requestedDate = ""): Record<string, unknown> {
+  // 日期列表 = 市场报告日 ∪ OOS bot101 有快照的交易日。关键：OOS 净值/持仓/订单是
+  // 确定性的 bot 账户数据（不依赖 LLM），而 market_reports 是 LLM prepass 产物、可能某天
+  // 生成失败缺失。若只用 market_reports 取日期，缺报告的那天就算 bot 账户数据齐全也不会
+  // 出现在列表里 → OOS 区块被拖在上一个有报告的日子。合并后缺报告日仍可选中，报告卡走
+  // 前端 empty 兜底，net_value 照常显示。report_count=0 的日子就是"有账户、无报告"。
+  const dates = queryRows<MarketReportDateRow>(dbPath,
+    "SELECT as_of_date, SUM(report_count) AS report_count, MAX(generated_at) AS generated_at FROM (" +
+    "  SELECT as_of_date, COUNT(*) AS report_count, MAX(generated_at) AS generated_at" +
+    "    FROM market_reports WHERE scope = " + quoteSql("global") + " GROUP BY as_of_date" +
+    "  UNION ALL" +
+    "  SELECT trade_date AS as_of_date, 0 AS report_count, NULL AS generated_at" +
+    "    FROM oos_bot_daily_snapshots WHERE live_run_id = " + quoteSql("oos-bot101-daily") +
+    "      AND bot_id = " + quoteSql("bot101") + " GROUP BY trade_date" +
+    ") GROUP BY as_of_date ORDER BY as_of_date DESC")
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : ""
+  const selectedDate = validDate || dates[0]?.as_of_date || ""
+  const rows = selectedDate ? queryRows<MarketReportRow>(dbPath, "SELECT id, report_type, as_of_date, scope, content_md, structured_json, agent_run_id, generated_at FROM market_reports WHERE scope = " + quoteSql("global") + " AND as_of_date = " + quoteSql(selectedDate) + " ORDER BY report_type ASC") : []
+  const reports: Record<string, unknown> = {}
+  for (const type of MARKET_REPORT_TYPES) reports[type] = null
+  for (const row of rows) reports[row.report_type] = { ...row, structured: parseStructuredJson(row.structured_json) }
+  return { selectedDate, dates, reportTypes: MARKET_REPORT_TYPES, reports }
+}
+
+
+function loadOosBot101(dbPath: string, runId = 'oos-bot101-daily', requestedDate = ''): Record<string, unknown> {
+  const runIdSql = quoteSql(runId)
+  const botIdSql = quoteSql('bot101')
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/
+  const dates = queryRows<{ trade_date: string }>(dbPath,
+    'SELECT trade_date FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
+    ' AND bot_id = ' + botIdSql + ' ORDER BY trade_date DESC').map(r => r.trade_date)
+  const validDate = dateRe.test(requestedDate) ? requestedDate : ''
+  const selectedDate = validDate || dates[0] || ''
+  const dateSql = quoteSql(selectedDate)
+  const series = queryRows<Record<string, unknown>>(dbPath,
+    'SELECT trade_date, total_value, net_value, daily_return_pct, cumulative_return_pct, ' +
+    'max_drawdown_pct, equity_weight, bond_weight, gold_weight, cash_weight ' +
+    'FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
+    ' AND bot_id = ' + botIdSql + ' ORDER BY trade_date ASC')
+  const snapshot = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT * FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
+    ' AND bot_id = ' + botIdSql + ' AND trade_date = ' + dateSql + ' LIMIT 1')[0] ?? null : null
+  const positions = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT p.*, COALESCE(i.fund_name, p.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
+    'FROM oos_bot_position_snapshots p LEFT JOIN fund_info i ON i.fund_code = p.fund_code ' +
+    'WHERE p.live_run_id = ' + runIdSql + ' AND p.bot_id = ' + botIdSql +
+    ' AND p.trade_date = ' + dateSql + ' ORDER BY p.weight DESC, p.fund_code ASC') : []
+  const orders = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT o.*, COALESCE(i.fund_name, o.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
+    'FROM oos_bot_orders o LEFT JOIN fund_info i ON i.fund_code = o.fund_code ' +
+    'WHERE o.live_run_id = ' + runIdSql + ' AND o.bot_id = ' + botIdSql +
+    ' AND o.order_date = ' + dateSql + ' ORDER BY o.source_order_id ASC') : []
+  const actions = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT a.*, COALESCE(i.fund_name, a.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
+    'FROM oos_bot_actions a LEFT JOIN fund_info i ON i.fund_code = a.fund_code ' +
+    'WHERE a.live_run_id = ' + runIdSql + ' AND a.bot_id = ' + botIdSql +
+    ' AND a.action_date = ' + dateSql + ' ORDER BY a.source_action_id ASC') : []
+  const reports = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT report_type, as_of_date, generated_at, chars FROM oos_market_report_status ' +
+    'WHERE live_run_id = ' + runIdSql + ' AND as_of_date = ' + dateSql + ' ORDER BY report_type ASC') : []
+  return { runId, botId: 'bot101', selectedDate, dates, series, snapshot, positions, orders, actions, reports }
+}
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
 }
 
 function sendHtml(res: ServerResponse, html: string): void {
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache, must-revalidate' })
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store, no-cache, must-revalidate', 'pragma': 'no-cache', 'expires': '0' })
   res.end(html)
 }
 
@@ -855,11 +982,21 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     return 1
   }
   const html = readFileSync(DEFAULT_HTML, 'utf8')
+  const marketReportsHtml = readFileSync(DEFAULT_MARKET_REPORTS_HTML, 'utf8')
+  const oosBot101Html = readFileSync(DEFAULT_OOS_BOT101_HTML, 'utf8')
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${host}:${port}`}`)
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         sendHtml(res, html)
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/market-reports.html') {
+        sendHtml(res, marketReportsHtml)
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/oos-bot101.html') {
+        sendHtml(res, oosBot101Html)
         return
       }
       if (req.method === 'GET' && url.pathname === '/health') {
@@ -868,6 +1005,14 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/data') {
         sendJson(res, 200, await loadDataset(dbPath, worldRoot))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/market-reports') {
+        sendJson(res, 200, loadMarketReports(dbPath, url.searchParams.get('date') ?? ''))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/oos/bot101') {
+        sendJson(res, 200, loadOosBot101(dbPath, url.searchParams.get('run_id') ?? 'oos-bot101-daily', url.searchParams.get('date') ?? ''))
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/bot') {

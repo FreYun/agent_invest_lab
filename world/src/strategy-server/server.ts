@@ -360,13 +360,29 @@ function pctField(v: unknown): string {
   return n === null ? "" : (n * 100).toFixed(1) + "%"
 }
 
-export function loadV5MainlinePlanForReport(worldRoot: string, asOf: string): V5MainlinePlanForReport {
+// v5_mainline_plan.py 跑一次要 ~100s（CPU 近乎不占，几乎全在等 simworld/上游网络）。
+// reporter-mainline / bot101 一个决策日内会调 get_v5_mainline_plan 几十次，submit 时还要再算
+// 一遍 → 旧实现每次都重跑脚本，execFileSync 同步阻塞 event loop，agent 单次工具调用先超时再
+// 重试、重试又触发新一轮 100s 执行 → 雪崩，mainline 报告永远产不出（2026-06-15 实测 06-12
+// 连续 6 次失败的根因）。按世界日缓存 raw stdout：同一 asOf 第一次算、之后秒返回（PIT 当日
+// plan 是确定值）。加 5min timeout 防上游真卡死时 execFileSync 无限阻塞。
+const _v5PlanRawCache = new Map<string, string>()
+function runV5MainlinePlanRaw(worldRoot: string, asOf: string): string {
+  const cached = _v5PlanRawCache.get(asOf)
+  if (cached !== undefined) return cached
   const script = resolve(worldRoot, "..", "..", "scripts", "v5_mainline_plan.py")
+  if (!existsSync(script)) throw new Error("找不到 v5 主线脚本：" + script)
   const out = execFileSync("python3", [script, "--date", asOf, "--compact", "--include-funds"], {
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
+    timeout: 300_000,
   })
-  return JSON.parse(out) as V5MainlinePlanForReport
+  _v5PlanRawCache.set(asOf, out)
+  return out
+}
+
+export function loadV5MainlinePlanForReport(worldRoot: string, asOf: string): V5MainlinePlanForReport {
+  return JSON.parse(runV5MainlinePlanRaw(worldRoot, asOf)) as V5MainlinePlanForReport
 }
 
 // preloadedPlan：调用方（如 backfill-deterministic）已拿到同日 plan 时传入，省一次 v5 脚本子进程。
@@ -538,14 +554,8 @@ export async function createStrategyServer(opts: StrategyServerOptions): Promise
 
     if (name === 'get_v5_mainline_plan') {
       const asOf = getCurrentDate()
-      const script = resolve(worldRoot, '..', '..', 'scripts', 'v5_mainline_plan.py')
-      if (!existsSync(script)) return err('找不到 v5 主线脚本：' + script)
       try {
-        const out = execFileSync('python3', [script, '--date', asOf, '--compact', '--include-funds'], {
-          encoding: 'utf8',
-          maxBuffer: 16 * 1024 * 1024,
-        })
-        return ok(out.trim())
+        return ok(runV5MainlinePlanRaw(worldRoot, asOf).trim())
       } catch (e) {
         return err('读取 v5_mainline_plan 失败：' + (e instanceof Error ? e.message : String(e)))
       }

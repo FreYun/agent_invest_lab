@@ -126,6 +126,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background-im
 </div>
 <script>
 const fmtMoney = v => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Number(v || 0))
+const fmtFee = v => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(v || 0))  // 手续费多为几百元量级,保留分位
 const fmtNav = v => v == null ? '--' : Number(v).toFixed(4)
 const fmtPct = v => { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v); return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%` }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
@@ -299,6 +300,7 @@ function renderSummary(data){
     `<span class="badge">最新日期 <strong>${esc(s.latestTradeDate || '--')}</strong></span>`,
     `<span class="badge">已加载 <strong>${s.botCount}</strong> 个 bot</span>`,
     `<span class="badge">总资产 <strong>¥${fmtMoney(s.totalValue)}</strong></span>`,
+    `<span class="badge" title="全部 bot（各自当前展示 run）的申购+赎回手续费合计">总手续费 <strong>¥${fmtFee(s.totalFee || 0)}</strong></span>`,
   ].join('')
   byId('botCount').textContent = `${s.botCount}`
 }
@@ -830,7 +832,7 @@ function renderMetricsPanel(bot){
 }
 function renderActions(bot){
   if (!bot.actions.length) return '<div class="empty">没有买卖动作</div>'
-  return `<table class="table"><thead><tr><th>日期</th><th>基金</th><th>动作</th><th class="num">金额</th><th class="num">份额</th><th class="num">参考净值</th><th class="num">该基金仓位变化</th><th class="num">调仓后该基金仓位</th><th style="width:24px"></th></tr></thead><tbody>${bot.actions.map(a => {
+  return `<table class="table"><thead><tr><th>日期</th><th>基金</th><th>动作</th><th class="num">金额</th><th class="num">份额</th><th class="num">手续费</th><th class="num">参考净值</th><th class="num">该基金仓位变化</th><th class="num">调仓后该基金仓位</th><th style="width:24px"></th></tr></thead><tbody>${bot.actions.map(a => {
     const sideLabel = a.side === 'buy' ? '买入' : a.side === 'sell' ? '卖出' : '观察'
     const aid = a.action_id
     const key = `${bot.botId}|${aid}`
@@ -849,7 +851,7 @@ function renderActions(bot){
     const afterPct = (a.weight_after || 0) * 100
     const deltaColor = a.weight_delta > 0 ? 'var(--gain)' : a.weight_delta < 0 ? 'var(--loss)' : 'inherit'
     const deltaSign = a.weight_delta >= 0 ? '+' : ''
-    return `<tr class="action-row${expanded ? ' expanded' : ''}" data-action-id="${esc(aid)}"><td>${esc(a.action_date)}</td><td>${esc(a.fund_name)}<div style="color:var(--dim);font-size:11px">${esc(a.fund_code)}</div></td><td><span class="row-badge ${a.side}">${esc(sideLabel)}</span></td><td class="num">¥${fmtMoney(a.amount || 0)}</td><td class="num">${fmtMoney(a.shares || 0)}</td><td class="num">${fmtNav(a.nav_used)}</td><td class="num"><span style="color:${deltaColor}">${deltaSign}${deltaPct.toFixed(1)}%</span></td><td class="num">${afterPct.toFixed(1)}%</td><td class="num"><span class="action-chevron">▸</span></td></tr><tr class="reason-row" data-action-id="${esc(aid)}"${expanded ? '' : ' hidden'}><td colspan="9">${reasonHtml}</td></tr>`
+    return `<tr class="action-row${expanded ? ' expanded' : ''}" data-action-id="${esc(aid)}"><td>${esc(a.action_date)}</td><td>${esc(a.fund_name)}<div style="color:var(--dim);font-size:11px">${esc(a.fund_code)}</div></td><td><span class="row-badge ${a.side}">${esc(sideLabel)}</span></td><td class="num">¥${fmtMoney(a.amount || 0)}</td><td class="num">${fmtMoney(a.shares || 0)}</td><td class="num">${a.fee == null ? '--' : '¥' + fmtFee(a.fee)}</td><td class="num">${fmtNav(a.nav_used)}</td><td class="num"><span style="color:${deltaColor}">${deltaSign}${deltaPct.toFixed(1)}%</span></td><td class="num">${afterPct.toFixed(1)}%</td><td class="num"><span class="action-chevron">▸</span></td></tr><tr class="reason-row" data-action-id="${esc(aid)}"${expanded ? '' : ' hidden'}><td colspan="10">${reasonHtml}</td></tr>`
   }).join('')}</tbody></table>`
 }
 // ---- 当日反思面板（交易记忆窗口 / 市场环境判断 / 当天决策）----
@@ -1037,13 +1039,17 @@ function renderDetail(bot){
     const alpha = bot.cumulativeReturnPct - benchEndPct
     alphaPill = `<span class="pill">vs 基准 <strong style="color:${alpha >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(alpha)}</strong></span>`
   }
+  // 手续费 pill：hover 看买/卖拆分 + 占初始资金比例（费用拖累）。
+  const feeDrag = bot.initialCapital > 0 ? (bot.totalFee / bot.initialCapital) * 100 : null
+  const feeTip = `申购费 ¥${fmtFee(bot.buyFee)} · 赎回费 ¥${fmtFee(bot.sellFee)}${feeDrag != null ? ` · 占初始资金 ${feeDrag.toFixed(2)}%` : ''}`
+  const feePill = `<span class="pill" title="${esc(feeTip)}">手续费 <strong>¥${fmtFee(bot.totalFee || 0)}</strong></span>`
   const detailRunHide = `<button type="button" class="detail-run-hide" data-hide-bot="${esc(bot.botId)}" data-hide-run="${esc(bot.runId)}" title="从看板隐藏当前选中的这个 run（不删数据库，可在左侧「已隐藏记录」恢复）">✕ 隐藏此 run</button>`
   const detailRunPicker = `<div class="detail-run-picker"><label>Run</label><select class="detail-run-select" data-bot="${esc(bot.botId)}">${runOptionsHtml(bot)}</select>${detailRunHide}${contaminationBadge(bot)}${modelBadge(bot)}</div>`
   const chartData = renderChart(bot)
   const chartHtml = typeof chartData === 'string'
     ? chartData
     : chartData.html + renderPositionChart(bot, chartData.dateToIdx, chartData.xAxisDates)
-  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span><span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div>${renderUserMdPanel(bot)}<div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div class="holdings-scroll"><div id="holdingsBody">${renderHoldings(bot)}</div></div></div></div><div class="panel"><h2>指标对比（区间内 · 比率按252交易日年化）</h2>${renderMetricsPanel(bot)}</div>${renderReflectionPanel(bot)}<div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
+  byId('detailRoot').innerHTML = `<div class="detail-head"><div><div class="detail-title">${esc(bot.botId)}</div><div class="detail-sub">${esc(bot.firstTradeDate)} → ${esc(bot.latestTradeDate)} · ${bot.days} 个交易日</div>${detailRunPicker}</div><div class="detail-pillrow"><span class="pill">净值 <strong>${fmtNav(bot.netValue)}</strong></span><span class="pill">累计收益 <strong style="color:${bot.cumulativeReturnPct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${fmtPct(bot.cumulativeReturnPct)}</strong></span>${alphaPill}<span class="pill">最大回撤 <strong style="color:${signColor(bot.maxDrawdownPct)}">${fmtPct(bot.maxDrawdownPct)}</strong></span><span class="pill">最大亏损 <strong style="color:${signColor(maxLossPct)}">${fmtPct(maxLossPct)}</strong></span><span class="pill">总资产 <strong>¥${fmtMoney(bot.totalValue)}</strong></span>${feePill}<span class="pill buy">买 ${bot.buyCount}</span><span class="pill sell">卖 ${bot.sellCount}</span></div></div>${renderUserMdPanel(bot)}<div class="grid-2"><div class="panel chart-wrap"><h2>账户净值曲线</h2>${renderRangeBar()}${chartHtml}</div><div class="panel panel-holdings" id="holdingsPanel"><h2 id="holdingsTitle">最新持仓</h2><div class="holdings-scroll"><div id="holdingsBody">${renderHoldings(bot)}</div></div></div></div><div class="panel"><h2>指标对比（区间内 · 比率按252交易日年化）</h2>${renderMetricsPanel(bot)}</div>${renderReflectionPanel(bot)}<div class="panel"><h2>买卖动作</h2>${renderActions(bot)}</div><div class="panel"><h2>最新巡检</h2>${reg ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="row-badge hold">regime ${esc(reg.regime || '--')}</span><span class="row-badge hold">decision ${esc(reg.decision || '--')}</span><span class="row-badge hold">turnover ${fmtPct((reg.turnover_ratio || 0) * 100)}</span></div><div class="reason">${esc(reg.reason || '')}</div>` : '<div class="empty">没有巡检记录</div>'}</div>`
   if (typeof chartData !== 'string') attachCursor(byId('detailRoot'), bot, chartData)
   syncHoldingsHeight()  // 持仓明细面板定高 = 左侧图表高度,基金多了在框内滚动,不再把页面撑长
   if (state.reflectionDate) void loadReflectionForDate(bot, state.reflectionDate)  // 渲染后拉当前日反思(默认最新日)
