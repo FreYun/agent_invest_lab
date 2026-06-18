@@ -48,6 +48,10 @@ export interface DailyMessageContext {
   // 用：替代旧的 skill 注入自跑流水线——主线/regime/组合骨架由系统预生成，bot 直接消费、不自己识别。
   // 由 run.ts 从 fund.db 的 market_reports 表读出填充。空/缺省 → 跳过整块。
   marketReports?: { context: string; mainline: string; rotation: string }
+  // 末条 standing belief 的关键 horizon 上涨概率（t+5 / t+20 的 p_up），由 caller 从
+  // buildBeliefContext 一并取出（同一次扫盘，不二次 IO）。用于「belief ↔ 仓位 言行一致」核对块：
+  // bot 上次说看多却空仓 / 说看空却重仓 = 言行不一，每天硬拦。null/缺省（无历史 belief）→ 不核对。
+  latestBelief?: { tPlus5: number | null; tPlus20: number | null } | null
 }
 
 export function weekdayOf(isoDate: string): string {
@@ -568,6 +572,56 @@ function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): s
   return `\n\n${lines.join('\n')}`
 }
 
+// ── belief ↔ 仓位 言行一致硬约束 ──────────────────────────────────────────────────
+// 病根（bot6 军工 / bot10 黄金 长期 0% 踏空）：bot 每天都写 belief（t+20 上涨概率），却让仓位与它
+// 完全脱钩——可以"嘴上 p_up=0.60 看多、仓位 0% 空仓"两头都占。所有文字劝导都被 bot 自我辩解掉，因为
+// 仓位决定权 100% 还在它手里，而"做错的痛具体、踏空的痛弥散"这条不对称会把它的自封闸门越拧越紧。
+// 这块把仓位焊回 bot 自己说出口的信念：方向矛盾就每天硬拦，逼它当天要么改信念要么改仓位——断掉脱钩，
+// 棘轮就转不动。对称两侧都拦：看多却空仓 = 踏空；看空却重仓 = 做错。不限复盘日，每天核对。
+// 触发需同时有 ① 可解析的 standing belief（含 t+20 p_up）② 今日账户快照（算当前仓位权重）；
+// 缺任一 → 无法判定 → 返回空串（不拦，行为不变）。信念被 Brier 校准 → bot 无法靠"嘴硬写低 p_up"给
+// 空仓开脱（看空看错同样扣分），所以这条不是又一道能被辩解的文字，而是把"言"钉死在可计分的概率上。
+const COHERENCE_BULL_P = 0.55   // t+20 p_up ≥ 此 = 净看多
+const COHERENCE_BEAR_P = 0.45   // t+20 p_up ≤ 此 = 净看空
+const COHERENCE_FLAT_POS = 0.20 // 仓位 < 20% ≈ 空仓（0/40 框架下基本就是 0）
+const COHERENCE_HEAVY_POS = 0.40 // 仓位 ≥ 40% = 有承重底仓
+
+function beliefPositionCoherenceBlock(
+  dc: DailyContextData | undefined,
+  latestBelief: DailyMessageContext['latestBelief'],
+): string {
+  if (!latestBelief) return ''
+  const p20 = latestBelief.tPlus20
+  if (typeof p20 !== 'number' || !Number.isFinite(p20)) return ''
+  // 当前仓位权重（今日 settle 后账户快照）。account 缺失 → 无法判定，不拦。
+  const acct = dc?.account?.account
+  if (!acct || !(acct.total_value > 0)) return ''
+  const posWeight = acct.market_value / acct.total_value
+
+  const bullishFlat = p20 >= COHERENCE_BULL_P && posWeight < COHERENCE_FLAT_POS
+  const bearishHeavy = p20 <= COHERENCE_BEAR_P && posWeight >= COHERENCE_HEAVY_POS
+  if (!bullishFlat && !bearishHeavy) return ''
+
+  const p5 = latestBelief.tPlus5
+  const p5txt = typeof p5 === 'number' && Number.isFinite(p5) ? p5.toFixed(2) : 'n/a'
+  const posPct = fmtNum(posWeight * 100, 1)
+  const lines: string[] = []
+  lines.push('【⚖ 言行一致核对（belief ↔ 仓位）· 今天必须消除矛盾】')
+  if (bullishFlat) {
+    lines.push(`你上一条 standing belief：t+20 上涨概率 p_up=${p20.toFixed(2)}（>${COHERENCE_BULL_P} = 净看多），t+5=${p5txt}；但你当前仓位 ${posPct}%（基本空仓）。`)
+    lines.push('**这是言行不一**——嘴上看多、仓位却押注不涨，正是"把保守偷换成永久空仓"的踏空。今天二选一，不许两头都占：')
+    lines.push('  ① 你其实不看多了 → 今天的 belief 把 t+20 p_up 诚实下调到 <0.5，并在 evidence 里写明"什么变了"让你转空。注意：你没法靠把 p_up 写低来给空仓开脱——看空看错了 t+20 一样扣 Brier 分，假装看空会在校准里露馅。')
+    lines.push(`  ② 你仍看多 → 按投资层（读 USER.md 定力度）把仓位建到 ≥40% 底仓，兑现你的判断。再保守，净看多 + ${posPct}% 仓位也是踏空。`)
+  } else {
+    lines.push(`你上一条 standing belief：t+20 上涨概率 p_up=${p20.toFixed(2)}（<${COHERENCE_BEAR_P} = 净看空），t+5=${p5txt}；但你当前仓位 ${posPct}%（重仓）。`)
+    lines.push('**这是言行不一**——嘴上看空、仓位却满载下行风险，正是"信号走坏却不撤"的做错。今天二选一：')
+    lines.push('  ① 你其实没那么空 → 今天的 belief 把 t+20 p_up 上调到 >0.5 并给出支撑证据；')
+    lines.push('  ② 你确实看空 → 按投资层把仓位降到与看空一致的水平（该清就清），别扛。')
+  }
+  lines.push('（铁律：仓位必须与信念同向——净看多→在场，净看空→空仓；每天核对，不只复盘日。这不替你做方向判断，只禁止"想的"和"做的"打架。）')
+  return `\n\n${lines.join('\n')}`
+}
+
 // 把"判断管线 skill"整篇拼成一个 daily-message 区块。直接注入 = bot 无需 load_skill 即可读到，
 // 内容就是各 skill 的 SKILL.md 全文（自算版：自己调 sector_*/regime 等工具做判断，不依赖外部研报）。
 function injectedSkillsBlock(skills?: { id: string; content: string }[]): string {
@@ -637,7 +691,11 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   //        让"先定性大趋势 → 业绩对照 → 改策略 or 书面论证维持"成为 bot 收工前读到的最后一条硬约束。
   // FOOTER_BRIEF 的"列了 todo 就要做 + 结束前 mem0_add"对所有 bot 都适用。
   const review = strategyReviewBlock(ctx.dailyContext, ctx.botId)
+  // belief↔仓位 言行一致核对：每天（不限复盘日）查 standing belief 方向 vs 实际仓位是否打架。
+  // 放在 review 之前——复盘日时 review（更大的"方法论是否失效"硬契约）压在最末尾保持最高 recency；
+  // 非复盘日 review 为空串，本块即收尾的最后一条硬约束。无 latestBelief / 无账户 → 空串。
+  const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${buyable}${pipelineBlock}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${buyable}${pipelineBlock}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${coherence}${review}\n`
 }

@@ -16,28 +16,47 @@ export * from "./schema.ts";
 export type { BeliefRecord } from "./md-history.ts";
 export type { CalibrationStats, HorizonStats, ActivityStats } from "./brier.ts";
 
+/** buildBeliefContext 的返回：注入用字符串 + 末条 standing belief 的关键 horizon p_up。 */
+export interface BuiltBeliefContext {
+  /** 注入进 daily prompt 的整块（schema 要求 + 校准反馈）。失败时退化为 schema-only。 */
+  block: string;
+  /**
+   * 末条 standing belief 的 t+5 / t+20 上涨概率，供 message.ts 的「belief ↔ 仓位 言行一致」核对用
+   * （同一次扫盘顺带取出，不再二次 IO）。无历史 belief / 解析失败 → null（→ 不核对）。
+   */
+  latest: { tPlus5: number | null; tPlus20: number | null } | null;
+}
+
 /**
- * Build the full belief-context string for injection into a bot's daily prompt.
+ * Build the full belief-context for injection into a bot's daily prompt.
  * Combines:
  *   1. Schema requirement block (always present)
  *   2. Calibration feedback block (or first-day fallback)
+ * 并顺带返回末条 standing belief 的关键 horizon p_up（言行一致核对用）。
  *
- * Never throws: any failure falls back to schema-only output.
+ * Never throws: any failure falls back to schema-only output + latest:null.
  */
 export async function buildBeliefContext(
   botId: string,
   runId: string,
   currentDate: string,
-): Promise<string> {
+): Promise<BuiltBeliefContext> {
   try {
     const records = await scanRecentBeliefs(botId, runId, currentDate, HISTORY_WINDOW_DAYS);
     const stats = await computeCalibration(records);
     // 末条 record 回显给 bot（prior_p_up 依据）——会话无状态，没有这条 bot 只能填 null。
-    const block = formatCalibrationBlock(stats, botId, records[records.length - 1]);
-    return `${SCHEMA_REQUIREMENT_BLOCK}\n\n${block}`;
+    const last = records[records.length - 1];
+    const block = formatCalibrationBlock(stats, botId, last);
+    const latest = last
+      ? {
+          tPlus5: last.belief.horizons["t+5"]?.p_up ?? null,
+          tPlus20: last.belief.horizons["t+20"]?.p_up ?? null,
+        }
+      : null;
+    return { block: `${SCHEMA_REQUIREMENT_BLOCK}\n\n${block}`, latest };
   } catch (err) {
     console.warn(`[belief-context] buildBeliefContext failed for ${botId}/${currentDate}: ${String(err)}`);
-    return SCHEMA_REQUIREMENT_BLOCK;
+    return { block: SCHEMA_REQUIREMENT_BLOCK, latest: null };
   }
 }
 
