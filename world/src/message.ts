@@ -47,7 +47,7 @@ export interface DailyMessageContext {
   // 系统预读注入的三份市场研报 content_md（PIT：as_of_date<=世界日的最新一期）。bot101/102/103
   // 用：替代旧的 skill 注入自跑流水线——主线/regime/组合骨架由系统预生成，bot 直接消费、不自己识别。
   // 由 run.ts 从 fund.db 的 market_reports 表读出填充。空/缺省 → 跳过整块。
-  marketReports?: { context: string; mainline: string; rotation: string }
+  marketReports?: { context: string; mainline: string; rotation: string; macroNews?: string }
   // 末条 standing belief 的关键 horizon 上涨概率（t+5 / t+20 的 p_up），由 caller 从
   // buildBeliefContext 一并取出（同一次扫盘，不二次 IO）。用于「belief ↔ 仓位 言行一致」核对块：
   // bot 上次说看多却空仓 / 说看空却重仓 = 言行不一，每天硬拦。null/缺省（无历史 belief）→ 不核对。
@@ -639,20 +639,24 @@ ${bodies}
 
 // 系统预读注入三份市场研报（PIT）。bot101/102/103 用：主线/regime/组合骨架已由系统预生成，
 // bot 直接消费报告结论做仓位与下单决策，不自己跑主线识别。三类全缺 → 空串（跳过整块）。
-function marketReportsBlock(reports?: { context: string; mainline: string; rotation: string }): string {
+function marketReportsBlock(reports?: { context: string; mainline: string; rotation: string; macroNews?: string }): string {
   if (!reports) return ''
   const part = (label: string, body: string): string =>
     `────────── ${label} ──────────\n${body && body.trim() ? body.trim() : '（截至今日暂无该报告——按 METHODOLOGY 保守处理）'}`
+  const hasMacro = !!(reports.macroNews && reports.macroNews.trim())
   const bodies = [
     part('market_context（行情 / regime / risk_state）', reports.context),
     part('market_mainline（主线板块 + 可投基金池）', reports.mainline),
     part('mainline_rotation（核心/卫星组合骨架 + 今日动作）', reports.rotation),
+    ...(hasMacro ? [part('macro_news（宏观 / 政策 / 事件资讯 · 当期）', reports.macroNews as string)] : []),
   ].join('\n\n')
+  const n = hasMacro ? '四' : '三'
   return `\n\n【市场研究报告（系统预生成 · PIT · 全市场共享）】
-下面三份报告是系统在每月初按 v5 方法论预生成的当期市场判断，**是你今天 regime / 主线 / 组合骨架的权威结论，直接采用**：
+下面${n}份报告是系统预生成的当期市场判断与资讯，**是你今天 regime / 主线 / 组合骨架的权威结论，直接采用**：
 - **不要**自己再调 \`sector_search\`/\`sector_factor\`/\`market_temperature\` 去重跑主线识别或 regime 判断——那套流程系统已替你做完；
 - mainline_rotation 已给出核心/卫星组合骨架与每板块双测度选好的基金（fund_pool），照它执行即可；
-- 你的职责 = 基于这三份报告 + 你的 METHODOLOGY（仓位/风险闸门/配置区间/回撤纪律）做**目标仓位与下单**决策。
+- **macro_news 是当期宏观 / 政策 / 事件资讯**：决策前必读，判断有没有重大政策面 / 事件面催化或冲击。**尤其遇到大跌：用它分清「一次性外部冲击（如关税 / 地缘黑天鹅，不可外推）」还是「可持续的基本面恶化」——一次性冲击扛住别恐慌转防守、更别把它写进长期记忆当永久教训；只有可持续恶化才真正降风险预算**；
+- 你的职责 = 基于这${n}份报告 + 你的 METHODOLOGY（仓位/风险闸门/配置区间/回撤纪律）做**目标仓位与下单**决策。
 
 ${bodies}
 【市场研究报告 结束】`

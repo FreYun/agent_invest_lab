@@ -123,10 +123,10 @@ export function botServerArgv(config: WorldConfig, botId: string, workspace: str
 // 不再注入 skill 让其自跑主线识别流水线（遵循度低、退化成只查持仓板块）。此表清空，机制保留备用。
 const INJECT_PIPELINE_SKILLS: Record<string, string[]> = {}
 
-/** 系统侧从 fund.db 预读三份市场研报的 content_md（PIT：as_of_date<=世界日，各取最新一期）。
+/** 系统侧从 fund.db 预读四份市场研报的 content_md（PIT：as_of_date<=世界日，各取最新一期）。
  *  与 strategy-server.get_market_report 同口径，但走系统注入而非 bot 工具调用。
- *  三类全缺 → 返回 undefined（message.ts 不渲染该块）。 */
-function readMarketReportsForInjection(fundDbPath: string, worldDate: string): { context: string; mainline: string; rotation: string } | undefined {
+ *  四类全缺 → 返回 undefined（message.ts 不渲染该块）。 */
+function readMarketReportsForInjection(fundDbPath: string, worldDate: string): { context: string; mainline: string; rotation: string; macroNews: string } | undefined {
   const readOne = (type: string): string => {
     const sql = `SELECT content_md FROM market_reports WHERE report_type=${sqlStr(type)} AND scope='global' `
       + `AND as_of_date<=${sqlStr(worldDate)} ORDER BY as_of_date DESC LIMIT 1;`
@@ -139,8 +139,9 @@ function readMarketReportsForInjection(fundDbPath: string, worldDate: string): {
   const context = readOne('market_context')
   const mainline = readOne('market_mainline')
   const rotation = readOne('mainline_rotation')
-  if (!context && !mainline && !rotation) return undefined
-  return { context, mainline, rotation }
+  const macroNews = readOne('macro_news')
+  if (!context && !mainline && !rotation && !macroNews) return undefined
+  return { context, mainline, rotation, macroNews }
 }
 
 /** 读取某 bot 要直接注入的判断管线 skill 全文（从其 shadow workspace 的 skills/<id>/SKILL.md）。
