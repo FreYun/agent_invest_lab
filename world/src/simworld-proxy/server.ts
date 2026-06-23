@@ -41,6 +41,11 @@ export interface SimworldToolSummary {
 
 const INJECT_KEY = 'simulated_datetime'
 
+// Abort an upstream round-trip if it hangs past this, so the serialization gate
+// (see createSimworldProxy) never stalls the queue behind one stuck call. Set
+// just under the bot MCP client's ~8s per-call timeout.
+const UPSTREAM_TIMEOUT_MS = 7000
+
 // 对 bot 隐藏的上游工具：申赎原始数据接口。底层 18078 工具保留（research、以及 market_sentiment
 // 因子的计算仍直接读，不走本 proxy），但经 proxy 给 bot 的视图里：tools/list 整条剔除、tools/call
 // 拒绝，让 agent 既看不到也调不动——申赎数据源对 agent 彻底隐藏，agent 只用加工好的 market_sentiment
@@ -83,6 +88,25 @@ function stripFromToolSchema(tool: Record<string, unknown>): boolean {
     }
   }
   return had
+}
+
+/** Filter hidden tools + strip simulated_datetime from each tool schema, updating
+ *  the inject-cache. Mutates tool objects in place; returns the bot-visible array
+ *  (used both for live tools/list rewrite and the local tools/list cache). */
+function processToolsArray(tools: unknown[], needInjection: Set<string>): Record<string, unknown>[] {
+  const visible = tools.filter((t): t is Record<string, unknown> =>
+    isObject(t) && typeof t.name === 'string' && !HIDDEN_TOOLS.has(t.name))
+  for (const t of visible) {
+    const had = stripFromToolSchema(t)
+    const name = String(t.name)
+    if (had) needInjection.add(name); else needInjection.delete(name)
+  }
+  return visible
+}
+
+function sendJsonRpc(res: ServerResponse, obj: JsonRpcMessage): void {
+  res.writeHead(200, { 'content-type': 'application/json' })
+  res.end(JSON.stringify(obj))
 }
 
 /** Parse one chunk of SSE body, extract data: <json> payloads, run mutator on
@@ -131,6 +155,9 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
   // members.
   const needInjection = new Set<string>()
   let schemaSeen = false
+  // Serialize upstream round-trips: 1-at-a-time gate so the single-worker upstream
+  // never sees concurrent tools/call (concurrency is what trips the ~8s timeout).
+  let upstreamGate: Promise<unknown> = Promise.resolve()
 
   const server = createServer((req, res) => {
     void handle(req, res).catch(err => {
@@ -156,6 +183,31 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     let parsed: JsonRpcMessage | null = null
     try { parsed = raw ? (JSON.parse(raw) as JsonRpcMessage) : null }
     catch { parsed = null }
+
+    // Answer the MCP handshake (initialize / tools/list / ping / initialized) LOCALLY
+    // when the upstream is stateless. The bot's research-loop re-activates the
+    // simworld-data MCP per turn (deferred MCP); forwarding that handshake to the
+    // single-worker upstream means it queues behind whatever blocking `requests`
+    // calls are in flight and trips the client's ~8s timeout → the whole MCP is
+    // reported "initialization failed" and EVERY simworld tool that turn dies.
+    // Serving the handshake from the proxy decouples it from upstream load; only
+    // real tools/call still forwards. Stateful upstreams keep 1:1 forwarding (they
+    // need a real upstream session), so this is gated on the probed stateless flag.
+    if (upstreamStateless && parsed && typeof parsed.method === 'string') {
+      const m = parsed.method
+      if (m === 'initialize') {
+        const pv = isObject(parsed.params) && typeof parsed.params.protocolVersion === 'string'
+          ? parsed.params.protocolVersion : '2024-11-05'
+        sendJsonRpc(res, { jsonrpc: '2.0', id: parsed.id ?? null, result: { protocolVersion: pv, capabilities: { tools: {} }, serverInfo: { name: 'simworld-data-proxy', version: '1.0.0' } } })
+        return
+      }
+      if (m === 'ping') { sendJsonRpc(res, { jsonrpc: '2.0', id: parsed.id ?? null, result: {} }); return }
+      if (m === 'notifications/initialized') { res.writeHead(202); res.end(); return }
+      if (m === 'tools/list' && cachedTools) {
+        sendJsonRpc(res, { jsonrpc: '2.0', id: parsed.id ?? null, result: { tools: cachedTools } })
+        return
+      }
+    }
 
     // Request-side rewrite: inject simulated_datetime on tools/call.
     if (parsed && parsed.method === 'tools/call' && isObject(parsed.params)) {
@@ -198,10 +250,23 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     // 中被原样带过，这里强制以 proxy 配置值覆盖，确保日志里看到的是真实 run）。
     if (opts.clientId) headers['x-client-id'] = opts.clientId
 
-    const init: RequestInit = { method: req.method ?? 'GET', headers }
+    const init: RequestInit = { method: req.method ?? 'GET', headers, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) }
     if (body !== null) init.body = body
 
-    const upstream = await fetch(opts.upstreamUrl, init)
+    // Funnel the upstream round-trip through the 1-at-a-time gate. The upstream is
+    // a single uvicorn worker doing blocking `requests` to ttjj; concurrent
+    // tools/call from one bot turn thrash it so every call exceeds the client's
+    // ~8s timeout (surfaced to the bot as "initialization failed"). Serializing
+    // keeps each call fast (<2s uncontended). Sequential callers never wait — the
+    // gate is already resolved. We hold the gate across fetch + body read (the
+    // upstream connection is busy until the body drains).
+    const run = upstreamGate.then(async () => {
+      const resp = await fetch(opts.upstreamUrl, init)
+      const text = await resp.text()
+      return { resp, text }
+    })
+    upstreamGate = run.then(() => undefined, () => undefined)
+    const { resp: upstream, text } = await run
     const respHeaders: Record<string, string> = {}
     upstream.headers.forEach((v, k) => {
       const lk = k.toLowerCase()
@@ -212,7 +277,6 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     })
 
     const ct = upstream.headers.get('content-type') ?? ''
-    const text = await upstream.text()
     let outText = text
 
     if (ct.includes('text/event-stream') || ct.includes('application/json')) {
@@ -220,22 +284,11 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
       const rewrite = (msg: JsonRpcMessage): void => {
         if (!isObject(msg.result)) return
         const result = msg.result as Record<string, unknown>
-        const tools = result.tools
-        if (!Array.isArray(tools)) return
-        // 对 bot 隐藏的工具（申赎原始接口）：从 tools/list 响应里整条剔除，bot 实时调用也看不到。
-        const filtered = tools.filter(t => !(isObject(t) && typeof t.name === 'string' && HIDDEN_TOOLS.has(t.name)))
-        if (filtered.length !== tools.length) result.tools = filtered
-        let sawSchema = false
-        for (const t of filtered) {
-          if (!isObject(t)) continue
-          const had = stripFromToolSchema(t)
-          const name = typeof t.name === 'string' ? t.name : ''
-          if (name) {
-            sawSchema = true
-            if (had) needInjection.add(name); else needInjection.delete(name)
-          }
-        }
-        if (sawSchema) schemaSeen = true
+        if (!Array.isArray(result.tools)) return
+        const processed = processToolsArray(result.tools, needInjection)
+        result.tools = processed
+        schemaSeen = true
+        cachedTools = processed   // keep the local tools/list cache fresh
       }
       if (ct.includes('text/event-stream')) {
         outText = rewriteSseBody(text, rewrite)
@@ -269,11 +322,20 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
   // later day's prompt picks them up once the transient failure clears.
   // Best-effort: if every attempt fails the bot still has the discover_tools hint.
   const tools: SimworldToolSummary[] = []
+  // Processed (hidden-filtered, simulated_datetime-stripped) tools array, served
+  // for local tools/list. Filled by the probe / first live tools/list.
+  let cachedTools: unknown[] | null = null
+  // Whether the upstream advertised NO mcp-session-id at probe → stateless_http.
+  // Only then do we answer the handshake locally (see handle()).
+  let upstreamStateless = false
   let probeAborted = false
   const probeOnce = async (): Promise<void> => {
-    const got = await probeUpstreamTools(opts.upstreamUrl)
-    if (got.length === 0) throw new Error('tools/list returned empty')
-    tools.splice(0, tools.length, ...got)
+    const { summaries, rawTools, stateless } = await probeUpstreamTools(opts.upstreamUrl)
+    if (summaries.length === 0) throw new Error('tools/list returned empty')
+    tools.splice(0, tools.length, ...summaries)
+    cachedTools = processToolsArray(rawTools, needInjection)
+    schemaSeen = true
+    upstreamStateless = stateless
   }
   try {
     await probeOnce()
@@ -320,7 +382,7 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
  *  daily prompt loses its tool catalog → bot hallucinates tool names by analogy
  *  (e.g. fund_index_valuation from fund_index_return). Body may be SSE
  *  (`event: …\ndata: …`) or pure JSON; we accept both. */
-async function probeUpstreamTools(upstreamUrl: string): Promise<SimworldToolSummary[]> {
+async function probeUpstreamTools(upstreamUrl: string): Promise<{ summaries: SimworldToolSummary[]; rawTools: Record<string, unknown>[]; stateless: boolean }> {
   const baseHeaders = { 'content-type': 'application/json', 'accept': 'application/json, text/event-stream' }
   const initResp = await fetch(upstreamUrl, {
     method: 'POST',
@@ -354,13 +416,14 @@ async function probeUpstreamTools(upstreamUrl: string): Promise<SimworldToolSumm
     fetch(upstreamUrl, { method: 'DELETE', headers: sessionHeaders }).catch(() => { /* best-effort */ })
   }
 
-  return tools
-    .filter((t): t is Record<string, unknown> => isObject(t) && typeof t.name === 'string')
+  const named = tools.filter((t): t is Record<string, unknown> => isObject(t) && typeof t.name === 'string')
+  const summaries = named
     .filter(t => !HIDDEN_TOOLS.has(String(t.name)))   // 隐藏申赎原始接口，不进 bot 的工具目录
     .map(t => ({
       name: String(t.name),
       description: (typeof t.description === 'string' ? t.description : '').trim().split('\n')[0].trim(),
     }))
+  return { summaries, rawTools: named, stateless: sid === null }
 }
 
 function parseToolsListPayload(text: string): unknown {
