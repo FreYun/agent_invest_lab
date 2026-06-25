@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Run 评测看板 · 合格筛选</title>
+<style>
+:root{--bg:#0b1020;--panel:#11182a;--panel2:#0f1524;--border:#22304b;--text:#e8edf7;--dim:#7d88a0;--accent:#66d9e8;--accent2:#ffb86b;--gain:#ff6b8a;--loss:#65d9a5;--pass:#65d9a5;--fail:#ff6b8a;--radius:8px}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:linear-gradient(180deg,rgba(102,217,232,.06),transparent 18%),linear-gradient(135deg,rgba(255,184,107,.05),transparent 35%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(180deg,rgba(0,0,0,.45),transparent 85%)}
+.wrap{position:relative;z-index:1;max-width:1680px;margin:0 auto;padding:22px}
+.hero{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid var(--border);padding-bottom:16px;margin-bottom:18px;flex-wrap:wrap}
+.hero h1{margin:0;font-size:28px}
+.hero .sub{color:var(--dim);margin-top:6px;font-size:13px}
+.hero .sub code{color:var(--accent2)}
+.hero-badges{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.badge{border:1px solid var(--border);background:rgba(255,255,255,.03);border-radius:999px;padding:7px 11px;font-size:12px;color:var(--text)}
+.badge strong{color:var(--accent)}
+.badge.pass strong{color:var(--pass)}.badge.fail strong{color:var(--fail)}
+
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.metric{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid var(--border);border-radius:var(--radius);padding:14px 14px 12px}
+.metric .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+.metric .v{margin-top:8px;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.metric .s{margin-top:4px;font-size:12px;color:var(--dim)}
+
+/* ---- 筛选条 ---- */
+.filters{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px 15px;margin-bottom:16px;display:flex;flex-direction:column;gap:12px}
+.filter-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.filter-label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:12px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.seg button:hover{background:rgba(255,255,255,.08)}
+.seg button.active{background:#122034;border-color:var(--accent);color:var(--accent)}
+.seg button.active[data-pass="pass"]{border-color:var(--pass);color:var(--pass);background:rgba(101,217,165,.08)}
+.seg button.active[data-pass="fail"]{border-color:var(--fail);color:var(--fail);background:rgba(255,107,138,.08)}
+.filters select,.filters input[type=search]{background:rgba(255,255,255,.03);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;min-width:200px}
+.filters select:focus,.filters input:focus{outline:none;border-color:var(--accent)}
+.filters input[type=search]{min-width:240px}
+.filter-clear{background:rgba(255,255,255,.03);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer}
+.filter-clear:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.filter-count{margin-left:auto;font-size:12px;color:var(--dim)}
+.filter-count strong{color:var(--text)}
+
+/* ---- 指数分组 ---- */
+.index-group{margin-bottom:20px}
+.index-head{display:flex;align-items:baseline;gap:10px;margin:0 0 8px;padding:8px 12px;border-left:3px solid var(--accent2);background:rgba(255,184,107,.05);border-radius:0 6px 6px 0}
+.index-head .ix-name{font-size:15px;font-weight:700}
+.index-head .ix-code{font-size:12px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}
+.index-head .ix-stat{margin-left:auto;font-size:12px;color:var(--dim)}
+.index-head .ix-stat .p{color:var(--pass);font-weight:700}
+.index-head .ix-stat .f{color:var(--fail);font-weight:700}
+
+/* ---- 表格 ---- */
+.table-scroll{overflow:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel)}
+table.runs{width:100%;border-collapse:collapse;min-width:540px}
+.runs th,.runs td{padding:9px 11px;font-size:12px;text-align:right;font-variant-numeric:tabular-nums;border-bottom:1px solid rgba(255,255,255,.05);white-space:nowrap}
+.runs thead th{position:sticky;top:0;background:var(--panel2);font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;font-weight:500;z-index:2;cursor:pointer;user-select:none}
+.runs thead th:hover{color:var(--text)}
+.runs th.l,.runs td.l{text-align:left}
+.runs tbody tr:hover{background:rgba(255,255,255,.025)}
+.runs tbody tr:last-child td{border-bottom:none}
+.run-id{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#9fb4d6}
+.run-bot{font-weight:700;color:var(--text)}
+.run-strat{color:var(--dim);font-size:11px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gain{color:var(--gain)}.loss{color:var(--loss)}.flat{color:var(--text)}
+.rating{display:inline-block;border-radius:999px;padding:2px 8px;font-size:11px;border:1px solid var(--border)}
+.rating.r优秀{color:#ffd66c;border-color:rgba(255,214,108,.4);background:rgba(255,214,108,.07)}
+.rating.r良好{color:var(--accent);border-color:rgba(102,217,232,.4);background:rgba(102,217,232,.07)}
+.rating.r及格{color:var(--accent2);border-color:rgba(255,184,107,.4);background:rgba(255,184,107,.07)}
+.rating.r差{color:var(--fail);border-color:rgba(255,107,138,.4);background:rgba(255,107,138,.07)}
+.status-pill{display:inline-block;border-radius:999px;padding:2px 8px;font-size:11px;border:1px solid var(--border);color:var(--dim)}
+.status-pill.done{color:var(--loss);border-color:rgba(101,217,165,.3)}
+.status-pill.broken{color:var(--accent2);border-color:rgba(255,184,107,.3)}
+.comment{max-width:340px;white-space:normal;color:var(--dim);font-size:11px;line-height:1.5;text-align:left}
+/* 合格/不合格 标记按钮 */
+.mark-btn{border-radius:6px;padding:5px 12px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;border:1px solid var(--border);transition:transform .08s,filter .12s;min-width:64px}
+.mark-btn:active{transform:scale(.94)}
+.mark-btn.pass{background:rgba(101,217,165,.12);border-color:var(--pass);color:var(--pass)}
+.mark-btn.fail{background:rgba(255,107,138,.12);border-color:var(--fail);color:var(--fail)}
+.mark-btn:hover{filter:brightness(1.25)}
+.mark-edited{display:inline-block;margin-left:5px;font-size:10px;color:var(--accent2);vertical-align:middle}
+.empty{border:1px dashed var(--border);border-radius:var(--radius);padding:32px;color:var(--dim);text-align:center}
+.reset-link{background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline;font-family:inherit;padding:0}
+
+/* ---- 左侧指数筛选栏 + 右主区 ---- */
+.cols{display:grid;grid-template-columns:212px minmax(0,1fr);gap:16px;align-items:start}
+.idx-sidebar{position:sticky;top:14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:10px;max-height:calc(100vh - 28px);overflow:auto}
+.idx-head{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;color:var(--dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}
+.idx-actions{display:flex;gap:4px}
+.idx-actions button{background:rgba(255,255,255,.03);border:1px solid var(--border);color:var(--accent);border-radius:5px;padding:2px 7px;font-size:11px;font-family:inherit;cursor:pointer}
+.idx-actions button:hover{background:rgba(102,217,232,.12)}
+.idx-list{display:flex;flex-direction:column;gap:1px}
+.idx-item{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:5px;cursor:pointer;font-size:12px}
+.idx-item:hover{background:rgba(255,255,255,.04)}
+.idx-item.off{opacity:.5}
+.idx-item input{accent-color:var(--accent);cursor:pointer;flex-shrink:0}
+.idx-item .idx-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.idx-item .idx-cnt{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
+.idx-item.idx-empty .idx-name{color:var(--dim)}
+.index-block-empty{opacity:.78}
+/* 不合格折叠 */
+.fail-toggle{cursor:pointer}
+.fail-toggle td{color:var(--dim);font-size:11px;background:rgba(255,107,138,.05);border-top:1px solid rgba(255,107,138,.14)}
+.fail-toggle:hover td{color:var(--fail);background:rgba(255,107,138,.1)}
+.runs tbody tr.fail-row td{opacity:.7}
+/* ---- 每个指数一个区块：左表格 + 右净值图，左右对齐 ---- */
+.index-block{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:16px;align-items:start;margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid rgba(255,255,255,.06)}
+.index-block:last-child{border-bottom:none}
+.ix-left{min-width:0}
+.ix-right{min-width:0}
+.runs tbody tr[data-key]{cursor:pointer}
+.runs tbody tr.selected{background:rgba(102,217,232,.10)!important;box-shadow:inset 3px 0 0 var(--accent)}
+/* ---- 净值图面板 ---- */
+.chart-panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--panel);padding:14px}
+.cp-head{display:flex;flex-direction:column;gap:3px;margin-bottom:10px}
+.cp-title{font-size:16px;font-weight:800}
+.cp-sub{font-size:12px;color:var(--dim)}
+.cp-sub .run-id{color:#9fb4d6;font-family:ui-monospace,Menlo,monospace}
+.world-link{margin-top:8px;align-self:flex-start;background:rgba(102,217,232,.1);border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:6px 12px;font-size:12px;text-decoration:none;font-weight:600;transition:background .12s}
+.world-link:hover{background:rgba(102,217,232,.2)}
+.cp-pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.cp-pill{border:1px solid var(--border);border-radius:999px;padding:4px 9px;font-size:11px;background:rgba(255,255,255,.03)}
+.cp-pill.pass{color:var(--pass);border-color:rgba(101,217,165,.4)}.cp-pill.fail{color:var(--fail);border-color:rgba(255,107,138,.4)}
+/* 图下方风险调整指标网格（夏普/卡玛/波动/捕获…）*/
+.cp-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)}
+.cp-stat{background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:6px;padding:7px 8px;text-align:center}
+.cp-stat-k{font-size:10px;color:var(--dim);letter-spacing:.03em;white-space:nowrap}
+.cp-stat-v{margin-top:3px;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
+.cp-stat-v.gain{color:var(--gain)}.cp-stat-v.loss{color:var(--loss)}.cp-stat-v.flat{color:var(--text)}
+.cp-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--dim);margin-bottom:4px}
+.cp-lg{display:inline-flex;align-items:center;gap:5px}
+.cp-sw{width:16px;height:3px;border-radius:2px;display:inline-block}
+.cp-chart{width:100%;height:auto;display:block;border-radius:6px}
+.cp-axis{font-size:10px;fill:var(--dim)}
+.cp-grid{stroke:rgba(255,255,255,.06);stroke-width:1}
+.cp-line{fill:none;stroke:var(--accent);stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round}
+.cp-bench{fill:none;stroke:var(--accent2);stroke-width:1.6;stroke-linejoin:round;opacity:.9}
+.cp-mk-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1}
+.cp-mk-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1}
+.cp-mk-txt{font-size:9px;font-weight:700;fill:var(--text)}
+@media (max-width:1180px){.index-block{grid-template-columns:1fr}}
+@media (max-width:980px){.cols{grid-template-columns:1fr}.idx-sidebar{position:static;max-height:none}}
+@media (max-width:1100px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>Run 评测看板 · 合格筛选</h1>
+      <div class="sub"><a href="./" style="color:var(--accent);text-decoration:none">← 净值看板</a> · 数据源 <code>bot-runs-eval-7d_副本.csv</code> · 按<strong>对标指数</strong>归组 · 合格/不合格可逐条标记（存浏览器本地）</div>
+    </div>
+    <div class="hero-badges" id="heroBadges"></div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="filters">
+    <div class="filter-row">
+      <span class="filter-label">合格状态</span>
+      <div class="seg" id="passSeg">
+        <button data-pass="all" class="active">全部</button>
+        <button data-pass="pass">✓ 合格</button>
+        <button data-pass="fail">✕ 不合格</button>
+      </div>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">搜索 run_id</span>
+      <input type="search" id="runSearch" placeholder="输入 run_id 片段，如 2026-06-15T06-22 …">
+      <span class="filter-label" style="margin-left:8px">状态</span>
+      <select id="statusSel"><option value="">全部</option><option value="完成">完成</option><option value="中断">中断</option></select>
+      <button class="filter-clear" id="clearBtn">清除筛选</button>
+      <span class="filter-count" id="filterCount"></span>
+    </div>
+  </div>
+
+  <div class="cols">
+    <aside class="idx-sidebar">
+      <div class="idx-head"><span>对标指数筛选</span><span class="idx-actions"><button id="idxAll" type="button">全选</button><button id="idxNone" type="button">清空</button></span></div>
+      <div id="indexFilter" class="idx-list"></div>
+    </aside>
+    <div id="groups"></div>
+  </div>
+</div>
+
+<!-- CSV 原文内嵌，避免 file:// 下 fetch 被 CORS 拦截。要更新数据：替换下面整块即可。 -->
+<script type="text/plain" id="csvData">﻿启动时间,run_id,bot,策略,对标指数,可买基金,状态,窗口起,窗口止,回测月数,进度,绝对收益%,年化收益%,最大回撤%,被动满仓%,年化被动%,超额_择时%,上行捕获%,下行保护%,操作_买,操作_卖,操作合计,末日现金%,评价,普通投资者评级,综合点评,备注
+2026-06-12 10:06,dash-2026-06-12T10-06-16,bot6,中证酒指数投资框架,399987.SZ,012043,完成,2025-01-02,2026-06-01,16.9,340/339,-4.9,-3.5,-9.7,-23.4,-17.2,18.6,,79.0,4,4,8,100.0,跑赢躺平(防御择时有效),优秀,"熊市减仓有效:躲掉约79%的跌幅(自己只亏-4.9%vs躺平-23.4%),回撤-9.7%,操作8笔——防御性择时是真本事",回撤超5%目标
+2026-06-12 10:06,dash-2026-06-12T10-06-36,bot2,800消费指数投资框架,000932.SH,012857,完成,2025-01-02,2026-06-01,16.9,340/339,-1.8,-1.3,-4.8,-13.4,-9.7,11.5,,86.0,5,5,10,100.0,跑赢躺平(防御择时有效),优秀,"熊市减仓有效:躲掉约86%的跌幅(自己只亏-1.8%vs躺平-13.4%),回撤-4.8%,操作10笔——防御性择时是真本事",
+2026-06-15 06:22,dash-2026-06-15T06-22-11,bot19,保险主题指数投资框架,399809.SZ,167301,完成,2025-01-02,2026-06-01,16.9,340/339,9.0,6.3,-18.1,3.1,2.2,5.9,293.0,,14,12,26,60.7,跑赢躺平(防御择时有效),良好,"平盘市场小幅取胜(自己9.0%vs躺平3.1%),回撤-18.1%,操作26笔",回撤超5%目标
+2026-06-18 01:29,dash-2026-06-18T01-29-31,bot7,中证医疗指数投资框架,399989.SZ,012323,完成,2025-01-02,2026-06-01,16.9,340/339,0.2,0.1,-7.1,-2.4,-1.7,2.5,,107.0,8,5,13,60.5,基本跟随/小幅落后,良好,"平盘市场小幅取胜(自己0.2%vs躺平-2.4%),回撤-7.1%,操作13笔",回撤超5%目标
+2026-06-10 03:19,dash-2026-06-10T03-19-36,bot11,纳斯达克100指数投资框架,NDX.GI,040046,完成,2025-01-02,2026-06-01,16.9,340/339,33.3,22.6,-20.0,34.0,23.0,-0.7,98.0,,4,2,6,9.1,基本跟随/小幅落后,良好,"牛市赚钱但偏胆小(捕获98%涨幅),且回撤-20.0%偏大,波动没压住",回撤超5%目标
+2026-06-15 06:28,dash-2026-06-15T06-28-28,bot17,中证银行指数投资框架,399986.SZ,001595,完成,2025-01-02,2026-06-01,16.9,340/339,6.8,4.7,-15.1,7.8,5.5,-1.1,86.0,,4,1,5,0.0,基本跟随/小幅落后,良好,"牛市赚钱但偏胆小(捕获86%涨幅),且回撤-15.1%偏大,波动没压住",回撤超5%目标
+2026-06-10 09:12,dash-2026-06-10T09-12-58,bot11,纳斯达克100指数投资框架,NDX.GI,040046,完成,2025-01-02,2026-06-01,16.9,340/339,31.8,21.7,-21.6,34.0,23.0,-2.1,94.0,,3,2,5,9.0,基本跟随/小幅落后,良好,"牛市赚钱但偏胆小(捕获94%涨幅),且回撤-21.6%偏大,波动没压住",回撤超5%目标
+2026-06-12 10:07,dash-2026-06-12T10-07-25,bot3,中证医疗指数投资框架,399989.SZ,012323,完成,2025-01-02,2026-06-01,16.9,340/339,-7.4,-5.3,-10.4,-2.4,-1.7,-5.0,,-210.0,10,10,20,100.0,基本跟随/小幅落后,差,"平盘市场反而亏钱:自己-7.4% vs 躺平-2.4%,回撤-10.4%,20笔操作没创造价值",回撤超5%目标
+2026-06-15 06:22,dash-2026-06-15T06-22-11,bot5,保险主题指数投资框架,399809.SZ,167301,完成,2025-01-02,2026-06-01,16.9,340/339,-3.3,-2.4,-21.9,3.1,2.2,-6.4,-109.0,,10,7,17,60.7,基本跟随/小幅落后,差,"平盘市场反而亏钱:自己-3.3% vs 躺平3.1%,回撤-21.9%,17笔操作没创造价值",回撤超5%目标
+2026-06-09 09:40,dash-2026-06-09T09-40-35,bot2,中证500指数投资框架,000905.SH,510560,完成,2026-01-05,2026-06-01,4.8,97/96,0.0,0.0,0.0,9.2,24.5,-9.2,0.0,,0,0,0,100.0,基本跟随/小幅落后,及格,"牛市严重踏空:只吃到指数涨幅的0%(自己0.0%vs躺平9.2%),太保守",
+2026-06-15 06:28,dash-2026-06-15T06-28-28,bot2,中证银行指数投资框架,399986.SZ,001595,完成,2025-01-02,2026-06-01,16.9,340/339,-2.1,-1.5,-13.0,7.8,5.5,-10.0,-27.0,,5,0,5,0.0,基本跟随/小幅落后,及格,"牛市严重踏空:只吃到指数涨幅的-27%(自己-2.1%vs躺平7.8%),太保守",回撤超5%目标
+2026-06-15 06:22,dash-2026-06-15T06-22-11,bot7,保险主题指数投资框架,399809.SZ,167301,完成,2025-01-02,2026-06-01,16.9,340/339,-9.2,-6.6,-13.2,3.1,2.2,-12.3,-300.0,,8,7,15,100.0,大幅跑输躺平(踏空/过早兑现),差,"平盘市场反而亏钱:自己-9.2% vs 躺平3.1%,回撤-13.2%,15笔操作没创造价值",回撤超5%目标
+2026-06-11 11:38,dash-2026-06-11T11-38-24,bot7,动漫游戏指数投资框架,930901.CSI,012769,完成,2025-01-02,2026-06-01,16.9,340/339,3.1,2.2,-13.3,18.4,12.8,-15.3,17.0,,7,6,13,63.0,大幅跑输躺平(踏空/过早兑现),及格,"牛市严重踏空:只吃到指数涨幅的17%(自己3.1%vs躺平18.4%),太保守",回撤超5%目标
+2026-06-11 08:24,dash-2026-06-11T08-24-26,bot1,人工智能指数投资框架,930713.CSI,012734,完成,2026-01-05,2026-06-01,4.8,97/96,4.2,10.8,-7.4,20.1,57.8,-15.9,21.0,,4,2,6,60.9,大幅跑输躺平(踏空/过早兑现),良好,"正收益、控回撤(-7.4%)、不追顶,但只捕获21%涨幅,挣钱偏保守",回撤超5%目标
+2026-06-09 11:16,dash-2026-06-09T11-16-56,bot7,沪深300指数投资框架,000300.SH,159338,完成,2025-01-02,2026-06-01,16.9,340/339,12.2,8.5,-3.3,38.2,25.8,-26.0,32.0,,9,8,17,59.0,大幅跑输躺平(踏空/过早兑现),良好,"正收益、控回撤(-3.3%)、不追顶,但只捕获32%涨幅,挣钱偏保守",
+2026-06-11 00:58,dash-2026-06-11T00-58-24,bot14,中证1000指数投资框架,000852.SH,006486,完成,2025-01-02,2026-06-01,16.9,340/339,13.7,9.6,-11.1,41.0,27.6,-27.2,34.0,,13,10,23,0.0,大幅跑输躺平(踏空/过早兑现),良好,"正收益、控回撤(-11.1%)、不追顶,但只捕获34%涨幅,挣钱偏保守",回撤超5%目标
+2026-06-09 11:16,dash-2026-06-09T11-16-27,bot11,纳斯达克100指数投资框架,NDX.GI,513100,完成,2025-01-02,2026-06-01,16.9,340/339,7.5,5.2,-10.6,37.2,25.2,-29.8,20.0,,7,4,11,32.4,大幅跑输躺平(踏空/过早兑现),良好,"正收益、控回撤(-10.6%)、不追顶,但只捕获20%涨幅,挣钱偏保守",回撤超5%目标
+2026-06-11 05:28,dash-2026-06-11T05-28-55,bot2,通信设备指数投资框架,931160.CSI,007818,完成,2026-01-05,2026-06-01,4.8,97/96,5.6,14.5,-2.8,43.7,146.0,-38.0,13.0,,2,1,3,59.2,大幅跑输躺平(踏空/过早兑现),及格,"牛市严重踏空:只吃到指数涨幅的13%(自己5.6%vs躺平43.7%),太保守",
+2026-06-12 08:11,dash-2026-06-12T08-11-18,bot19,云计算与大数据指数投资框架,930851.CSI,014130,完成,2025-01-02,2026-06-01,16.9,340/339,26.2,17.9,-14.4,65.1,42.7,-39.0,40.0,,16,12,28,60.0,大幅跑输躺平(踏空/过早兑现),良好,"牛市赚钱但偏胆小(捕获40%涨幅),且回撤-14.4%偏大,波动没压住",回撤超5%目标
+2026-06-11 11:40,dash-2026-06-11T11-40-33,bot6,云计算与大数据指数投资框架,930851.CSI,014130,完成,2025-01-02,2026-06-01,16.9,340/339,16.5,11.4,-6.4,65.1,42.7,-48.7,25.0,,10,7,17,59.4,大幅跑输躺平(踏空/过早兑现),良好,"正收益、控回撤(-6.4%)、不追顶,但只捕获25%涨幅,挣钱偏保守",回撤超5%目标
+2026-06-10 03:20,dash-2026-06-10T03-20-05,bot5,中证500指数投资框架,000905.SH,000962,完成,2025-01-02,2026-06-01,16.9,340/339,-3.7,-2.7,-6.2,50.3,33.5,-54.0,-7.0,,14,10,24,21.0,大幅跑输躺平(踏空/过早兑现),及格,"牛市严重踏空:只吃到指数涨幅的-7%(自己-3.7%vs躺平50.3%),太保守",回撤超5%目标
+2026-06-11 11:40,dash-2026-06-11T11-40-22,bot5,半导体产业指数投资框架,931865.CSI,020839,完成,2025-01-02,2026-06-01,16.9,340/339,67.8,44.4,-13.3,134.2,82.9,-66.4,51.0,,14,13,27,60.5,大幅跑输躺平(踏空/过早兑现),良好,"牛市赚钱但偏胆小(捕获51%涨幅),且回撤-13.3%偏大,波动没压住",回撤超5%目标
+2026-06-11 11:40,dash-2026-06-11T11-40-08,bot4,芯片指数投资框架（科创芯片主口径 + 国证芯片研究锚）,000685.SH,017470,完成,2025-01-02,2026-06-01,16.9,340/339,22.2,15.3,-8.4,126.6,78.7,-104.4,18.0,,12,12,24,39.2,大幅跑输躺平(踏空/过早兑现),及格,"牛市严重踏空:只吃到指数涨幅的18%(自己22.2%vs躺平126.6%),太保守",回撤超5%目标
+2026-06-11 06:03,dash-2026-06-11T06-03-53,bot3,通信技术主题指数投资框架,931144.CSI,008327,完成,2025-01-02,2026-06-01,16.9,340/339,126.5,78.6,-12.1,265.0,150.5,-138.5,48.0,,13,10,23,50.7,大幅跑输躺平(踏空/过早兑现),良好,"正收益、控回撤(-12.1%)、不追顶,但只捕获48%涨幅,挣钱偏保守",回撤超5%目标
+2026-06-15 06:27,dash-2026-06-15T06-27-57,bot5,证券公司指数投资框架,399975.SZ,008591,中断,2025-01-02,2025-12-17,11.5,233/339,-1.7,-1.8,-12.5,9.6,10.1,-11.3,-18.0,,34,26,60,0.0,大幅跑输躺平(踏空/过早兑现),,"中途中断(进度233/339),截至中断 收益-1.7% 回撤-12.5%,不计入完整评测",回撤超5%目标
+2026-06-15 06:27,dash-2026-06-15T06-27-57,bot18,证券公司指数投资框架,399975.SZ,008591,中断,2025-01-02,2025-12-17,11.5,233/339,-10.6,-11.1,-12.1,9.6,10.1,-20.2,-110.0,,35,30,65,80.2,大幅跑输躺平(踏空/过早兑现),,"中途中断(进度233/339),截至中断 收益-10.6% 回撤-12.1%,不计入完整评测",回撤超5%目标
+2026-06-11 07:41,dash-2026-06-11T07-41-49,bot1,人工智能指数投资框架,930713.CSI,012734,中断,2025-01-02,2025-09-22,8.6,177/339,3.3,4.6,-0.6,66.5,103.0,-63.2,5.0,,1,0,1,58.1,大幅跑输躺平(踏空/过早兑现),,"中途中断(进度177/339),截至中断 收益3.3% 回撤-0.6%,不计入完整评测",
+2026-06-09 06:20,dash-2026-06-09T06-20-25,bot2,中证500指数投资框架,000905.SH,000962,中断,2026-01-05,2026-05-06,4.0,78/96,,,,12.1,41.1,,,,0,0,0,,夭折/中断·无成交,,"夭折/中断,无成交记录",
+2026-06-11 05:46,dash-2026-06-11T05-46-27,bot3,通信技术主题指数投资框架,931144.CSI,008327,中断,2025-01-02,2025-01-02,,1/339,,,,0.0,,,,,0,0,0,,夭折/中断·无成交,,"夭折/中断,无成交记录",
+2026-06-11 06:02,dash-2026-06-11T06-02-14,bot3,通信技术主题指数投资框架,931144.CSI,008327,中断,2025-01-02,2025-01-02,,1/339,,,,0.0,,,,,0,0,0,,夭折/中断·无成交,,"夭折/中断,无成交记录",
+2026-06-11 11:37,dash-2026-06-11T11-37-45,bot4,芯片指数投资框架（科创芯片主口径 + 国证芯片研究锚）,000685.SH,017470,中断,2025-01-02,2025-01-02,,1/339,,,,0.0,,,,,0,0,0,,夭折/中断·无成交,,"夭折/中断,无成交记录",
+2026-06-11 11:37,dash-2026-06-11T11-37-58,bot5,半导体产业指数投资框架,931865.CSI,020839,中断,2025-01-02,2025-01-02,,1/339,,,,0.0,,,,,0,0,0,,夭折/中断·无成交,,"夭折/中断,无成交记录",
+2026-06-11 11:38,dash-2026-06-11T11-38-13,bot6,云计算与大数据指数投资框架,930851.CSI,014130,中断,2025-01-02,2025-01-02,,1/339,,,,0.0,,,,,0,0,0,,夭折/中断·无成交,,"夭折/中断,无成交记录",
+2026-06-12 10:07,dash-2026-06-12T10-07-10,bot1,生物医药指数投资框架,399441.SZ,011041,中断,2025-01-02,2025-01-02,,1/339,,,,0.0,,,,,0,0,0,,夭折/中断·无成交,,"夭折/中断,无成交记录",
+【整体汇总】,2026-06-09~2026-06-18 共34行(完成24/中断10/运行中0/暂停0),,,,,汇总,,,,,,,,,,,,,,,,,,良好(均线之上),"核心结论:作为【专业投资者】不合格(趋势里系统性负alpha,牛市平均只捕获33%涨幅);作为【优秀的普通投资者】良好、在散户均线之上——正收益不爆仓、回撤中位约10%、上涨不追顶、下跌能减仓(酒/消费躲掉79%/87%跌幅)、操作克制(17个月约20~28笔)。价值不在比基金多赚,而在让普通人少亏、拿得住、不上头。病根:牛市管不住手;最该改:风控按趋势状态分档,趋势确认时放松减仓阈值让利润奔跑。",
+</script>
+
+<script>
+const LS_KEY = 'run-eval-overrides-v1'   // { "<run_id>|<bot>": "pass"|"fail" }
+const COLS = ['启动时间','run_id','bot','策略','对标指数','可买基金','状态','窗口起','窗口止','回测月数','进度','绝对收益%','年化收益%','最大回撤%','被动满仓%','年化被动%','超额_择时%','上行捕获%','下行保护%','操作_买','操作_卖','操作合计','末日现金%','评价','普通投资者评级','综合点评','备注']
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+
+// ---- CSV 解析（处理双引号包裹的逗号字段）----
+function parseCSV(text){
+  const rows = []; let row = [], field = '', i = 0, inQ = false
+  while (i < text.length){
+    const c = text[i]
+    if (inQ){
+      if (c === '"'){ if (text[i+1] === '"'){ field += '"'; i += 2; continue } inQ = false; i++; continue }
+      field += c; i++; continue
+    }
+    if (c === '"'){ inQ = true; i++; continue }
+    if (c === ','){ row.push(field); field = ''; i++; continue }
+    if (c === '\n' || c === '\r'){
+      if (c === '\r' && text[i+1] === '\n') i++
+      row.push(field); rows.push(row); row = []; field = ''; i++; continue
+    }
+    field += c; i++
+  }
+  if (field.length || row.length){ row.push(field); rows.push(row) }
+  return rows
+}
+
+// ---- 加载 + 规整 ----
+function num(v){ const n = Number(String(v).trim()); return Number.isFinite(n) && String(v).trim() !== '' ? n : null }
+// 把「中证酒指数投资框架」→「中证酒」，给指数一个友好名
+function indexName(strat){ return String(strat || '').replace(/指数投资框架$/,'').replace(/投资框架$/,'').replace(/主题指数$/,'').trim() || '—' }
+// CSV 默认合格判定：普通投资者评级 优秀/良好/及格 = 合格；差 / 中断夭折(无评级) = 不合格
+function csvDefaultPass(r){ return ['优秀','良好','及格'].includes(String(r['普通投资者评级']).trim()) }
+const UNCLASSED = '未分类'
+function ixCode(c){ const s = String(c || '').trim(); return s || UNCLASSED }
+// ---- 权威 51 指数清单（用户口径，与 strategies/index-products/manifest.yaml 对齐）----
+// [展示名, 展示代码]，按用户给定顺序。缺方法论 / 暂无 run 的也占位显示（空）。
+const INDEX_MASTER = [
+  ['沪深300','000300'],['恒生科技指数','HSTECH'],['纳斯达克100','NDX100'],['中证500','000905'],
+  ['中证酒','399987'],['黄金9999','AU9999'],['创业板指','399006'],['证券公司','399975'],
+  ['科创50','000688'],['科创芯片','000685'],['中证A500','000510'],['电网设备主题','931994'],
+  ['通信技术','931144'],['国证芯片','980017'],['光伏产业','931151'],['CS人工智','930713'],
+  ['上证50','000016'],['红利低波','H30269'],['半导体材料设备','931743'],['中证红利','000922'],
+  ['北证50','899050'],['通信设备','931160'],['中证1000','000852'],['中国互联网50人民币','H30533'],
+  ['科创创业50','931643'],['CS新能车','399976'],['中证医疗','399989'],['机器人','H30590'],
+  ['标普500','SPX'],['标普中国A股大盘红利低波50指数','SPCLLHCP'],['创业板人工智能','970070'],['CS电池','931719'],
+  ['卫星通信','980018'],['中证军工','399967'],['生物医药','399441'],['细分化工','000813'],
+  ['工业有色','H11059'],['恒生指数','HSI'],['港股通创新药','987018'],['稀土产业','930598'],
+  ['中证银行','399986'],['SSH黄金股票','931238'],['自由现金流','980092'],['中证半导','931865'],
+  ['电力指数','H30199'],['云计算','930851'],['800消费','000932'],['CS稀金属','930632'],
+  ['动漫游戏','930901'],['保险主题','399809'],['绿色电力','931897'],
+]
+// run 的「对标指数」带交易所后缀（000300.SH / NDX.GI / HSI.HI / AU9999）。归一化到清单代码：
+// 去后缀 + 大写 + 少量基名不同的别名（如 NDX↔NDX100）。
+const IX_ALIAS = { 'NDX': 'NDX100' }
+function normCode(c){
+  let s = String(c || '').trim().toUpperCase()
+  if (!s) return UNCLASSED
+  s = s.split('.')[0]
+  return IX_ALIAS[s] || s
+}
+// 归一化键 -> { name, code, order }，供分组命名、排序、空位占位
+const MASTER_BY_KEY = new Map()
+INDEX_MASTER.forEach(([name, code], i) => MASTER_BY_KEY.set(normCode(code), { name, code, order: i }))
+// 实际投资标的（可买基金）→ 指数代码：按「实际买了什么标的」归类，覆盖 CSV 的策略口径「对标指数」。
+// 只需登记「基金所属指数 ≠ run 策略对标指数」的特例（其余基金与对标指数一致，自动走 对标指数）。
+// 与服务端 src/backtest-dashboard/fund-index-overrides.json 同源，手工保持一致。
+const FUND_IX = {
+  '159338': '000510.SH',  // 国泰中证A500ETF：bot7 沪深300 run 实际买的是 A500ETF → 按标的归 中证A500
+}
+// run_id（dash-<UTC时间戳>）→ 上海时区启动日期 YYYY-MM-DD；用于「6/5 之前默认不合格」判定
+const PASS_CUTOFF = '2026-06-05'
+function launchDate(runId){
+  const m = String(runId || '').match(/^dash-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const sh = new Date(Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`) + 8 * 3600 * 1000)
+  const p = n => String(n).padStart(2, '0')
+  return `${sh.getUTCFullYear()}-${p(sh.getUTCMonth() + 1)}-${p(sh.getUTCDate())}`
+}
+// 默认合格：6/5 之前的 run 一律默认不合格；之后的——CSV 已评级的按评级，未评级历史 run 默认合格
+function computeDefaultPass(r){
+  if (r._launch && r._launch < PASS_CUTOFF) return false
+  if (r._source === 'csv') return csvDefaultPass(r)
+  return true
+}
+
+const rawRows = parseCSV(document.getElementById('csvData').textContent.trim())
+const header = rawRows[0]
+const records = []
+for (let k = 1; k < rawRows.length; k++){
+  const arr = rawRows[k]
+  if (!arr || !arr.length) continue
+  const r = {}; COLS.forEach((c, idx) => r[c] = (arr[idx] ?? '').trim())
+  if (!r['run_id'] || !r['bot'] || r['启动时间'].startsWith('【')) continue  // 跳过汇总行/空行
+  r._source = 'csv'
+  r._key = `${r['run_id']}|${r['bot']}`
+  r._fund = r['可买基金']                                   // 实际可买/投资的标的基金
+  const ixSrc = FUND_IX[r._fund] || r['对标指数']           // 优先按「实际买的标的」归类
+  r._ixRaw = ixCode(ixSrc)                                  // 带后缀原始代码（图头展示用）
+  r._ix = normCode(ixSrc)                                   // 归一化分组键
+  { const m = MASTER_BY_KEY.get(r._ix)
+    r._ixName = m ? m.name : (r._ix === UNCLASSED ? UNCLASSED : indexName(r['策略']))
+    r._ixCode = m ? m.code : r._ixRaw }
+  r._launch = launchDate(r['run_id'])
+  // 卡玛比率 = 年化收益 / |最大回撤|（与 dashboard computeMetrics 同口径；收益为负时无经济含义→null）
+  { const ann = num(r['年化收益%']), dd = num(r['最大回撤%'])
+    r._calmar = (ann != null && ann > 0 && dd != null && dd < 0) ? ann / Math.abs(dd) : null }
+  r._defaultPass = computeDefaultPass(r)
+  records.push(r)
+}
+// 纳入所有历史 run（/api/backtest/all-runs）：CSV 没有的 run 以此补全，指数由「该 run 标的基金 →
+// 策略池反查」得到（拿不到则归「未分类」）。这些 run 无评级/无指标，默认合格按 6/5 日期规则判定。
+async function ingestHistory(){
+  let data
+  try { const r = await fetch('/api/backtest/all-runs', { cache: 'no-store' }); if (!r.ok) return; data = await r.json() }
+  catch { return }
+  const have = new Set(records.map(r => r._key))
+  let added = 0
+  for (const h of (data.runs || [])){
+    if (!String(h.runId).startsWith('dash-')) continue   // 只要真实回测 run，过滤 5d-step-test 等
+    const key = `${h.runId}|${h.botId}`
+    if (have.has(key)) continue                            // CSV 已有 → 以 CSV 为准
+    const ixSrc = FUND_IX[h.fund] || h.index               // 优先按「实际买的标的」归类
+    const r = {
+      _source: 'hist', _key: key, run_id: h.runId, bot: h.botId,
+      '对标指数': h.index || '', '策略': h.indexName || '', '可买基金': h.fund || '', '状态': '',
+      // 服务端 all-runs 已带基础业绩（与 bot 卡片同口径）：末日累计收益 / 区间最大回撤 / 252 年化。
+      '绝对收益%': h.absReturnPct ?? '', '年化收益%': h.annReturnPct ?? '', '最大回撤%': h.maxDrawdownPct ?? '',
+      _fund: h.fund || '', _ixRaw: ixCode(ixSrc), _ix: normCode(ixSrc), _calmar: null, _launch: launchDate(h.runId),
+    }
+    // 卡玛 = 年化/|最大回撤|（与上方 CSV 行 computeMetrics 同口径；收益非正→无经济含义→null）
+    { const ann = num(r['年化收益%']), dd = num(r['最大回撤%'])
+      r._calmar = (ann != null && ann > 0 && dd != null && dd < 0) ? ann / Math.abs(dd) : null }
+    { const m = MASTER_BY_KEY.get(r._ix)
+      r._ixName = m ? m.name : (r._ix === UNCLASSED ? UNCLASSED : indexName(h.indexName || ''))
+      r._ixCode = m ? m.code : r._ixRaw }
+    r._defaultPass = computeDefaultPass(r)
+    records.push(r); have.add(key); added++
+  }
+  if (added){ buildIndexSidebar(); render() }
+}
+
+// ---- 覆盖（用户手动标记）----
+let overrides = {}
+try { overrides = JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {} } catch { overrides = {} }
+function isPass(r){ const o = overrides[r._key]; return o ? o === 'pass' : r._defaultPass }
+function isEdited(r){ const o = overrides[r._key]; return o && (o === 'pass') !== r._defaultPass }
+function setMark(key, val){
+  const rec = records.find(r => r._key === key); if (!rec) return
+  if ((val === 'pass') === rec._defaultPass) delete overrides[key]   // 和默认一致 → 不存覆盖
+  else overrides[key] = val
+  localStorage.setItem(LS_KEY, JSON.stringify(overrides))
+}
+
+// ---- 筛选状态 ----
+const state = {
+  pass: 'all', q: '', status: '', sortKey: null, sortDir: -1,
+  indexSet: null,        // Set(对标指数代码) 勾选集合；null=全选（初始）
+  failOpen: new Set(),   // 展开了「不合格」折叠区的指数代码
+  groupSel: {}, groupShown: {},  // groupSel: 用户点选的 run; groupShown: 实际展示的 run（含回退）
+}
+const WORLD_BASE = '/world'   // 同源相对路径：经 :18888 代理；外部访问即 http://172.31.43.30:18888/world
+const botCache = new Map()    // `${run_id}|${bot}` -> /api/backtest/bot 响应（避免切换重复拉）
+
+// ---- 左侧指数筛选栏（多选，默认全选）----
+// 返回 [归一化键, 展示名, 展示代码]：先按权威清单顺序列全 51（含 0 run），再追加清单外但有 run 的指数（未分类置底）。
+function allIndexCodes(){
+  const out = [], seen = new Set()
+  for (const [name, code] of INDEX_MASTER){
+    const key = normCode(code); if (seen.has(key)) continue; seen.add(key)
+    out.push([key, name, code])
+  }
+  const extras = []
+  for (const r of records){ if (seen.has(r._ix)) continue; seen.add(r._ix); extras.push([r._ix, r._ixName, r._ixCode || r._ix]) }
+  extras.sort((a, b) => (a[0] === UNCLASSED ? 1 : 0) - (b[0] === UNCLASSED ? 1 : 0) || String(a[1]).localeCompare(String(b[1]), 'zh'))
+  return out.concat(extras)
+}
+function buildIndexSidebar(){
+  const items = allIndexCodes()
+  if (!state.indexSet){ state.indexSet = new Set(); state._knownIx = new Set() }
+  for (const [key] of items) if (!state._knownIx.has(key)){ state._knownIx.add(key); state.indexSet.add(key) }  // 新指数默认勾选
+  const box = document.getElementById('indexFilter'); if (!box) return
+  const counts = new Map()
+  for (const r of records) counts.set(r._ix, (counts.get(r._ix) || 0) + 1)
+  box.innerHTML = items.map(([key, name]) => {
+    const on = state.indexSet.has(key), c = counts.get(key) || 0
+    return `<label class="idx-item${on ? '' : ' off'}${c ? '' : ' idx-empty'}"><input type="checkbox" data-ix="${esc(key)}"${on ? ' checked' : ''}>`
+      + `<span class="idx-name">${esc(name)}</span><span class="idx-cnt">${c}</span></label>`
+  }).join('')
+}
+
+function applyFilters(){
+  return records.filter(r => {
+    if (state.pass === 'pass' && !isPass(r)) return false
+    if (state.pass === 'fail' && isPass(r)) return false
+    if (state.indexSet && !state.indexSet.has(r._ix)) return false
+    if (state.status && r['状态'] !== state.status) return false
+    if (state.q && !r['run_id'].toLowerCase().includes(state.q.toLowerCase())) return false
+    return true
+  })
+}
+
+const NUMCOL = { '绝对收益%':'绝对收益%','年化收益%':'年化收益%','最大回撤%':'最大回撤%','超额_择时%':'超额_择时%','操作合计':'操作合计','_calmar':'_calmar' }
+function cmp(a, b, key){
+  if (key === 'pass') return (isPass(a)?1:0) - (isPass(b)?1:0)
+  if (NUMCOL[key]){ const x = num(a[key]) ?? -1e9, y = num(b[key]) ?? -1e9; return x - y }
+  return String(a[key]).localeCompare(String(b[key]), 'zh')
+}
+
+function pctCell(v){
+  const n = num(v); if (n == null) return '<td class="flat">—</td>'
+  const cls = n > 0 ? 'gain' : n < 0 ? 'loss' : 'flat'
+  return `<td class="${cls}">${n>0?'+':''}${n.toFixed(1)}</td>`
+}
+function calmarCell(v){
+  if (v == null) return '<td class="flat">—</td>'
+  return `<td class="${v>=1?'gain':'loss'}">${v.toFixed(2)}</td>`
+}
+
+function renderSummary(){
+  const total = records.length
+  const pass = records.filter(isPass).length
+  const fail = total - pass
+  const coveredKeys = new Set(records.map(r => r._ix).filter(k => MASTER_BY_KEY.has(k)))
+  const masterTotal = INDEX_MASTER.length
+  const edited = records.filter(isEdited).length
+  document.getElementById('summary').innerHTML = [
+    `<div class="metric"><div class="k">Run 记录数</div><div class="v">${total}</div><div class="s">${new Set(records.map(r=>r['run_id'])).size} 个 run · ${new Set(records.map(r=>r['bot'])).size} 个 bot</div></div>`,
+    `<div class="metric"><div class="k">合格</div><div class="v" style="color:var(--pass)">${pass}</div><div class="s">${(total?pass/total*100:0).toFixed(0)}% 通过率</div></div>`,
+    `<div class="metric"><div class="k">不合格</div><div class="v" style="color:var(--fail)">${fail}</div><div class="s">含 差评 / 中断夭折</div></div>`,
+    `<div class="metric"><div class="k">覆盖指数</div><div class="v">${coveredKeys.size}<span style="font-size:14px;color:var(--dim)"> / ${masterTotal}</span></div><div class="s">${edited>0?`已手动改判 ${edited} 条 · <button class="reset-link" id="resetAll">全部复位</button>`:`权威清单共 ${masterTotal} 指数`}</div></div>`,
+  ].join('')
+  document.getElementById('heroBadges').innerHTML = [
+    `<span class="badge">共 <strong>${total}</strong> 条</span>`,
+    `<span class="badge pass">合格 <strong>${pass}</strong></span>`,
+    `<span class="badge fail">不合格 <strong>${fail}</strong></span>`,
+  ].join('')
+  const rb = document.getElementById('resetAll')
+  if (rb) rb.onclick = () => { overrides = {}; localStorage.removeItem(LS_KEY); render() }
+}
+
+function rowHtml(r, opts = {}){
+  const pass = isPass(r)
+  const edited = isEdited(r)
+  const rating = r['普通投资者评级'] || '—'
+  const statusCls = r['状态'] === '完成' ? 'done' : r['状态'] === '中断' ? 'broken' : ''
+  const mark = `<button class="mark-btn ${pass?'pass':'fail'}" data-key="${esc(r._key)}" title="点击切换 合格/不合格（仅本地保存）">${pass?'✓ 合格':'✕ 不合格'}</button>${edited?'<span class="mark-edited" title="已偏离 CSV 默认判定">●改</span>':''}`
+  const sel = r._key === state.groupShown[r._ix] ? ' selected' : ''
+  const cls = `${sel}${opts.failRow ? ' fail-row' : ''}`.trim()
+  return `<tr data-key="${esc(r._key)}" class="${cls}"${opts.hidden ? ' hidden' : ''} title="点击查看该 run 的净值图">
+    <td class="l">${mark}</td>
+    <td class="l"><span class="run-id">${esc(r['run_id'])}</span></td>
+    <td class="l"><span class="run-bot">${esc(r['bot'])}</span></td>
+    <td class="l"><span class="status-pill ${statusCls}">${esc(r['状态']||'—')}</span></td>
+    ${pctCell(r['绝对收益%'])}
+    ${pctCell(r['最大回撤%'])}
+    ${calmarCell(r._calmar)}
+    <td class="l"><span class="rating r${esc(rating)}">${esc(rating)}</span></td>
+  </tr>`
+}
+
+const TH = [
+  ['pass','合格','l'],['run_id','run_id','l'],['bot','bot','l'],['状态','状态','l'],
+  ['绝对收益%','收益%',''],['最大回撤%','回撤%',''],['_calmar','卡玛',''],['普通投资者评级','评级','l'],
+]
+// 合格行始终展示；不合格行默认折叠在一个可展开的提示行下面（每个指数独立记展开态）。
+function tableHtml(rows, ix){
+  const head = TH.map(([k,label,cls]) => {
+    const arrow = state.sortKey === k ? (state.sortDir > 0 ? ' ▲' : ' ▼') : ''
+    return `<th class="${cls}" data-sort="${k}">${label}${arrow}</th>`
+  }).join('')
+  const passR = rows.filter(isPass), failR = rows.filter(r => !isPass(r))
+  const open = state.failOpen.has(ix)
+  const body = passR.map(r => rowHtml(r)).join('')
+    + (failR.length
+        ? `<tr class="fail-toggle" data-failtoggle="${esc(ix)}"><td class="l" colspan="${TH.length}">${open ? '▾' : '▸'} ${failR.length} 个不合格 run（${open ? '点此折叠' : '已折叠，点此展开'}）</td></tr>`
+        : '')
+    + failR.map(r => rowHtml(r, { failRow: true, hidden: !open })).join('')
+  return `<div class="table-scroll"><table class="runs"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`
+}
+
+function render(){
+  renderSummary()
+  let rows = applyFilters()
+  if (state.sortKey) rows = rows.slice().sort((a,b)=>cmp(a,b,state.sortKey)*state.sortDir)
+
+  document.getElementById('filterCount').innerHTML = `命中 <strong>${rows.length}</strong> / ${records.length} 条`
+
+  const groups = document.getElementById('groups')
+
+  // 按归一化指数键分组
+  const byIx = new Map()
+  for (const r of rows){ if (!byIx.has(r._ix)) byIx.set(r._ix, []); byIx.get(r._ix).push(r) }
+  // 覆盖视图：无行级筛选（默认态）时，把权威清单里勾选但本次无 run 的指数也补成空位，呈现全貌。
+  const showEmpty = !state.q && state.pass === 'all' && !state.status
+  if (showEmpty){
+    for (const [, code] of INDEX_MASTER){
+      const key = normCode(code)
+      if (state.indexSet && !state.indexSet.has(key)) continue
+      if (!byIx.has(key)) byIx.set(key, [])
+    }
+  }
+  if (!byIx.size){ groups.innerHTML = '<div class="empty">没有符合筛选条件的 run</div>'; return }
+
+  // 排序：权威清单顺序优先（order 升序），清单外（未分类等）按 run 数降序置后
+  const order = [...byIx.keys()].sort((a, b) => {
+    const oa = MASTER_BY_KEY.has(a) ? MASTER_BY_KEY.get(a).order : 1e9
+    const ob = MASTER_BY_KEY.has(b) ? MASTER_BY_KEY.get(b).order : 1e9
+    if (oa !== ob) return oa - ob
+    return (byIx.get(b).length - byIx.get(a).length) || a.localeCompare(b)
+  })
+
+  // 每个指数一个区块：左=精简表格，右=该指数代表 run 的净值图（默认该组卡玛最高的完成 run）。
+  groups.innerHTML = order.map(ix => {
+    const grp = byIx.get(ix)
+    const m = MASTER_BY_KEY.get(ix)
+    const name = grp.length ? grp[0]._ixName : (m ? m.name : ix)
+    const code = grp.length ? (grp[0]._ixCode || ix) : (m ? m.code : ix)
+    const p = grp.filter(isPass).length, f = grp.length - p
+    const stat = grp.length
+      ? `${grp.length} 条 · <span class="p">合格 ${p}</span> / <span class="f">不合格 ${f}</span>`
+      : `<span style="color:var(--dim)">暂无 run</span>`
+    return `<div class="index-block${grp.length ? '' : ' index-block-empty'}">
+      <div class="ix-left">
+        <div class="index-head"><span class="ix-name">${esc(name)}</span><span class="ix-code">${esc(code)}</span>
+          <span class="ix-stat">${stat}</span></div>
+        ${grp.length ? tableHtml(grp, ix) : '<div class="empty" style="padding:16px;text-align:left">暂无回测 run（清单占位）</div>'}
+      </div>
+      <div class="ix-right"><div class="chart-panel" data-ix="${esc(ix)}"><div class="empty">${grp.length ? '加载净值图…' : '该指数暂无 run'}</div></div></div>
+    </div>`
+  }).join('')
+  // 填充每个指数区块的图：用户在本组点过的 run 优先，否则组内默认；拉不到则回退本组其它 run。
+  order.forEach(ix => {
+    const grp = byIx.get(ix)
+    if (!grp.length) return   // 空占位不拉图
+    const panel = [...groups.querySelectorAll('.chart-panel')].find(el => el.dataset.ix === ix)
+    void renderGroupChart(panel, grp, ix)
+  })
+  syncBlockHeights()
+}
+
+// 左侧表格：事件委托（容器常驻，render 只换内部 HTML）。标记按钮 / 排序表头 / 选中某行 → 切本组图。
+document.getElementById('groups').addEventListener('click', e => {
+  const mb = e.target.closest('.mark-btn')
+  if (mb){ const rec = records.find(r => r._key === mb.dataset.key); setMark(mb.dataset.key, isPass(rec) ? 'fail' : 'pass'); render(); return }
+  const th = e.target.closest('th[data-sort]')
+  if (th){ const k = th.dataset.sort
+    if (state.sortKey === k) state.sortDir *= -1
+    else { state.sortKey = k; state.sortDir = (k === 'pass' || k === '_calmar' || /%/.test(k)) ? -1 : 1 }
+    render(); return }
+  const ft = e.target.closest('.fail-toggle[data-failtoggle]')
+  if (ft){ const ix = ft.dataset.failtoggle; if (state.failOpen.has(ix)) state.failOpen.delete(ix); else state.failOpen.add(ix); render(); return }
+  const tr = e.target.closest('tr[data-key]')
+  if (tr){ const rec = records.find(r => r._key === tr.dataset.key); if (rec){ state.groupSel[rec._ix] = rec._key; render() } return }
+})
+// 组内候选 run 排序：完成且卡玛最高 → 其它有卡玛的 → 无卡玛按回测最长。去重保序。
+// 默认展示走这个顺序的第一个能拉到数据的 run（有些 CSV 里的 run 已不在 fund.db，需跳过）。
+function groupCandidates(grpAll){
+  const grp = grpAll.filter(isPass)   // 不合格 run 不进图表展示/排序队列
+  const withCal = grp.filter(r => r._calmar != null)
+  const completed = withCal.filter(r => r['状态'] === '完成').sort((a, b) => b._calmar - a._calmar)
+  const otherCal = withCal.filter(r => r['状态'] !== '完成').sort((a, b) => b._calmar - a._calmar)
+  const noCal = grp.filter(r => r._calmar == null).sort((a, b) => (num(b['回测月数']) || 0) - (num(a['回测月数']) || 0))
+  const seen = new Set(), out = []
+  for (const r of [...completed, ...otherCal, ...noCal]){ if (seen.has(r._key)) continue; seen.add(r._key); out.push(r) }
+  return out
+}
+async function fetchBot(rec){
+  if (botCache.has(rec._key)) return botCache.get(rec._key)
+  let bot = null
+  try {
+    const r = await fetch(`/api/backtest/bot?bot_id=${encodeURIComponent(rec['bot'])}&run_id=${encodeURIComponent(rec['run_id'])}`, { cache: 'no-store' })
+    if (r.ok) bot = await r.json()
+  } catch { /* 失败回退/提示 */ }
+  botCache.set(rec._key, bot)   // 缓存结果（含 null，避免反复重拉打不到的 run）
+  return bot
+}
+function highlightBlockRow(panel, ix){
+  const block = panel.closest('.index-block'); if (!block) return
+  const key = state.groupShown[ix]
+  block.querySelectorAll('tr[data-key]').forEach(tr => tr.classList.toggle('selected', tr.dataset.key === key))
+}
+// 渲染某指数区块的图。userKey 指定时只认那一条（用户点选，拉不到就显错）；否则按候选顺序
+// 逐个尝试，第一个能拉到净值的就展示——保证每个指数尽量都有图。
+async function renderGroupChart(panel, grp, ix){
+  if (!panel) return
+  const userKey = state.groupSel[ix]
+  const cands = userKey ? grp.filter(r => r._key === userKey) : groupCandidates(grp)
+  if (!cands.length){ panel.innerHTML = '<div class="empty">本组暂无合格 run 可画图（不合格 run 不进图表队列）</div>'; syncBlockHeights(); return }
+  const token = panel.dataset.token = String((Number(panel.dataset.token) || 0) + 1)
+  panel.innerHTML = chartHead(cands[0], null, '<div class="empty">加载净值数据…</div>')
+  for (const rec of cands){
+    const bot = await fetchBot(rec)
+    if (panel.dataset.token !== token) return   // 期间又触发了 render
+    if (bot && (bot.series || []).length >= 2){
+      state.groupShown[ix] = rec._key; highlightBlockRow(panel, ix)
+      panel.innerHTML = chartHead(rec, bot, renderChartSvg(bot)); syncBlockHeights(); return
+    }
+  }
+  state.groupShown[ix] = cands[0]._key; highlightBlockRow(panel, ix)
+  panel.innerHTML = chartHead(cands[0], null, '<div class="empty">该指数的 run 在 fund.db 中暂无可画的净值数据（已隐藏/重建/无成交）</div>')
+  syncBlockHeights()
+}
+// 让每个指数区块的左侧表格高度对齐右侧净值图：超出右图高度的行进入纵向滚动（窄屏单列时不限高）。
+function syncBlockHeights(){
+  const stacked = window.matchMedia('(max-width:1180px)').matches
+  document.querySelectorAll('.index-block').forEach(block => {
+    const scroll = block.querySelector('.ix-left .table-scroll')
+    if (!scroll) return
+    if (stacked){ scroll.style.maxHeight = ''; return }
+    const right = block.querySelector('.ix-right')
+    const head = block.querySelector('.ix-left .index-head')
+    const rightH = right ? right.offsetHeight : 0
+    if (!rightH){ scroll.style.maxHeight = ''; return }
+    const headH = head ? head.offsetHeight : 0
+    scroll.style.maxHeight = Math.max(160, rightH - headH - 8) + 'px'  // 8 = index-head 下边距
+  })
+}
+window.addEventListener('resize', syncBlockHeights)
+
+// ---- 右侧净值图：模仿 dashboard（净值线 + 基准线 + 买卖点），数据来自 /api/backtest/bot ----
+function fmtNav(v){ return v == null ? '--' : Number(v).toFixed(4) }
+function chartLine(points, dToI, axisLen, yMin, yMax, W, H, pad){
+  const innerW = W - pad.l - pad.r, innerH = H - pad.t - pad.b, span = Math.max(yMax - yMin, 1e-4)
+  const xs = [], ys = []
+  for (const p of points){
+    const idx = dToI.get(p.trade_date); if (idx == null) continue
+    const x = pad.l + (axisLen <= 1 ? innerW / 2 : innerW * (idx / (axisLen - 1)))
+    const y = H - pad.b - innerH * ((Number(p.net_value || 1) - yMin) / span)
+    xs.push(x); ys.push(y)
+  }
+  const d = xs.map((x, i) => `${i ? 'L' : 'M'} ${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' ')
+  const area = xs.length ? `${d} L ${xs[xs.length - 1].toFixed(1)} ${H - pad.b} L ${xs[0].toFixed(1)} ${H - pad.b} Z` : ''
+  return { d, area, xs, ys }
+}
+function renderChartSvg(bot){
+  const W = 496, H = 300, pad = { l: 44, r: 12, t: 14, b: 30 }
+  const series = bot.series || []
+  if (series.length < 2) return '<div class="empty">该 run 无净值序列数据</div>'
+  const bench = bot.benchmark, bSeries = (bench && bench.series) || []
+  const dateSet = new Set(series.map(p => p.trade_date)); for (const p of bSeries) dateSet.add(p.trade_date)
+  const xAxis = [...dateSet].sort(); const dToI = new Map(xAxis.map((d, i) => [d, i]))
+  const vals = [...series.map(p => Number(p.net_value || 1)), ...bSeries.map(p => Number(p.net_value || 1)), 1]
+  const yMin = Math.min(...vals), yMax = Math.max(...vals)
+  const botC = chartLine(series, dToI, xAxis.length, yMin, yMax, W, H, pad)
+  const benchC = bSeries.length ? chartLine(bSeries, dToI, xAxis.length, yMin, yMax, W, H, pad) : null
+  // 买卖点：同日同方向合并成一个标记，锚在 bot 当日净值点上
+  const innerW = W - pad.l - pad.r
+  const seriesIdxByDate = new Map(series.map((p, i) => [p.trade_date, i]))
+  const firstAxisIdx = dToI.get(series[0].trade_date)
+  const groups = new Map()
+  for (const a of (bot.actions || [])){
+    if (a.side !== 'buy' && a.side !== 'sell') continue
+    const key = `${a.action_date}|${a.side}`; let g = groups.get(key)
+    if (!g){
+      let x, y; const si = seriesIdxByDate.get(a.action_date)
+      if (si != null){ x = botC.xs[si]; y = botC.ys[si] }
+      else { const ai = dToI.get(a.action_date); if (ai == null) continue
+        x = pad.l + (xAxis.length <= 1 ? innerW / 2 : innerW * (ai / (xAxis.length - 1)))
+        y = botC.ys[(firstAxisIdx != null && ai < firstAxisIdx) ? 0 : series.length - 1] }
+      g = { date: a.action_date, side: a.side, x, y, count: 0, amount: 0, funds: [] }; groups.set(key, g)
+    }
+    g.count++; g.amount += Number(a.amount || 0)
+    if (a.fund_name && !g.funds.includes(a.fund_name)) g.funds.push(a.fund_name)
+  }
+  const sidesByDate = new Map()
+  for (const g of groups.values()){ if (!sidesByDate.has(g.date)) sidesByDate.set(g.date, new Set()); sidesByDate.get(g.date).add(g.side) }
+  const ticks = 4
+  const yt = Array.from({ length: ticks }, (_, i) => yMin + (yMax - yMin) * (i / (ticks - 1)))
+  const xl = series.filter((_, i) => i === 0 || i === series.length - 1 || i % Math.ceil(series.length / 4) === 0)
+  const fmtMoney = v => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Number(v || 0))
+  const legend = `<div class="cp-legend"><span class="cp-lg"><span class="cp-sw" style="background:var(--accent)"></span>${esc(bot.botId)} 净值</span>`
+    + (bench ? `<span class="cp-lg"><span class="cp-sw" style="background:var(--accent2)"></span>基准 ${esc(bench.fundName || bench.fundCode || '')}</span>` : '')
+    + `<span class="cp-lg"><span style="color:var(--gain)">▲ 买</span> <span style="color:var(--loss)">▼ 卖</span></span></div>`
+  const svg = `<svg class="cp-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`
+    + `<defs><linearGradient id="cpGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="rgba(102,217,232,.26)"/><stop offset="100%" stop-color="rgba(102,217,232,.02)"/></linearGradient></defs>`
+    + yt.map(v => { const y = H - pad.b - (H - pad.t - pad.b) * ((v - yMin) / Math.max(yMax - yMin, 1e-4))
+        return `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" class="cp-grid"></line><text x="6" y="${(y + 3).toFixed(1)}" class="cp-axis">${fmtNav(v)}</text>` }).join('')
+    + `<path d="${botC.area}" fill="url(#cpGrad)"></path>`
+    + `<path d="${botC.d}" class="cp-line"></path>`
+    + (benchC ? `<path d="${benchC.d}" class="cp-bench"></path>` : '')
+    + [...groups.values()].map(m => {
+        const both = (sidesByDate.get(m.date)?.size || 0) > 1
+        const cy = both ? (m.side === 'sell' ? m.y - 6 : m.y + 6) : m.y
+        const cls = m.side === 'sell' ? 'cp-mk-sell' : 'cp-mk-buy'
+        const label = m.side === 'sell' ? '卖' : '买'
+        const ly = m.side === 'sell' ? cy - 9 : cy + 14
+        const ct = m.count > 1 ? ` ${m.count}笔` : ''
+        const title = `${m.date} ${m.side === 'sell' ? '卖出' : '买入'}${ct} ¥${fmtMoney(m.amount)}${m.funds.length ? ' ' + m.funds.join('、') : ''}`
+        return `<g><circle cx="${m.x.toFixed(1)}" cy="${cy.toFixed(1)}" r="4.5" class="${cls}"></circle><text x="${m.x.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" class="cp-mk-txt">${label}</text><title>${esc(title)}</title></g>`
+      }).join('')
+    + xl.map(p => { const idx = dToI.get(p.trade_date); if (idx == null) return ''
+        const x = pad.l + (xAxis.length <= 1 ? innerW / 2 : innerW * (idx / (xAxis.length - 1)))
+        return `<text x="${x.toFixed(1)}" y="${H - 10}" text-anchor="middle" class="cp-axis">${esc(p.trade_date)}</text>` }).join('')
+    + `</svg>`
+  return legend + svg
+}
+// 从任意日度净值序列算风险调整指标：夏普（rf=0，年化×√252）+ 年化波动 + 年化收益 + 最大回撤 + 卡玛（带符号）
+function navStats(points){
+  const s = (points || []).filter(p => p && p.net_value != null)
+  if (s.length < 3) return null
+  const nv = s.map(p => Number(p.net_value) || 1)
+  const rets = []
+  for (let i = 1; i < nv.length; i++){ if (nv[i-1] > 0) rets.push(nv[i] / nv[i-1] - 1) }
+  if (rets.length < 2) return null
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length
+  const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1)
+  const sd = Math.sqrt(variance)
+  const Y = 252
+  const sharpe = sd > 0 ? mean / sd * Math.sqrt(Y) : null
+  const annVol = sd * Math.sqrt(Y) * 100
+  const annRet = (Math.pow(nv[nv.length-1] / nv[0], Y / rets.length) - 1) * 100
+  let peak = nv[0], mdd = 0
+  for (const v of nv){ if (v > peak) peak = v; const dd = v / peak - 1; if (dd < mdd) mdd = dd }
+  const maxDD = mdd * 100
+  const calmar = maxDD < 0 ? annRet / Math.abs(maxDD) : null   // 带符号，便于与基准相减
+  return { sharpe, annVol, annRet, maxDD, calmar }
+}
+// 图下方两排：① 绝对（夏普/卡玛/年化波动/年化收益）② 相对躺平（相对卡玛/相对夏普/相对回撤，= bot − 被动满仓基准）
+function statsHtml(rec, bot){
+  const bs = navStats(bot.series)                                   // bot 自身
+  const ms = bot.benchmark ? navStats(bot.benchmark.series) : null  // 躺平 = 被动满仓基准
+  const sharpe = bs ? bs.sharpe : null
+  const annVol = bs ? bs.annVol : null
+  const annRet = num(rec['年化收益%']) ?? (bs ? bs.annRet : null)
+  const calmar = rec._calmar ?? (bs && bs.calmar != null && bs.calmar > 0 ? bs.calmar : null)
+  // 相对指标：仅在 bot 与基准两侧都可算时给值，否则 —
+  const relSharpe = (bs && ms && bs.sharpe != null && ms.sharpe != null) ? bs.sharpe - ms.sharpe : null
+  const relCalmar = (bs && ms && bs.calmar != null && ms.calmar != null) ? bs.calmar - ms.calmar : null
+  const botDD = bs ? bs.maxDD : num(rec['最大回撤%'])
+  const relDD = (botDD != null && ms && ms.maxDD != null) ? botDD - ms.maxDD : null   // 正=回撤比躺平浅（好）
+  const sp = (n, d = 1) => n == null ? '—' : `${n > 0 ? '+' : ''}${n.toFixed(d)}%`
+  const sg = (n, d = 2) => n == null ? '—' : `${n > 0 ? '+' : ''}${n.toFixed(d)}`
+  const col = n => n == null ? 'flat' : n > 0 ? 'gain' : n < 0 ? 'loss' : 'flat'
+  const tile = (k, v, cls = 'flat', title = '') => `<div class="cp-stat"${title ? ` title="${esc(title)}"` : ''}><div class="cp-stat-k">${k}</div><div class="cp-stat-v ${cls}">${v}</div></div>`
+  const REL = '相对「躺平」(被动满仓基准)：bot − 基准，正=优于躺平'
+  return `<div class="cp-stats">`
+    + tile('夏普', sharpe == null ? '—' : sharpe.toFixed(2), sharpe == null ? 'flat' : sharpe >= 1 ? 'gain' : sharpe < 0 ? 'loss' : 'flat')
+    + tile('卡玛', calmar == null ? '—' : calmar.toFixed(2), calmar == null ? 'flat' : calmar >= 1 ? 'gain' : 'flat')
+    + tile('年化波动', annVol == null ? '—' : annVol.toFixed(1) + '%', 'flat')
+    + tile('年化收益', sp(annRet), col(annRet))
+    + tile('相对卡玛', sg(relCalmar), col(relCalmar), REL)
+    + tile('相对夏普', sg(relSharpe), col(relSharpe), REL)
+    + tile('相对回撤', relDD == null ? '—' : `${relDD > 0 ? '+' : ''}${relDD.toFixed(1)}pp`, col(relDD), REL + '（正=你回撤更浅）')
+    + `</div>`
+}
+function chartHead(rec, bot, bodyHtml){
+  const worldUrl = `${WORLD_BASE}?run=${encodeURIComponent(rec['run_id'])}&bot=${encodeURIComponent(rec['bot'])}`
+  let pills = ''
+  if (bot){
+    const cr = Number(bot.cumulativeReturnPct), dd = Number(bot.maxDrawdownPct)
+    const crC = cr > 0 ? 'var(--gain)' : cr < 0 ? 'var(--loss)' : 'inherit'
+    const pass = isPass(rec)
+    pills = `<div class="cp-pills">`
+      + `<span class="cp-pill">累计收益 <strong style="color:${crC}">${cr>0?'+':''}${cr.toFixed(1)}%</strong></span>`
+      + `<span class="cp-pill">最大回撤 <strong style="color:var(--loss)">${dd.toFixed(1)}%</strong></span>`
+      + `<span class="cp-pill">卡玛 <strong>${rec._calmar==null?'—':rec._calmar.toFixed(2)}</strong></span>`
+      + `<span class="cp-pill">买 ${bot.buyCount ?? '?'} · 卖 ${bot.sellCount ?? '?'}</span>`
+      + `<span class="cp-pill ${pass?'pass':'fail'}">${pass?'✓ 合格':'✕ 不合格'}</span>`
+      + `</div>`
+  }
+  return `<div class="cp-head"><div class="cp-title">${esc(rec['bot'])} · ${esc(rec._ixName)}</div>`
+    + `<div class="cp-sub">${esc(rec['对标指数'])} · <span class="run-id">${esc(rec['run_id'])}</span></div>`
+    + `<a class="world-link" href="${esc(worldUrl)}" target="_blank" rel="noopener" title="在 world 页面打开此 run（新标签）">在 /world 打开此 run →</a></div>`
+    + pills + bodyHtml + (bot ? statsHtml(rec, bot) : '')
+}
+// ---- 控件事件 ----
+document.getElementById('passSeg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-pass]'); if (!b) return
+  state.pass = b.dataset.pass
+  document.querySelectorAll('#passSeg button').forEach(x => x.classList.toggle('active', x === b))
+  render()
+})
+document.getElementById('statusSel').addEventListener('change', e => { state.status = e.target.value; render() })
+document.getElementById('runSearch').addEventListener('input', e => { state.q = e.target.value; render() })
+document.getElementById('clearBtn').addEventListener('click', () => {
+  state.pass = 'all'; state.q = ''; state.status = ''
+  state.indexSet = new Set(state._knownIx)  // 指数恢复全选
+  document.querySelectorAll('#passSeg button').forEach(x => x.classList.toggle('active', x.dataset.pass === 'all'))
+  document.getElementById('statusSel').value = ''
+  document.getElementById('runSearch').value = ''
+  buildIndexSidebar(); render()
+})
+// 左侧指数多选筛选栏：勾选框 + 全选/全不选
+document.getElementById('indexFilter').addEventListener('change', e => {
+  const cb = e.target.closest('input[type=checkbox][data-ix]'); if (!cb) return
+  const ix = cb.dataset.ix
+  if (cb.checked) state.indexSet.add(ix); else state.indexSet.delete(ix)
+  buildIndexSidebar(); render()
+})
+document.getElementById('idxAll').addEventListener('click', () => { state.indexSet = new Set(state._knownIx); buildIndexSidebar(); render() })
+document.getElementById('idxNone').addEventListener('click', () => { state.indexSet = new Set(); buildIndexSidebar(); render() })
+
+buildIndexSidebar()
+render()                 // 先用 CSV 的 run 渲染（每个指数区块默认展示该组卡玛最高的合格 run 的净值图）
+void ingestHistory()     // 再异步纳入所有历史 run（指数由标的基金反查），完成后重渲染
+</script>
+</body>
+</html>
