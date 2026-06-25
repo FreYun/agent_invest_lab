@@ -84,6 +84,7 @@ summary() {
   echo "===== OOS bot101 daily health summary ====="
   echo "finished_at: $(date '+%F %T %z')"
   echo "status: $status"
+  echo "prepass_market_reports_rc: ${prepass_rc:-NA}"
   echo "report_date: $TRADE_DATE"
   echo "bot_id: bot101"
   echo "live_run_id: $RUN_ID"
@@ -112,7 +113,14 @@ trap 'summary "$status"' EXIT
 ensure_oos_tables
 
 echo "[$(date '+%F %T')] OOS bot101 daily start date=$TRADE_DATE live_run_id=$RUN_ID log=$LOG_FILE"
-RUN_ID="market-reports-daily-${TRADE_DATE}" "$ROOT_DIR/scripts/run-oos-market-reports-daily.sh" "$TRADE_DATE"
+# prepass(市场研报) 非致命：某份研报上游(LLM/数据)瞬时抖动失败时，只告警不 abort。
+# 研报有午夜批预生成兜底在库，且 bot 走 get_market_report 的 PIT 提取（取 as_of<=世界日的最新一期），
+# 缺当日某份最多回退到前一日；bot 的「当日决策」才是难复算的核心产物，绝不能被一份研报连坐掐掉。
+prepass_rc=0
+RUN_ID="market-reports-daily-${TRADE_DATE}" "$ROOT_DIR/scripts/run-oos-market-reports-daily.sh" "$TRADE_DATE" || prepass_rc=$?
+if [[ "$prepass_rc" != "0" ]]; then
+  echo "[$(date '+%F %T')] WARN: prepass(market-reports) rc=$prepass_rc —— 某份研报可能缺/未更新；继续跑 bot 决策（bot 走 PIT 读 DB，午夜批兜底）" >&2
+fi
 
 # 判"bot 当天是否真决策过"用 driver 跑痕迹（runtime/runs/<run>/<date> 目录），而不是
 # fund_bot_daily_snapshots 有没有快照——nav-sync 会给未决策日造 mark-to-market 快照，
