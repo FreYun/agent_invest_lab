@@ -12,6 +12,18 @@ SQLITE3_BIN="${SQLITE3:-sqlite3}"
 OOS_TABLES_SQL="${OOS_TABLES_SQL:-$ROOT_DIR/scripts/sql/oos_bot101_daily.sql}"
 REQUIRE_PREV_TRADING="${REQUIRE_PREV_TRADING:-1}"
 REQUIRE_TARGET_TRADING="${REQUIRE_TARGET_TRADING:-1}"
+# 护栏：驱动单次 wall-clock 上限(超时强杀，防 node 收尾偶发卡死)；flock 被占超过 MAX_LOCK_AGE 秒
+# 视为卡死 run（正常 run ~7-15min），连根杀掉抢占——避免一个僵尸 run 无声饿死之后每天的 run。
+MAX_DRIVER_SECONDS="${MAX_DRIVER_SECONDS:-1200}"
+MAX_LOCK_AGE="${MAX_LOCK_AGE:-3600}"
+
+# SIGKILL 一个进程及其全部后代。卡死 run 的 node 子进程会继承 flock 的 fd 9，只杀父 bash
+# 不够（node 仍持锁），必须连根杀才能真正释放锁。
+kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do kill_tree "$child"; done
+  kill -9 "$pid" 2>/dev/null || true
+}
 
 today_date() {
   date '+%F'
@@ -64,9 +76,27 @@ LOG_FILE="${LOG_FILE:-$LOG_DIR/oos-bot101-daily-${TRADE_DATE}.log}"
 
 exec 9>"$LOCK"
 if ! flock -n 9; then
-  echo "[$(date '+%F %T')] previous oos bot101 daily run is still active; skip" >&2
-  exit 0
+  # 锁被占。读 holder 边车(PID + 起始 epoch)判定是否陈旧——注意不能用 $LOCK 的 mtime，
+  # 因为每次 skip 的 attempt 也会 exec 9>"$LOCK" 截断刷新 mtime（这正是上次死锁时 lock 文件
+  # mtime 显示当天而非真实 holder 起始时间的原因）。只有真正拿到锁的 holder 才写边车。
+  holder_pid=""; holder_start=0
+  read -r holder_pid holder_start < "${LOCK}.holder" 2>/dev/null || { holder_pid=""; holder_start=0; }
+  lock_age=$(( $(date +%s) - ${holder_start:-0} ))
+  if [[ "$lock_age" -gt "$MAX_LOCK_AGE" && -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
+    echo "[$(date '+%F %T')] WARN: 锁被 PID $holder_pid 持有 ${lock_age}s (>${MAX_LOCK_AGE}s 阈值)，判定卡死 run，连根 SIGKILL 抢占" >&2
+    kill_tree "$holder_pid"
+    sleep 3
+    if ! flock -n 9; then
+      echo "[$(date '+%F %T')] 抢占后仍拿不到锁；放弃本次" >&2
+      exit 0
+    fi
+  else
+    echo "[$(date '+%F %T')] previous oos bot101 daily run is still active (age=${lock_age}s holder=${holder_pid:-?}); skip" >&2
+    exit 0
+  fi
 fi
+# 记录本次持有者(PID 起始epoch)，供下次陈旧判定/抢占。
+printf '%s %s\n' "$$" "$(date +%s)" > "${LOCK}.holder"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
 
@@ -133,14 +163,23 @@ if [[ "${FORCE_BOT:-0}" != "1" ]] && [[ -d "$WORLD_DIR/runtime/runs/$RUN_ID/$TRA
   exit 0
 fi
 
+# wall-clock 护栏：driver 收尾偶发卡死(node 进程跑完决策却不退出)。timeout 到点先 TERM 再 KILL，
+# 保证脚本一定能继续往下 mirror 并退出释放锁，不再让卡死 run 饿死后续每天的 run。
+driver_rc=0
 (
   cd "$WORLD_DIR"
-  OOS_BOT101_RUN_ID="$RUN_ID" TRADE_DATE="$TRADE_DATE" node --experimental-strip-types src/oos-daily-driver.ts \
+  OOS_BOT101_RUN_ID="$RUN_ID" TRADE_DATE="$TRADE_DATE" timeout --kill-after=60s "${MAX_DRIVER_SECONDS}s" \
+    node --experimental-strip-types src/oos-daily-driver.ts \
     --date "$TRADE_DATE" \
     --run-id "$RUN_ID" \
     --config config/world-multi-fund-backtest.yaml \
     --world-dir runtime
-)
+) || driver_rc=$?
+if [[ "$driver_rc" == "124" || "$driver_rc" == "137" ]]; then
+  echo "[$(date '+%F %T')] WARN: oos-daily-driver 超 ${MAX_DRIVER_SECONDS}s 被强杀(rc=$driver_rc)；bot 决策可能已完成只是进程没退出，继续 mirror 并干净退出" >&2
+elif [[ "$driver_rc" != "0" ]]; then
+  echo "[$(date '+%F %T')] WARN: oos-daily-driver 失败 rc=$driver_rc；继续 mirror 并干净退出(释放锁)" >&2
+fi
 mirror_oos_results
-status=ok
-echo "[$(date '+%F %T')] OOS bot101 daily done date=$TRADE_DATE live_run_id=$RUN_ID"
+if [[ "$driver_rc" == "0" ]]; then status=ok; else status="driver_rc_${driver_rc}"; fi
+echo "[$(date '+%F %T')] OOS bot101 daily done date=$TRADE_DATE live_run_id=$RUN_ID driver_rc=$driver_rc"
