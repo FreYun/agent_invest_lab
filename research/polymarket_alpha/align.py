@@ -1,5 +1,5 @@
 import sqlite3, pandas as pd
-POLY_DB = "/home/sage/database/polymarket.db"
+POLY_DB = "/home/rooot/database/polymarket.db"
 
 def load_signal(factor: str) -> pd.Series:
     con = sqlite3.connect(POLY_DB)

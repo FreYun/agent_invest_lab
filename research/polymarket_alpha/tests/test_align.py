@@ -20,5 +20,11 @@ def test_fwd_ret_is_future():
     # idx[2]->idx[3] 收益=100%, 该行 fwd_ret 应≈1.0
     assert abs(out.loc[idx[2], "fwd_ret"] - 1.0) < 1e-9
 
+def test_load_signal_reads_real_data():
+    # 守回归: POLY_DB 路径若再错会立刻失败(读不到 252 行真实数据)
+    s = load_signal("recession_2026")
+    assert len(s) > 100
+    assert s.index.is_monotonic_increasing
+
 if __name__ == "__main__":
-    test_no_lookahead_signal_is_lagged(); test_fwd_ret_is_future(); print("OK")
+    test_no_lookahead_signal_is_lagged(); test_fwd_ret_is_future(); test_load_signal_reads_real_data(); print("OK")
