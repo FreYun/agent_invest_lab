@@ -23,12 +23,12 @@ for hypo,(factors,targets) in HYPOS.items():
             try: price = load_target(t)
             except FileNotFoundError: continue
             lag = 1 if t in US else 0
+            dsig = detrend(sig, 5)   # 去趋势信号: 每个 (factor,target) 只算一次
             for h in HORIZONS:
                 base = align(sig, price, h, extra_lag=lag)
                 # level 版
                 rows.append([hypo,f,t,h,"level",spearman_ic(base),quantile_monotonicity(base),len(base)])
-                # diff(去趋势) 版: 对 sig 去趋势后重新对齐
-                dsig = detrend(sig, 5)
+                # diff(去趋势) 版: 对齐去趋势后的信号
                 dbase = align(dsig, price, h, extra_lag=lag)
                 rows.append([hypo,f,t,h,"diff",spearman_ic(dbase),quantile_monotonicity(dbase),len(dbase)])
 
@@ -53,6 +53,6 @@ with open("/home/rooot/agent_invest_lab/research/polymarket_alpha/report.md","w"
     for f,flag in flags.items():
         fp.write(f"- `{f}`: {flag}\n")
     fp.write("\n## 完整明细见 summary.csv\n")
-    fp.write("\n## 诚实盲区\n- level 版 IC 多为趋势假象,已实测去趋势后大幅衰减,故判定只采 diff 版\n")
+    fp.write("\n## 诚实盲区\n- level 版 IC 整体均值/中位数高于 diff 版(0.205 vs 0.138),但逐行仅约 53% 满足 level>diff、个别 target 上 diff 版反而更高——趋势假象在汇总统计上可见,但并非逐条普遍,故仅以 diff 版做结构判定、level 版不作依据\n")
     fp.write("- 1年单一regime,跨regime未验证\n- 尾部/加密合约流动性低,定价可能偏离真实概率\n")
 print("done", len(df), "rows")
