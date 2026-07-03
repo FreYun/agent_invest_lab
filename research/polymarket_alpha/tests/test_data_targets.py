@@ -16,6 +16,15 @@ def test_backfilled_us():
     s = load_target("QQQ")   # 若用了代理, 改成 513100
     assert len(s) > 100
 
+def test_backfilled_gold():
+    s = load_target("518880")
+    assert len(s) > 100 and s.index.is_monotonic_increasing
+
+def test_us_proxy():
+    s = load_target("SPY")   # 经 PROXY_ALIAS 映射到 513500 代理数据
+    assert len(s) > 100 and s.index.is_monotonic_increasing
+
 if __name__ == "__main__":
     test_index_from_marketdb(); test_cached_etf_csv(); test_backfilled_us()
+    test_backfilled_gold(); test_us_proxy()
     print("OK")

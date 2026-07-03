@@ -2,6 +2,8 @@ import sqlite3, pandas as pd, os
 MARKET_DB = "/home/rooot/database/market.db"
 ETF_CACHE = "/home/rooot/agent_invest_lab/research/index_timing/data"
 LOCAL_CACHE = os.path.join(os.path.dirname(__file__), "data")
+# SPY 用 A股跨境ETF 513500 代理落盘；保留别名关系可追溯
+PROXY_ALIAS = {"SPY": "513500"}
 
 def _from_csv(path):
     df = pd.read_csv(path)
@@ -20,8 +22,9 @@ def load_target(code: str) -> pd.Series:
                          con, params=[code], parse_dates=["trade_date"])
         con.close()
         if len(df):
-            return df.set_index("trade_date")["close"]
-    # 2) 本地补拉缓存
+            return df.set_index("trade_date")["close"].sort_index()
+    # 2) 本地补拉缓存（先解析代理别名，如 SPY -> 513500）
+    code = PROXY_ALIAS.get(code, code)
     local = os.path.join(LOCAL_CACHE, f"{code}.csv")
     if os.path.exists(local):
         return _from_csv(local)
