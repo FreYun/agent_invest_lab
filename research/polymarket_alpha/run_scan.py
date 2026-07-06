@@ -1,4 +1,7 @@
-import sys; sys.path.insert(0, "/home/rooot/agent_invest_lab/research/polymarket_alpha")
+import os, sys
+from datetime import date
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT)
 import pandas as pd
 from align import load_signal, align
 from data_targets import load_target
@@ -19,11 +22,11 @@ rows = []
 for hypo,(factors,targets) in HYPOS.items():
     for f in factors:
         sig = load_signal(f)
+        dsig = detrend(sig, 5)   # 去趋势信号: 每个 factor 只算一次(与 target/horizon 无关)
         for t in targets:
             try: price = load_target(t)
             except FileNotFoundError: continue
             lag = 1 if t in US else 0
-            dsig = detrend(sig, 5)   # 去趋势信号: 每个 (factor,target) 只算一次
             for h in HORIZONS:
                 base = align(sig, price, h, extra_lag=lag)
                 # level 版
@@ -33,25 +36,32 @@ for hypo,(factors,targets) in HYPOS.items():
                 rows.append([hypo,f,t,h,"diff",spearman_ic(dbase),quantile_monotonicity(dbase),len(dbase)])
 
 df = pd.DataFrame(rows, columns=["hypo","factor","target","horizon","mode","ic","qmono","n"])
-df.to_csv("/home/rooot/agent_invest_lab/research/polymarket_alpha/summary.csv", index=False)
+df.to_csv(os.path.join(ROOT, "summary.csv"), index=False)
 
 # robustness 判据(仅 diff 版): 每个 factor 跨 targets IC 同号占比
+# 同时返回 diff 版有效样本数 n_valid, 便于区分"数据不够"和"信号弱"
 def struct_flag(g):
     d = g[g["mode"]=="diff"].dropna(subset=["ic"])
-    if len(d) < 3: return "样本不足"
+    n_valid = len(d)
+    if n_valid < 3:
+        return pd.Series({"flag": "样本不足", "n_valid": n_valid})
     pos = (d["ic"] > 0).mean()
     same = max(pos, 1-pos)
     med = d["ic"].abs().median()
-    return "有结构(hint)" if same >= 0.75 and med >= 0.1 else "无结构/噪声"
+    flag = "有结构(hint)" if same >= 0.75 and med >= 0.1 else "无结构/噪声"
+    return pd.Series({"flag": flag, "n_valid": n_valid})
 flags = df.groupby("factor").apply(struct_flag)
 
-with open("/home/rooot/agent_invest_lab/research/polymarket_alpha/report.md","w") as fp:
+with open(os.path.join(ROOT, "report.md"),"w") as fp:
     fp.write("# Polymarket 信号发现 · 结果报告\n\n")
-    fp.write(f"- as-of: 2026-07-03  source: polymarket.db/macro_factor + market.db\n")
+    fp.write(f"- 生成时间: {date.today()}  数据源: polymarket.db/macro_factor + market.db\n")
     fp.write("- 全部为**黄灯/hint 级**(样本<2年,单一regime),不得升格生产因子\n\n")
     fp.write("## 各因子结构判定(以 diff 去趋势版为准)\n\n")
-    for f,flag in flags.items():
-        fp.write(f"- `{f}`: {flag}\n")
+    fp.write("| factor | 判定 | diff 版有效 (target×horizon) 数 |\n|---|---|---|\n")
+    for f, row in flags.iterrows():
+        fp.write(f"| `{f}` | {row['flag']} | {int(row['n_valid'])} |\n")
+    fp.write("\n注: \"样本不足\"= diff 版有效组合<3, 通常是该 factor 在 polymarket.db 里"
+            "历史太短(如 eth_dip_500_2026 仅 ~4 个月), 不同于\"信号弱\"的\"无结构/噪声\"。\n")
     fp.write("\n## 完整明细见 summary.csv\n")
     fp.write("\n## 诚实盲区\n- level 版 IC 整体均值/中位数高于 diff 版(0.205 vs 0.138),但逐行仅约 53% 满足 level>diff、个别 target 上 diff 版反而更高——趋势假象在汇总统计上可见,但并非逐条普遍,故仅以 diff 版做结构判定、level 版不作依据\n")
     fp.write("- 1年单一regime,跨regime未验证\n- 尾部/加密合约流动性低,定价可能偏离真实概率\n")

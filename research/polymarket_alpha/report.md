@@ -1,18 +1,22 @@
 # Polymarket 信号发现 · 结果报告
 
-- as-of: 2026-07-03  source: polymarket.db/macro_factor + market.db
+- 生成时间: 2026-07-06  数据源: polymarket.db/macro_factor + market.db
 - 全部为**黄灯/hint 级**(样本<2年,单一regime),不得升格生产因子
 
 ## 各因子结构判定(以 diff 去趋势版为准)
 
-- `btc_dip_50k_2026`: 有结构(hint)
-- `eth_dip_500_2026`: 样本不足
-- `fed_hike_2026`: 无结构/噪声
-- `fed_no_cut_2026`: 有结构(hint)
-- `hormuz_normal_2026`: 无结构/噪声
-- `iran_regime_fall`: 无结构/噪声
-- `recession_2026`: 有结构(hint)
-- `taiwan_risk_2026`: 有结构(hint)
+| factor | 判定 | diff 版有效 (target×horizon) 数 |
+|---|---|---|
+| `btc_dip_50k_2026` | 有结构(hint) | 9 |
+| `eth_dip_500_2026` | 样本不足 | 0 |
+| `fed_hike_2026` | 无结构/噪声 | 12 |
+| `fed_no_cut_2026` | 有结构(hint) | 12 |
+| `hormuz_normal_2026` | 无结构/噪声 | 6 |
+| `iran_regime_fall` | 无结构/噪声 | 6 |
+| `recession_2026` | 有结构(hint) | 12 |
+| `taiwan_risk_2026` | 有结构(hint) | 6 |
+
+注: "样本不足"= diff 版有效组合<3, 通常是该 factor 在 polymarket.db 里历史太短(如 eth_dip_500_2026 仅 ~4 个月), 不同于"信号弱"的"无结构/噪声"。
 
 ## 完整明细见 summary.csv
 
