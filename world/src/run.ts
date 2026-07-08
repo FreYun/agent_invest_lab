@@ -3,7 +3,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSy
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import type { WorldConfig } from './config.ts'
-import { copyStrategyLibraryToWorkspace, loadStrategyLibrary, renderActiveMethodology, renderStrategyCatalog, type StrategyLibrary } from './strategy-library.ts'
+import { copyStrategyLibraryToWorkspace, loadStrategyLibrary, renderActiveMethodology, renderStrategyCatalog, renderTaskHeader, type StrategyLibrary } from './strategy-library.ts'
 import { loadCalendar, computeTradingDates } from './calendar.ts'
 import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
@@ -123,25 +123,86 @@ export function botServerArgv(config: WorldConfig, botId: string, workspace: str
 // 不再注入 skill 让其自跑主线识别流水线（遵循度低、退化成只查持仓板块）。此表清空，机制保留备用。
 const INJECT_PIPELINE_SKILLS: Record<string, string[]> = {}
 
-/** 系统侧从 fund.db 预读四份市场研报的 content_md（PIT：as_of_date<=世界日，各取最新一期）。
- *  与 strategy-server.get_market_report 同口径，但走系统注入而非 bot 工具调用。
- *  四类全缺 → 返回 undefined（message.ts 不渲染该块）。 */
-function readMarketReportsForInjection(fundDbPath: string, worldDate: string): { context: string; mainline: string; rotation: string; macroNews: string } | undefined {
-  const readOne = (type: string): string => {
-    const sql = `SELECT content_md FROM market_reports WHERE report_type=${sqlStr(type)} AND scope='global' `
-      + `AND as_of_date<=${sqlStr(worldDate)} ORDER BY as_of_date DESC LIMIT 1;`
+/** 系统侧从 fund.db 预读「4 份市场研报 + 四研判室(res1/2/4/5)观点」的 content_md
+ *  （PIT：as_of_date<=世界日，各取最新一期）。market_reports 与 res_reports 同库；
+ *  与 strategy-server.get_market_report / res_query.get_prof_views 同口径，但走系统注入而非 bot 工具调用。
+ *  8 份全缺 → 返回 undefined（message.ts 不渲染该块）。
+ *  2026-07-02（用户拍板「替换」）：主线/rotation 优先取日度版（market_mainline_daily /
+ *  mainline_rotation_daily，skill 日度纪律确定性引擎，backfill-mainline-daily.ts 生成）；
+ *  日度缺失（世界日早于日度回补起点 2025-01，或日度管线故障）回退月度版，注入永不缺块。
+ *  月度版的生成管线（prepass / v5）不动，只换消费端。 */
+function readMarketReportsForInjection(fundDbPath: string, worldDate: string):
+  { context: string; mainline: string; rotation: string; macroNews: string;
+    res: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string } } | undefined {
+  // res_reports 同 (report_type, as_of_date) 可能有多行（历史回填）→ 必须 id DESC 取最新一行，
+  // 对齐 res_query.get_prof_views；market_reports 有 UNIQUE 约束无多行，加 id DESC 无害，统一一条 helper。
+  const readLatest = (table: string, type: string): string => {
+    const sql = `SELECT content_md FROM ${table} WHERE report_type=${sqlStr(type)} AND scope='global' `
+      + `AND as_of_date<=${sqlStr(worldDate)} ORDER BY as_of_date DESC, id DESC LIMIT 1;`
     try {
       const out = runSqlite(fundDbPath, sql).trim()
       const rows = out ? (JSON.parse(out) as { content_md: string }[]) : []
       return rows[0]?.content_md ?? ''
     } catch { return '' }
   }
-  const context = readOne('market_context')
-  const mainline = readOne('market_mainline')
-  const rotation = readOne('mainline_rotation')
-  const macroNews = readOne('macro_news')
-  if (!context && !mainline && !rotation && !macroNews) return undefined
-  return { context, mainline, rotation, macroNews }
+  const context = readLatest('market_reports', 'market_context')
+  const mainline = readLatest('market_reports', 'market_mainline_daily') || readLatest('market_reports', 'market_mainline')
+  const rotation = readLatest('market_reports', 'mainline_rotation_daily') || readLatest('market_reports', 'mainline_rotation')
+  const macroNews = readLatest('market_reports', 'macro_news')
+  const res = {
+    market_strategy: readLatest('res_reports', 'market_strategy'),
+    policy_analysis: readLatest('res_reports', 'policy_analysis'),
+    intl_relations: readLatest('res_reports', 'intl_relations'),
+    cross_market_linkage: readLatest('res_reports', 'cross_market_linkage'),
+  }
+  const anyRes = res.market_strategy || res.policy_analysis || res.intl_relations || res.cross_market_linkage
+  if (!context && !mainline && !rotation && !macroNews && !anyRes) return undefined
+  return { context, mainline, rotation, macroNews, res }
+}
+
+/** 从 daily 主线/rotation 报告 markdown 里正则抽出提到的 6 位数基金代码。
+ *  用于收窄「daily prompt 费率块」的入参（省 ~30k tokens/day）——bot 只需要看得到
+ *  持仓 + 报告推荐载体的费率，全 buyable 池 759 只 99% 用不上。
+ *  匹配 `**\d{6}` / ` \d{6} ` / `载体：**\d{6}` 都覆盖，一律去重返回。 */
+function extractFundCodesFromReport(md: string): string[] {
+  if (!md) return []
+  const codes = new Set<string>()
+  const re = /(?:^|[^0-9])(\d{6})(?![0-9])/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(md)) !== null) codes.add(m[1])
+  return [...codes]
+}
+
+/** 【多基金 bot 的费率块入参】= 当前持仓 codes ∪ 报告推荐载体 codes。
+ *  持仓：从 fund_bot_position_snapshots 拿 (bot_id, run_id) 上距 worldDate 最近一日的快照 fund_code。
+ *  报告：从 mainline_daily / rotation_daily（缺失回退月度版）里正则抽 6 位数。
+ *  两者并集通常 ≤10 只，比全 buyable 池 759 只节省大量 daily prompt token。
+ *  日度报告 + 持仓都缺失（Day 1 或极端情况）→ 空数组，caller 侧回退到全 buyable 池（老行为）。 */
+export function computeRelevantFundCodesForBot(
+  fundDbPath: string, botId: string, runId: string, worldDate: string
+): string[] {
+  const readLatestReport = (type: string): string => {
+    const sql = `SELECT content_md FROM market_reports WHERE report_type=${sqlStr(type)} AND scope='global' `
+      + `AND as_of_date<=${sqlStr(worldDate)} ORDER BY as_of_date DESC, id DESC LIMIT 1;`
+    try {
+      const out = runSqlite(fundDbPath, sql).trim()
+      const rows = out ? (JSON.parse(out) as { content_md: string }[]) : []
+      return rows[0]?.content_md ?? ''
+    } catch { return '' }
+  }
+  const mainline = readLatestReport('market_mainline_daily') || readLatestReport('market_mainline')
+  const rotation = readLatestReport('mainline_rotation_daily') || readLatestReport('mainline_rotation')
+  const merged = new Set<string>([...extractFundCodesFromReport(mainline), ...extractFundCodesFromReport(rotation)])
+  // 叠上持仓 codes（同 bot、同 run 上距 worldDate 最近一日的持仓快照）。
+  try {
+    const holdingsSql = `SELECT fund_code FROM fund_bot_position_snapshots WHERE bot_id=${sqlStr(botId)} `
+      + `AND run_id=${sqlStr(runId)} AND trade_date=(SELECT MAX(trade_date) FROM fund_bot_position_snapshots `
+      + `WHERE bot_id=${sqlStr(botId)} AND run_id=${sqlStr(runId)} AND trade_date<=${sqlStr(worldDate)});`
+    const out = runSqlite(fundDbPath, holdingsSql).trim()
+    const rows = out ? (JSON.parse(out) as { fund_code: string }[]) : []
+    for (const r of rows) if (r.fund_code) merged.add(r.fund_code)
+  } catch { /* 持仓拉不到不阻塞 */ }
+  return [...merged]
 }
 
 /** 读取某 bot 要直接注入的判断管线 skill 全文（从其 shadow workspace 的 skills/<id>/SKILL.md）。
@@ -254,6 +315,9 @@ function installStrategyLibraryInShadow(opts: {
   const codes = buyableCodes ?? strategy.defaultBuyableFundCodes
   if (!codes.length) throw new Error('bot ' + botId + ' strategy "' + assignment.strategyId + '" resolved empty buyable fund pool')
   writeFileSync(join(shadow, 'METHODOLOGY.md'), renderActiveMethodology({ botId, strategy, buyableFundCodes: codes }))
+  // 持久化任务头 pin：update_my_strategy 每次重写方法论时会读这份，把 target_index / buyable_fund_codes
+  // 重新锚回去，防止 bot 自进化时把标的代码丢了漂到错误指数。写在 shadow 根下、随 shadow 重建而刷新。
+  writeFileSync(join(shadow, '.methodology-header.md'), renderTaskHeader({ botId, strategy, buyableFundCodes: codes }))
   return {
     strategy_id: strategy.id,
     strategy_title: strategy.title,
@@ -531,7 +595,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // 管理自己的 METHODOLOGY.md（shadow workspace 下；research-loop 每次 chat 都把它 splice 进
   // system prompt 的 ## METHODOLOGY.md section）。修订审计落 runDir/strategies/<bot>.revisions.jsonl。
   // bot 的 mcporter.json 用 ${STRATEGY_SERVER_URL} 引用。
-  const strategyServer = await createStrategyServer({ worldRoot, runId, getCurrentDate })
+  const strategyServer = await createStrategyServer({ worldRoot, runId, getCurrentDate, enableUserSelfEdit: config.enableUserSelfEdit })
   writeFileSync(P.strategyServerRuntimeFile(worldRoot, runId), JSON.stringify({ port: strategyServer.port, url: strategyServer.url }, null, 2) + '\n')
   log(worldRoot, runId, `strategy-server at ${strategyServer.url}`)
   templateVars.STRATEGY_SERVER_URL = strategyServer.url
@@ -1013,6 +1077,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         // on the bot path — we don't need that overhead from world's side).
         // Best-effort: each fetcher returns null on error, renderer just
         // skips the corresponding block. A simworld blip won't break the day.
+        // 多基金 bot（bot101/102/103）的费率块按"持仓 + 日度报告推荐载体"子集塞，
+        // 单基金 / 多资产 bot 保持传全 buyable（池子小）。目的：把 daily prompt 里
+        // 全池 759 只的费率大表（~30k tokens）砍到 ~10 只（~500 tokens），减少 LLM prefill 耗时。
+        const relevantFundCodes = botKindOf(b.botId) === 'multi-fund'
+          ? computeRelevantFundCodesForBot(P.fundDbFile(worldRoot), b.botId, runId, date)
+          : undefined
         const dailyContext = await fetchDailyContext({
           runId, botId: b.botId, asOfDate: date,
           fundMcpCli: config.fundMcpCli,
@@ -1022,8 +1092,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           // alpha-since-run-start in the PnL trend block.
           runStartDate: dates[0],
           // 单标的择时基准：用本轮买池的 NAV B&H 当对照（单只 → 该基金 B&H；多只 → 等权篮子）。
-          // 也驱动 daily fee block——不传费率拉不到，bot 看不到申购/赎回阶梯。
           buyableFundCodes: botBuyableFundCodes,
+          // 费率块专用：多基金 bot 传子集，其它 bot 未传 → 回退全 buyable（daily-context.ts 内部处理）。
+          relevantFundCodes,
         })
         // 滚动 history window：从前几个交易日的 session jsonl 抽 digest（去掉工具结果原文），
         // 按 20000 字符预算切割。超 budget 时用主模型（openclaw.json 的 default route）按 4 维度

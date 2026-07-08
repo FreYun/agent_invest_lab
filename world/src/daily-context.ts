@@ -860,6 +860,11 @@ export interface FetchDailyContextOptions {
   // bot7 只交易 016729）下 bot 直接看到"你 vs 不择时躺平"的 alpha 列。
   // 不传则回退到 INDEX benchmark（默认 沪深300）。
   buyableFundCodes?: string[]
+  // 【费率块】的精简入参：只查这些基金的申购/赎回费率，塞进 daily prompt。
+  // 传空数组或不传 → 回退到 buyableFundCodes 全池（老行为）。多基金 bot（bot101/102/103）
+  // 走"持仓 + 日度报告推荐载体"~10 只子集，比全池 759 只每天省 ~30k tokens 输入。
+  // 单基金 bot 不传即可（池就 1 只，无差别）。上游代码在 run.ts 里 pre-compute。
+  relevantFundCodes?: string[]
 }
 
 export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise<DailyContextData> {
@@ -899,10 +904,15 @@ export async function fetchDailyContext(opts: FetchDailyContextOptions): Promise
       asOfDate: opts.asOfDate,
     })
   })()
-  // Fund fee schedule for the buyable pool — fees rarely change, but we re-fetch
-  // every day for PIT correctness and because cost is tiny (sqlite read via CLI).
-  const feesPromise: Promise<FundFee[]> = (opts.fundMcpCli && opts.buyableFundCodes && opts.buyableFundCodes.length > 0)
-    ? fetchFundFees({ fundMcpCli: opts.fundMcpCli, fundCodes: opts.buyableFundCodes })
+  // Fund fee schedule — fees rarely change, but we re-fetch every day for PIT
+  // correctness (sqlite read via CLI, cost tiny). 优先使用 relevantFundCodes
+  // 子集（持仓 + 日度报告推荐载体，通常 ≤10 只），显著砍掉 daily prompt 里的费率块体积；
+  // 未传子集 / 子集为空 → 回退全 buyable 池（老行为，避免破坏 caller）。
+  const feeFundCodes: string[] = (opts.relevantFundCodes && opts.relevantFundCodes.length > 0)
+    ? opts.relevantFundCodes
+    : (opts.buyableFundCodes ?? [])
+  const feesPromise: Promise<FundFee[]> = (opts.fundMcpCli && feeFundCodes.length > 0)
+    ? fetchFundFees({ fundMcpCli: opts.fundMcpCli, fundCodes: feeFundCodes })
     : Promise.resolve([])
   // 可买池 meta（主题/因子/1y业绩）——给 multi-fund bot 在 prompt 里渲染【可买池主题分布】。
   // 单基金 bot 不渲染这块（message.ts 按 botKind 自决），但我们还是 fetch 一下，因为：
