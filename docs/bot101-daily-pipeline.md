@@ -1,165 +1,251 @@
-# bot101 每日 cron 流程拆解（driver 段）
+# bot101 每日运行流程与工具边界
 
-> 依据：08:00 `run-oos-bot101-daily.sh` 单次运行的实测数据（近 15 次样本，2026-06-16 ~ 2026-07-07）。
-> **本文只覆盖 `oos-daily-driver` 起服务及之后**——即"prepass 三份研报生成完之后、bot101 真正做决策 + 下单"这一段。
-> 前面 prepass 段（~9m40s，占总耗时 84%）不在本文范围。
+> 当前口径：bot101 的生产 run_id 为 `oos-bot101-daily`。系统每天早上刷新净值曲线，工作日下午 14:30 盘中执行决策。本文覆盖“公共报告如何注入、bot101 自己决策时能调用哪些工具、下单如何在 T 日 NAV 未出时成交”。
 
-## driver 段一览（4 步）
+## 1. 当前 cron 时序
 
-| # | 流程段 | 谁执行 | 输出 | 平均耗时 | 是否常态 |
-|---|---|---|---|---|---|
-| 1 | oos-daily-driver 起服务 | node --experimental-strip-types | memory / simworld-proxy / fund-portfolio-proxy / strategy-server / bot101 rust server 5 进程起 + 60 tools probe | ~3s | 每天 |
-| 2 | 账户前置（pin buyable + init + settle） | Python fund-portfolio-mcp | 759 只白名单 JSON、账户校验、昨日 settle | ~1s | 每天 |
-| 3 | **bot101 chat（LLM 决策 + 下单）** | LLM agent（Kimi via rust rl server） | reply.md + 下单 + belief 块 | **~1m 30s（hold 日） / ~5m（换仓日）** | 每天 |
-| 4 | close + mirror + summary | Python + bash | position 快照 + oos_* 镜像 + sqlite 打印 | ~1s | 每天 |
-
-driver 段总耗时中位数 **~1m 50s**（hold 日）；换仓日到 **~5m**。
-
-## 各步细节
-
-### 步 1 · oos-daily-driver 起服务（~3s）
-
-执行者：`node --experimental-strip-types world/src/oos-daily-driver.ts --date T --run-id oos-bot101-daily --config config/world-multi-fund-backtest.yaml`
-
-起 5 个本地进程 + probe 工具：
-
-| 服务 | 端口（示例） | 上游 | 作用 |
+| 时间 | 任务 | 脚本 / 命令 | 作用 |
 |---|---|---|---|
-| memory server | 37163 | — | bot mem0 存储 |
-| simworld-data proxy | 35489 | 18078（ttjj_data_pit_mcp） | 时点数据代理，进程内注入 simulated_datetime |
-| fund-portfolio proxy | 36719 | 28172（fund-portfolio bot-only） | 交易 MCP 代理，注入 run_id |
-| strategy-server | 39283 | — | 方法论 / market_report 提供 |
-| bot101 rust server | — | 火山网关 Kimi | LLM agent 本体 |
+| 08:00 每天 | bot101 净值曲线刷新 | `scripts/refresh-oos-bot101-nav.sh` | 在 fund_nav 入库后，结算待确认订单、重算最近窗口快照、镜像到 `oos_*` 看板表 |
+| 08:30 工作日 | 公共宏观/策略研判 | `skill-res1..res5-*` + `mainline-daily` | 生成 res1/2/3/4/5 与日度主线报告 |
+| 09:00 工作日 | 行业/主题/技术公共报告 | `skill-res6..res12`、`skill-res14` | 生成行业、主题、指数技术等公共研判 |
+| 09:45 工作日 | QC 报告 | `skill-res13-qc-ops` | 质量控制/校验报告 |
+| 10:00 / 11:00 / 13:30 / 14:00 / 14:30 工作日 | res14 盘中指数技术刷新 | `res14-intraday.sh` | 盘中更新指数技术研判 |
+| 14:30 工作日 | bot101 盘中决策 | `OOS_BOT101_INTRADAY=1 scripts/run-oos-bot101-daily.sh` | 用当天日期作为交易日，读取报告 + 实时行情，执行下单/持有决策 |
 
-日志典型行：
-```
-simworld-data proxy at http://127.0.0.1:35489/mcp (upstream http://127.0.0.1:18078/mcp); 60 tools probed
-simworld_tools whitelist active (34 entries) → tools.always_load 预激活
-fund-portfolio proxy at http://127.0.0.1:36719/mcp (upstream http://127.0.0.1:28172/mcp, run_id=oos-bot101-daily)
-strategy-server at http://127.0.0.1:39283/mcp
-bot bot101: server ready
-```
+要点：
+- 14:30 的 bot101 run 使用系统当天作为 `TRADE_DATE`；非交易日由脚本 guard 自动跳过。
+- 08:00 的 NAV sync 是净值曲线更新入口，不跑 LLM 决策。
+- 14:30 的决策当时通常还没有 T 日基金 NAV；订单先受理，次日 NAV 入库后按 T 日 NAV 定价并回写快照。
 
-`60 tools probed` = simworld 全量工具 probe；`simworld_tools whitelist active (34 entries)` = 白名单预激活 `tools.always_load`（rust 侧配置），bot 不用每天 discover_tools 试错风暴。
+## 2. 这轮优化了什么
 
-工具调用：无 LLM，纯本地进程 spawn + JSON-RPC 握手。
+1. **决策时点从早盘/T+1 改为盘中 T 日 14:30**
+   - `run-oos-bot101-daily.sh` 增加 `OOS_BOT101_INTRADAY=1` 模式。
+   - 无显式日期时，盘中模式取系统当天，而不是 calendar 最新已收盘日。
 
-### 步 2 · 账户前置（~1s）
+2. **新增盘中实时行情注入**
+   - `world/src/intraday-market.ts` 从已注入报告中提取宽基与主线相关标的。
+   - 调用 `ttjj_data_pit_mcp.market_realtime_quote` 预取实时行情。
+   - 注入范围只包括宽基指数和 A 股主线 ETF 代理；跨市场资产不纳入。
+   - 联接基金本身没有实时行情时，用同跟踪指数或报告指定载体的场内 ETF 作为盘中代理信号。
 
-Python 侧一次性完成三件：
+3. **订单支持“先接单，后按 T 日 NAV 定价”**
+   - `fund_bot_orders` 增加 `pricing_status / pricing_nav_date / priced_at`。
+   - 买单：T 日 NAV 缺失时 `pricing_status='awaiting_nav'`，先冻结现金。
+   - 卖单：T 日 NAV 缺失时先冻结 `pending_sell_shares`，不立即消耗 lot。
+   - NAV 入库后 `settle_pending_fund_orders` 严格读取 `order_date` 的 T 日 NAV，写回 `reference_nav` 后成交。
 
-1. **pin buyable**：把 `world/config/world-multi-fund-backtest.yaml` 里的 fund_pool（约 759 只场外 C 份额）落到 `data/buyable/oos-bot101-daily.json`，供 bot chat 读入。
-2. **fund init**：`portfolio_init_bot(bot_id=bot101, initial_capital=1_000_000)` — 已存在账户则返回 `已有账户`（`existing.cash` = 昨日收盘现金），不重建。
-3. **fund settle**：`portfolio_settle_pending(bot_id=bot101, as_of_date=T)` — 把 T-1 及以前的 pending 单结算掉；无 pending 时 `settled=[] skipped=[]`。
+4. **净值刷新后会回算快照**
+   - `refresh-oos-bot101-nav.sh` 从“每天 settle + close”改为三段式：
+     1. 先统一 settle 可收口的 pending 单；
+     2. 再统一重算窗口内每日快照；
+     3. 最后统一镜像到 `oos_*`。
+   - 这样 T+1 早上 NAV 入库后，T 日下单动作会写成 T 日 action，T 日净值曲线也会被重算。
 
-工具调用：3 次 fund-portfolio-mcp（`portfolio_init_bot` / `portfolio_settle_pending` / 白名单写文件）。**bot 尚未 chat**，这些是 driver 直接调用。
+5. **报告和数据尽量预注入，减少 bot 重复调用**
+   - 账户、持仓、绩效、持仓基金 NAV、五大指数 MA、公共市场报告、盘中行情都在 prompt 里预置。
+   - bot101 日常只在需要验证 thesis、查新信息、或执行交易时调用工具。
 
-### 步 3 · bot101 chat（LLM 决策 + 下单，核心，~1m 30s hold 日 / ~5m 换仓日）
+## 3. 14:30 bot101 决策流程
 
-**这是唯一有 LLM 决策 + 下单的一步**。timeout=600s。
+`scripts/run-oos-bot101-daily.sh` 调 `world/src/oos-daily-driver.ts`，driver 做以下事情：
 
-driver 组装 daily prompt 发给 bot101 rust server：
-- **顶部预注入**：持仓 NAV / 账户绩效 / 峰值回撤 / 主要指数 5 个（MA60/120/200 + 趋势标签）/ 可买池 759 只按 theme 聚合的 top 5 / 四份 market_report（context + mainline_daily + rotation_daily + macro_news）+ 四大研判室子段（res1/2/4/5）
-- **中部**：history window（近 4-6 个决策日的 reply.md，14000–15000 字）
-- **底部**：METHODOLOGY.md 全文（`strategies/index-products/multi-equity-high.md` 覆盖注入）+ 每 5 交易日强制复盘 block
+1. **启动本地 MCP 服务**
+   - memory server
+   - simworld-data proxy
+   - fund-portfolio proxy
+   - strategy-server
+   - bot101 rust/agent server
 
-bot 按方法论走 7 小步：
+2. **系统侧账户前置**
+   - pin 本 run 的可买基金池到 `data/buyable/oos-bot101-daily.json`
+   - 初始化/校验 bot101 账户
+   - 在 bot chat 前 settle 历史 pending 单
 
-#### 3.1 读预注入（0 次工具调用）
+3. **读取并注入上下文**
+   - 账户 / 持仓 / 绩效 / 已平仓 P&L
+   - 持仓基金近 20 日 NAV
+   - 五大宽基指数 MA60/120/200 与趋势标签
+   - 本 bot 可买基金池摘要
+   - 公共报告：`market_context`、`market_mainline_daily`、`mainline_rotation_daily`、`macro_news`
+   - 四研判室背景：res1 市场策略、res2 政策分析、res4 国际关系、res5 跨市场联动
+   - 盘中实时行情：宽基 + 主线相关 ETF 代理
+   - history window 与 belief 校准块
+   - bot101 当前 `METHODOLOGY.md`
 
-只读 daily prompt 顶部，不重复拉数据。
+4. **bot101 执行决策**
+   - 先读注入内容，不重复调已预取的数据。
+   - 若需要验证持仓消息面或 thesis，调 simworld-data 研究/行情工具。
+   - 若需要调整仓位，调 fund-portfolio 下单工具。
+   - 每日写 mem0/belief，留下当日判断。
 
-#### 3.2 持仓消息面扫描（1-2 次 `research_search`，串行）
+5. **系统侧 close + mirror**
+   - bot chat 完成后，driver 调 `close_my_day` 落当日快照。
+   - shell 层把订单、动作、持仓、净值、报告状态镜像到 `oos_*` 表。
+   - 对 14:30 新下的 awaiting NAV 订单，快照会在次日 08:00 NAV sync 后被回算修正。
 
-对当前 2-4 只持仓合并成 1 条检索词（如 `"半导体 存储芯片 CPO 利空"`），串行调 `mcp__simworld_data__research_search(search_type='news', top_k≤5, search_days=7-14)`。命中重大利空进「口子 A：提前减仓」。
+## 4. 注入报告明细
 
-方法论要求"必做"，实际 hold 日 bot 有时会跳过（07-06 / 07-07 就是 0 次）。
+bot101 14:30 决策时，不是只读三份报告。当前注入分三层：
 
-#### 3.3 读 market_context 定 regime（0 次工具调用）
-
-从预注入直接抄 `risk_state / market_regime / valuation_anchor`。不重跑 4 维度评分。
-
-#### 3.4 读 mainline_rotation_daily 的『今日动作』（0 次工具调用）
-
-日度状态机的输出，四种：
-- `今日动作：hold` → 维持
-- `今日动作：新进[卫星] BKxxxx` → 从 fund_pool 选载体建仓
-- `今日动作：剔除 BKxxxx` → 卖出对应持仓
-- `今日动作：晋升核心 BKxxxx` → 调标签
-
-bot **不重算天数计数器**（40 日 top5 / 3 日破 MA60 等）——直接读报告『④ 计数器与触发距离』表。
-
-#### 3.5 过 3 个 override 口子（0-1 次工具调用）
-
-三个允许 bot 覆盖日度动作的口子：
-- **A · 持仓消息面证伪**（3.2 步命中） → 提前减仓
-- **B · 极端恐慌逆向闸门**（VIX z≥1.5 + 单日≤-4% + 温度≤5 + macro_news 一次性冲击） → 扛住 + 受限逆向
-- **C · 账户回撤闸门**（≥6% 降档 / ≥10% defensive review） → 压低总仓位
-
-三个都没触发 → 100% 照办日度动作。
-
-#### 3.6 执行下单（0 - 数十次 `place_buy_order` / `place_sell_order`）
-
-按日度动作 × 总仓位档 → 目标权重，调 fund-portfolio-mcp 下单。
-
-多数日子这一步 = 0 次调用（hold 日）。
-
-#### 3.7 写 mem0（1 次 `mem0_add`，每日必写）
-
-内容按输出范式必答：风险状态 / 主线判定 / 日度动作执行状态（未执行明写覆盖来源）/ 持仓消息面 / 资讯研判 / **belief 块**（未来 20 交易日 p_up + 假设 + 证伪触发点，每日必写，否则被 belief-validate 拦截）。
-
-#### 步 3 实测工具调用画像
-
-按最近 5 次采样：
-
-| trade_date | 步 3 耗时 | tool_use 总数 | 明细 |
+| 层级 | 报告 | 来源 | 用途 |
 |---|---|---|---|
-| 2026-07-02 | ~1m 48s | 4 | 4× research_search（消息面扫描，无下单） |
-| 2026-07-03 | ~1m 45s | 6 | 6× research_search（同上） |
-| 2026-07-06 | ~1m 49s | 2 | 2× mem0_add（连消息面都没扫，直接收工） |
-| 2026-07-07 | ~1m 28s | 2 | 2× mem0_add（同上） |
-| **2026-07-01（月决策日重构）** | ~5m 08s | **62** | 5× research_search + 21× sell_order（含 5 次 error 重试）+ 6× buy_order + 2× discover_tools + 2× mem0_add |
+| 核心市场报告 | `market_context` | market_reports | regime / risk_state / 市场温度 / 风险预算 |
+| 核心主线报告 | `market_mainline_daily`，缺失时回退 `market_mainline` | market_reports | 主线识别、主线板块、可投基金映射 |
+| 核心轮动报告 | `mainline_rotation_daily`，缺失时回退 `mainline_rotation` | market_reports | 核心/卫星组合骨架、计数器、今日动作 |
+| 宏观资讯 | `macro_news` | market_reports | 政策、会议、监管、地缘、汇率、大宗等事件面 |
+| 背景研判 | res1 / res2 / res4 / res5 | res_reports / skill cron | 校准风险预算，不覆盖主线与组合骨架 |
+| 盘中行情 | 宽基 + 主线 ETF 代理 | `market_realtime_quote` | 14:30 实时强弱、量比、成交额、5/20 日表现 |
 
-**核心观察**：日度化改造前的 07-01 是"月决策日全组合重构"典型——62 次工具调用堆出 5 分钟。改造完成后，bot 应该按日度状态机的『今日动作』每日小步微调，单次调用数会降到 5-15 次量级、不再有 62 次这种爆点。
+使用原则：
+- `market_context / market_mainline_daily / mainline_rotation_daily` 是操作性主线结论。
+- res1/2/4/5 是背景研判，不直接改写组合骨架。
+- 盘中实时行情只作为 T 日执行时的强弱校准，不改变可买池。
 
-### 步 4 · close + mirror + summary（~1s）
+## 5. bot101 自己可调用的工具
 
-driver 侧调 `portfolio_close_trading_day(bot_id=bot101, as_of_date=T)` 落 `fund_bot_position_snapshots` + `fund_bot_daily_snapshots`。
+### 5.1 memory 工具
 
-driver 退出后 shell 侧 `mirror_oos_results_for_date` 把 T 日的快照/订单/actions/reports 镜像到 `oos_*` 表（供 48080 backtest-dashboard 展示）。
-
-最后打印 summary（sqlite 查 reports / orders / positions / nav）到日志 tail。典型行：
-```
--- bot101 positions
-trade_date  fund_code  weight_pct  market_value  shares
-----------  ---------  ----------  ------------  ----------
-2026-07-06  007818     40.14       411062.0      98727.5945
-...
--- bot101 nav
-2026-07-06  1024029.72   1.02403    2.403                  52.47
-```
-
-工具调用：1 次 fund-portfolio-mcp（close） + 若干次 sqlite（mirror + summary）。
-
-## driver 段时长汇总（近 15 次样本）
-
-| trade_date | driver 段总耗时 | 备注 |
+| 工具 | 用途 | 日常是否需要 |
 |---|---|---|
-| 06-16 | 1m56s | hold |
-| 06-17 | 2m05s | hold |
-| 06-18 | 1m48s | hold |
-| 06-22 | 1m33s | hold |
-| 06-24 | 1m36s | hold |
-| 06-25 | ~3m46s | 日志未收尾 |
-| 06-26 | 3m21s | hold（当日 prepass 已缓存，脚本前期跳过） |
-| 06-29 | 1m57s | hold |
-| 06-30 | 1m52s | hold |
-| **07-01** | **5m08s** | **月决策日重构 62 次工具** |
-| 07-02 | 1m48s | hold + 消息面扫描 4 次 |
-| 07-03 | 1m45s | hold + 消息面扫描 6 次 |
-| 07-06 | 1m49s | hold 极简 |
-| 07-07 | 1m28s | hold 极简 |
+| `mcp__mem0__mem0_search` | 搜索历史记忆、上次 belief、上次执行理由 | 需要时 |
+| `mcp__mem0__mem0_add` | 写入当日决策、belief、证伪触发点 | 每日必须写 |
 
-**中位数 ~1m 50s，剔除换仓日后 hold 日稳定在 1m30s – 2m。**
+### 5.2 fund-portfolio 工具
 
-driver 段耗时几乎全在**步 3 bot chat**——起服务/账户前置/close 合计不到 5 秒，剩下 100+ 秒全是 LLM 一轮或多轮工具调用循环。
+bot101 连接的是 fund-portfolio 的 bot-only 端口。proxy 会把 `run_id=oos-bot101-daily` 强制注入，bot 看不到也不能伪造 `run_id`。
+
+| 工具 | 可见性 | 用途 | 注意 |
+|---|---|---|---|
+| `mcp__fund_portfolio_mcp__portfolio_place_buy_order` | 可见 | 申购基金 | fund_code 必须在本 bot 可买池；T NAV 缺失时进入 `awaiting_nav` 并冻结现金 |
+| `mcp__fund_portfolio_mcp__portfolio_place_sell_order` | 可见 | 赎回基金份额 | T NAV 缺失时冻结份额；NAV 入库后按 T NAV 消耗 lot |
+| `mcp__fund_portfolio_mcp__portfolio_get_my_history` | 可见 | 查账户/持仓/订单 | 日常已预注入，不建议重复查 |
+| `mcp__fund_portfolio_mcp__portfolio_get_my_trades` | 可见 | 查成交/交易历史 | 日常已预注入，不建议重复查 |
+| `mcp__fund_portfolio_mcp__portfolio_get_my_performance` | 可见 | 查绩效/区间收益/P&L | 日常已预注入，不建议重复查 |
+| `mcp__fund_portfolio_mcp__portfolio_get_buyable_funds` | 可见 | 查完整可买池 | 可买池变化低，通常读 prompt 摘要即可 |
+| `mcp__fund_portfolio_mcp__get_fund_detail` | 可见 | 查基金主题、风格、业绩、排名等细节 | 选新载体或替代品时使用 |
+
+bot101 看不到的 fund-portfolio 系统工具：
+- `init_fund_account`
+- `settle_pending_orders`
+- `close_my_day`
+- admin / migration / 手工写库类工具
+
+这些由 driver 或 cron 执行，bot101 不负责账户生命周期。
+
+### 5.3 simworld-data 工具
+
+simworld-data proxy 会：
+- 从 `tools/list` 隐藏原始申赎接口；
+- 在 `tools/call` 强制注入 `simulated_datetime=<TRADE_DATE> 15:00:00`；
+- 防止 bot101 自己指定时间造成未来函数。
+
+bot101 常用的 simworld-data 工具类型：
+
+| 工具/类别 | 用途 | 当前约束 |
+|---|---|---|
+| `mcp__simworld_data__research_search` | 搜索新闻、研报、政策、持仓消息面 | 用于验证 thesis、查利空/催化；不要替代已注入主线报告 |
+| `mcp__simworld_data__market_index_quote` | 查指数历史行情/技术数据 | 五大宽基已预注入；额外指数才需要查 |
+| `mcp__simworld_data__fund_nav` | 查基金 NAV 历史 | 持仓基金近 20 日已预注入；新基金才需要查 |
+| 其它行情/因子/行业工具 | 补充研究新行业、新基金、资金面、宏观因子 | 只在方法论需要且 prompt 未覆盖时调用 |
+
+bot101 看不到/不能调用：
+- `fund_subscription_redemption_summary`
+- `fund_index_subscription_redemption`
+
+### 5.4 strategy-server 工具
+
+| 工具 | 用途 | 日常是否需要 |
+|---|---|---|
+| `mcp__strategy_mcp__get_market_report` | 手工读取共享市场报告 | 报告已预注入；缺失或需要复查时用 |
+| `mcp__strategy_mcp__get_my_strategy` / `get_active_strategy` | 读取当前 active methodology | system prompt 已注入；通常不用 |
+| `mcp__strategy_mcp__update_my_strategy` | 完整替换自己的 methodology | 只有强制复盘判定方法论失效时用 |
+| `mcp__strategy_mcp__list_strategies` | 查看共享策略 catalog | 研究策略库时用 |
+| `mcp__strategy_mcp__get_strategy` | 读取某个共享策略全文 | 参考其它产品策略时用 |
+
+bot101 不应调用：
+- `submit_market_report`：仅 reporter agent 使用。
+- `update_my_user / get_my_user`：生产 bot101 默认不暴露。
+
+### 5.5 discovery / 其它
+
+| 工具 | 用途 | 约束 |
+|---|---|---|
+| `discover_tools` | 发现工具 | 正常不需要；simworld tools 已 probe + whitelist 预激活 |
+| raw shell / sqlite | 不属于 bot101 可调用工具 | 仅 driver / 系统脚本使用 |
+
+## 6. bot101 日常决策时的推荐调用顺序
+
+1. 先读 prompt 注入块：账户、持仓、报告、盘中行情、history、methodology。
+2. 如果今日动作为 `hold` 且无明显冲击：通常只需少量 research 验证 + `mem0_add`。
+3. 如果报告触发新进/剔除/晋升：
+   - 用 `get_fund_detail` 或 simworld-data 补查候选基金；
+   - 用 `portfolio_place_buy_order` / `portfolio_place_sell_order` 执行；
+   - 写 `mem0_add` 记录目标权重、执行理由、belief。
+4. 不要重复调用已预注入的账户/绩效/持仓 NAV/五大宽基 MA。
+5. 不要自己重跑主线识别；主线和组合骨架以 `market_mainline_daily` 与 `mainline_rotation_daily` 为准。
+
+## 7. 下单与净值确认语义
+
+### 买入
+
+14:30 下买单时：
+- 若 T 日 NAV 已存在：订单直接写 `reference_nav`，`pricing_status='priced'`。
+- 若 T 日 NAV 不存在：订单写 `pricing_status='awaiting_nav'`，`reference_nav=NULL`，现金冻结到 `cash_in_transit`。
+
+次日 NAV 入库后：
+- `settle_pending_fund_orders` 读取 `fund_nav(fund_code, order_date)`；
+- 写回 `reference_nav / pricing_nav_date / priced_at`；
+- 计算申购费和到账份额；
+- 写 T 日 `ADD` action；
+- 释放 `cash_in_transit`。
+
+### 卖出
+
+14:30 下卖单时：
+- 若 T 日 NAV 已存在：立即按 T NAV 消耗 lot，proceeds 进入 `cash_receivable`，T+1 转 cash。
+- 若 T 日 NAV 不存在：先增加 `pending_sell_shares`，不消耗 lot，不写 `REDUCE` action。
+
+次日 NAV 入库后：
+- settle 读取 T 日 NAV；
+- FIFO 消耗 lot；
+- 写 T 日 `REDUCE` action；
+- 释放 `pending_sell_shares`；
+- 确认订单金额。
+
+### 快照
+
+T 日 14:30 后的即时快照可能还没有 T NAV 定价后的最终成交效果。每天 08:00 NAV sync 会：
+1. settle 所有可收口 pending；
+2. 重算窗口内 daily snapshots / position snapshots；
+3. 镜像到 `oos_bot_daily_snapshots`、`oos_bot_position_snapshots`、`oos_bot_orders`、`oos_bot_actions`。
+
+## 8. 最近 bot101 决策耗时统计（2026-06-29 ~ 2026-07-08）
+
+统计口径：只统计 bot101 自己的 chat 决策段，即 `world/runtime/runs/oos-bot101-daily/<交易日>/bot101/status.json` 里的 `started_at -> finished_at`。这段包含 bot101 读取 prompt、LLM 思考、多轮工具调用、生成 reply 与写 status；不包含 shell 启动、公共报告 prepass、MCP 服务启动、账户 init/settle、close、mirror 和日志 summary。
+
+| 交易日 | 决策开始时间 | 决策完成时间 | bot101 决策耗时 | 状态 | 迭代数 | usage | 工具调用 | 错误 | 订单 |
+|---|---|---|---:|---|---:|---:|---:|---:|---:|
+| 2026-06-29 | 2026-06-30 08:06:26 | 2026-06-30 08:07:52 | 1m25s | ok | 3 | 398892 | 5 | 0 | 0 |
+| 2026-06-30 | 2026-07-01 08:04:43 | 2026-07-01 08:06:05 | 1m21s | ok | 3 | 414662 | 5 | 0 | 0 |
+| 2026-07-01 | 2026-07-02 08:06:43 | 2026-07-02 08:11:22 | 4m38s | ok | 10 | 1486209 | 31 | 5 | 8 |
+| 2026-07-02 | 2026-07-03 08:08:40 | 2026-07-03 08:09:58 | 1m17s | ok | 2 | 287446 | 2 | 0 | 0 |
+| 2026-07-03 | 2026-07-04 20:33:15 | 2026-07-04 20:34:28 | 1m12s | ok | 2 | 280449 | 3 | 0 | 0 |
+| 2026-07-06 | 2026-07-07 08:10:02 | 2026-07-07 08:11:20 | 1m18s | ok | 2 | 280980 | 1 | 0 | 0 |
+| 2026-07-07 | 2026-07-08 08:06:51 | 2026-07-08 08:07:49 | 0m58s | ok | 2 | 277460 | 1 | 0 | 0 |
+| 2026-07-08 | 2026-07-09 08:08:47 | 2026-07-09 08:11:09 | 2m22s | ok | 5 | 342008 | 5 | 0 | 1 |
+
+汇总：
+- 样本数：8 个真实完成会话。
+- bot101 自己决策平均耗时：1m49s；中位数：1m20s；最短：0m58s；最长：4m38s。
+- 常规 hold / 轻决策日通常在 1 到 1.5 分钟；7/8 因新增买入动作与 mem0 检索，耗时升到 2m22s。
+- 重换仓日明显更慢：2026-07-01 有 10 轮迭代、31 次工具调用、8 笔订单，bot101 决策段耗时 4m38s。
+- 如果要监控 14:30 盘中生产运行，应该同时保留两类指标：`bot101/status.json` 的纯决策耗时，以及 shell 日志的端到端耗时。本文第 8 节只记录前者。
+
+## 9. 仍需注意的边界
+
+- 14:30 决策依赖早上公共报告；除 res14 intraday 外，主线/宏观报告不会在 14:30 自动重新生成。
+- 场外基金真实成交仍按基金公司 T 日 NAV；盘中 ETF 行情只是执行参考，不是成交价。
+- `refresh-oos-bot101-nav.sh` 是净值曲线最终收敛入口；如果 08:00 任务失败，pending NAV 订单和 T 日快照会延后到下一次刷新才收敛。
+- 当前仓库工作区可能还有其它未提交改动；本文只描述 bot101 每日链路，不代表其它实验分支状态。
