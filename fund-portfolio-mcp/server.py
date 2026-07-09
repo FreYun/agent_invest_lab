@@ -1541,19 +1541,20 @@ async def portfolio_place_buy_order(
     """Bot 在 T 日自助下买入单（按当日 NAV，T+1 settle）。
 
     行为：
-      - 用 trade_date 当日的 fund_nav.nav 作 reference_nav 写入订单（之后 settle 用同一净值）
+      - 若 trade_date 当日 NAV 已存在，写 reference_nav 并标记 pricing_status='priced'
+      - 若 T 日 NAV 尚未入库，先受理为 pricing_status='awaiting_nav'，reference_nav 暂空
       - 立即从 cash 扣除 amount → 转入 cash_in_transit（冻结，避免重复下单超额）
       - status='pending'，confirm_date=NULL，confirm_nav/confirmed_shares/fee 留空
-      - 实际份额到账 + 冻结释放在 settle_pending_fund_orders（外部 loop 在 T+1 触发）
+      - NAV 入库后由 settle_pending_fund_orders 按 T 日 NAV 定价、到账并释放冻结
 
     校验：
       - 账户必须存在
       - fund_code 必须在 fund_info
-      - trade_date 必须在 fund_nav 有 nav 行（缺失直接报错，外部 loop 自己保数据齐）
+      - trade_date 可暂缺 T 日 NAV；缺失时订单进入 awaiting_nav，等待净值刷新后定价
       - amount > 0 且 ≤ accounts.cash（available，不含 in_transit）
       - reason 必填：写明为什么现在买这只基金（缺失直接报错让你补写，进审计日志）
 
-    返回 JSON 带 order_id / reference_nav / estimated_fee / estimated_shares / cash_after。
+    返回 JSON 带 order_id / reference_nav / pricing_status / estimated_fee / estimated_shares / cash_after。
     """
     err = _require_run_id(run_id)
     if err:
@@ -1583,23 +1584,25 @@ async def portfolio_place_buy_order(
         if not info:
             return json.dumps({"success": False, "message": f"基金 {fund_code} 不在 fund_info"}, ensure_ascii=False)
         nav = _strict_nav(conn, fund_code, trade_date)
-        if nav is None:
-            return json.dumps({"success": False, "message": f"fund_nav 缺失 ({fund_code}, {trade_date})；外部 loop 须保证净值齐全"}, ensure_ascii=False)
+        pricing_status = "priced" if nav is not None else "awaiting_nav"
+        pricing_nav_date = trade_date if nav is not None else None
+        priced_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nav is not None else None
         view = _bot_run_cash_view(conn, bot_id, run_id, trade_date)
         cash = float(view["cash_available"])
         if amount > cash + 1e-6:
             return json.dumps({"success": False, "message": f"现金不足：amount={amount} > cash={cash:.2f}"}, ensure_ascii=False)
 
         pf_rate, _ = _fund_fee_rates(conn, fund_code)
-        est_fee = amount * pf_rate / (1 + pf_rate)
-        est_shares = (amount - est_fee) / nav
+        est_fee = amount * pf_rate / (1 + pf_rate) if nav is not None else None
+        est_shares = (amount - est_fee) / nav if nav is not None and est_fee is not None else None
 
         cur = conn.execute(
             "INSERT INTO fund_bot_orders "
             "(review_id, bot_id, fund_code, fund_name, order_type, order_date, confirm_date, "
-            " order_amount, reference_nav, action_reason, status, order_run_id) "
-            "VALUES (NULL, ?, ?, ?, 'buy', ?, NULL, ?, ?, ?, 'pending', ?)",
-            (bot_id, fund_code, info["fund_name"], trade_date, _r(amount), _r(nav, 6), reason or "", run_id)
+            " order_amount, reference_nav, action_reason, status, pricing_status, pricing_nav_date, priced_at, order_run_id) "
+            "VALUES (NULL, ?, ?, ?, 'buy', ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+            (bot_id, fund_code, info["fund_name"], trade_date, _r(amount), _r(nav, 6) if nav is not None else None,
+             reason or "", pricing_status, pricing_nav_date, priced_at, run_id)
         )
         order_id = cur.lastrowid
         new_cash = cash - amount
@@ -1617,14 +1620,15 @@ async def portfolio_place_buy_order(
         "bot_id": bot_id,
         "fund_code": fund_code,
         "trade_date": trade_date,
-        "reference_nav": _r(nav, 6),
+        "reference_nav": _r(nav, 6) if nav is not None else None,
+        "pricing_status": pricing_status,
         "amount": _r(amount),
-        "estimated_fee": _r(est_fee),
-        "estimated_shares": _r(est_shares, 6),
+        "estimated_fee": _r(est_fee) if est_fee is not None else None,
+        "estimated_shares": _r(est_shares, 6) if est_shares is not None else None,
         "status": "pending",
         "cash_after": _r(new_cash),
         "cash_in_transit_after": _r(new_in_transit),
-        "note": "T+1 settle 后份额到账、冻结释放；fee/shares 实际值以 settle 时为准（reference_nav 不变）",
+        "note": "已按 T 日 NAV 锁定成交" if nav is not None else "盘中订单已受理并冻结现金；T 日净值入库后按 T 日 NAV 定价成交",
     }, ensure_ascii=False)
 
 
@@ -1652,7 +1656,7 @@ async def portfolio_place_sell_order(
     校验：
       - 账户存在；持仓存在且 active
       - shares > 0 且 ≤ holding.shares（新机制 shares 实时反映可卖额，pending_sell_shares 保持 0）
-      - trade_date 在 fund_nav 有 nav
+      - trade_date 可暂缺 T 日 NAV；缺失时只冻结 pending_sell_shares，等待净值刷新后定价成交
       - reason 必填：写明为什么现在卖这只基金（缺失直接报错让你补写，进审计日志）
 
     pending_sell_shares 字段保留只是兼容存量旧路径订单，新订单不再用份额冻结。
@@ -1675,13 +1679,31 @@ async def portfolio_place_sell_order(
         if not holding:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无 {fund_code} 的活跃持仓"}, ensure_ascii=False)
         nav = _strict_nav(conn, fund_code, trade_date)
-        if nav is None:
-            return json.dumps({"success": False, "message": f"fund_nav 缺失 ({fund_code}, {trade_date})"}, ensure_ascii=False)
         total_shares = float(holding["shares"] or 0.0)
         already_pending = float(holding["pending_sell_shares"] or 0.0)
         sellable = total_shares - already_pending
         if shares > sellable + 1e-6:
             return json.dumps({"success": False, "message": f"可卖份额不足：want={shares} sellable={sellable:.4f} (total={total_shares:.4f}, pending_sell={already_pending:.4f})"}, ensure_ascii=False)
+        if nav is None:
+            new_pending = already_pending + shares
+            conn.execute(
+                "UPDATE fund_bot_holdings SET pending_sell_shares=?, run_id=? WHERE holding_id=?",
+                (_r(new_pending, 6), run_id, holding["holding_id"])
+            )
+            cur = conn.execute(
+                "INSERT INTO fund_bot_orders "
+                "(review_id, bot_id, fund_code, fund_name, order_type, order_date, confirm_date, "
+                " order_amount, reference_nav, action_reason, status, pricing_status, order_run_id) "
+                "VALUES (NULL, ?, ?, ?, 'sell', ?, NULL, ?, NULL, ?, 'pending', 'awaiting_nav', ?)",
+                (bot_id, fund_code, holding["fund_name"], trade_date, _r(shares, 6), reason or "", run_id)
+            )
+            return json.dumps({
+                "success": True, "order_id": cur.lastrowid, "bot_id": bot_id,
+                "fund_code": fund_code, "trade_date": trade_date, "reference_nav": None,
+                "pricing_status": "awaiting_nav", "shares": _r(shares, 6), "status": "pending",
+                "pending_sell_shares_after": _r(new_pending, 6),
+                "note": "盘中卖出订单已受理并冻结份额；T 日净值入库后按 T 日 NAV 定价成交",
+            }, ensure_ascii=False)
 
         # 赎回费按 lot 自有持有天数算：每个 lot 各自一档费率，T 日就锁死，settle 不重算。
         # FIFO 消耗最老 lot 优先，等价于"优先赎回持有期更长的份额"。
@@ -1779,6 +1801,7 @@ async def portfolio_place_sell_order(
         "fund_code": fund_code,
         "trade_date": trade_date,
         "reference_nav": _r(nav, 6),
+        "pricing_status": "priced",
         "shares": _r(shares, 6),
         "gross": _r(gross),
         "fee": _r(fee),
@@ -2851,9 +2874,13 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
       - holding.shares -= sell_shares; holding.pending_sell_shares -= sell_shares
       - shares→0 → status='closed', exit_date=as_of_date
 
+    待定价订单：
+      - pricing_status='awaiting_nav' 且 reference_nav 为 null 时，settle 会严格读取 order_date 的 T 日 NAV
+      - T 日 NAV 仍缺失则跳过；一旦存在，就写回 reference_nav/pricing_nav_date/priced_at 后继续成交
+
     跳过条件 → 写入 skipped 列表：
       - order.order_date >= as_of_date：T+1 还没到
-      - order.reference_nav 为 null：legacy 订单，新 settle 不处理
+      - order.reference_nav 为 null 且不是 awaiting_nav：legacy 订单，新 settle 不处理
       - sell 找不到对应 active holding"""
     err = _require_run_id(run_id)
     if err:
@@ -2882,6 +2909,18 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 skipped.append({"order_id": oid, "reason": f"T+1 未到 (order_date={order_date} >= as_of={as_of_date})"})
                 continue
             ref_nav = o["reference_nav"]
+            pricing_status = (o["pricing_status"] or "priced") if "pricing_status" in o.keys() else "priced"
+            if ref_nav is None and pricing_status == "awaiting_nav":
+                nav_for_order_date = _strict_nav(conn, fc, order_date)
+                if nav_for_order_date is None:
+                    skipped.append({"order_id": oid, "reason": f"T 日净值未就绪 ({fc}, {order_date})"})
+                    continue
+                ref_nav = nav_for_order_date
+                conn.execute(
+                    "UPDATE fund_bot_orders SET reference_nav=?, pricing_status='priced', "
+                    "pricing_nav_date=?, priced_at=datetime('now') WHERE order_id=?",
+                    (_r(ref_nav, 6), order_date, oid)
+                )
             if ref_nav is None:
                 skipped.append({"order_id": oid, "reason": "legacy order without reference_nav"})
                 continue
@@ -3015,10 +3054,11 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 new_pending = max(0.0, cur_pending - sell_shares)
                 new_shares = cur_shares - sell_shares
                 if new_shares <= 1e-6:
+                    exit_date = order_date if pricing_status == "awaiting_nav" else as_of_date
                     conn.execute(
                         "UPDATE fund_bot_holdings SET status='closed', exit_date=?, shares=0, "
                         "amount_invested=0, pending_sell_shares=0, market_value=0, run_id=? WHERE holding_id=?",
-                        (as_of_date, run_id, holding["holding_id"])
+                        (exit_date, holding_run_id, holding["holding_id"])
                     )
                 else:
                     new_cost = float(holding["amount_invested"] or 0.0) - cost_consumed
@@ -3038,7 +3078,7 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                         "unrealized_pnl=?, unrealized_pnl_pct=?, entry_date=?, run_id=? WHERE holding_id=?",
                         (_r(new_shares, 6), _r(new_pending, 6), _r(new_cost), _r(nav, 6), _r(new_mv),
                          _r(new_mv - new_cost), _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
-                         new_entry_date, run_id, holding["holding_id"])
+                         new_entry_date, holding_run_id, holding["holding_id"])
                     )
                 # 每 lot 一条 REDUCE action（与 place_sell_order 新路径口径一致）。
                 base_reason = (o["action_reason"] or "").strip()
@@ -3054,7 +3094,7 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                         "nav_used, amount, shares, fee, reason, action_date, paradigm, run_id) "
                         "VALUES (?, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (o["review_id"], bot_id, fc, _r(nav, 6), _r(c["gross"]),
-                         _r(c["shares"], 6), _r(c["fee"]), row_reason, order_date, paradigm, run_id)
+                         _r(c["shares"], 6), _r(c["fee"]), row_reason, order_date, paradigm, holding_run_id)
                     )
                 conn.execute(
                     "UPDATE fund_bot_orders SET status='confirmed', confirm_date=?, confirm_nav=?, "

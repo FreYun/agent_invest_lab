@@ -12,6 +12,8 @@ SQLITE3_BIN="${SQLITE3:-sqlite3}"
 OOS_TABLES_SQL="${OOS_TABLES_SQL:-$ROOT_DIR/scripts/sql/oos_bot101_daily.sql}"
 REQUIRE_PREV_TRADING="${REQUIRE_PREV_TRADING:-1}"
 REQUIRE_TARGET_TRADING="${REQUIRE_TARGET_TRADING:-1}"
+# 14:30 盘中实盘决策模式：默认目标日取系统当天；非交易日仍由 REQUIRE_TARGET_TRADING 跳过。
+OOS_BOT101_INTRADAY="${OOS_BOT101_INTRADAY:-0}"
 # 护栏：驱动单次 wall-clock 上限(超时强杀，防 node 收尾偶发卡死)；flock 被占超过 MAX_LOCK_AGE 秒
 # 视为卡死 run（正常 run ~7-15min），连根杀掉抢占——避免一个僵尸 run 无声饿死之后每天的 run。
 MAX_DRIVER_SECONDS="${MAX_DRIVER_SECONDS:-1200}"
@@ -45,11 +47,16 @@ is_trading_day() {
   node -e 'const fs=require("fs"); const cal=new Set(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).trading_days); process.exit(cal.has(process.argv[2]) ? 0 : 1)' "$CALENDAR_PATH" "$1"
 }
 
-# 无显式日期时取 calendar 最新交易日（数据已就绪的 T 日），而不是系统当天。
-# 系统当天 08:00 盘前既无数据也不在 calendar，driver 必报错——这是旧版每天 skip 的根因。
+# 无显式日期时：
+#   - 旧早盘/T+1 模式取 calendar 最新交易日（数据已就绪的 T 日）
+#   - 14:30 盘中模式取系统当天；当天 NAV 尚未出，订单由 awaiting_nav → 净值刷新后定价
 TRADE_DATE="${1:-${TRADE_DATE:-}}"
 if [[ -z "$TRADE_DATE" ]]; then
-  TRADE_DATE="$(latest_trade_date "$(today_date)")" || { echo "no trading day <= $(today_date) in calendar $CALENDAR_PATH" >&2; exit 2; }
+  if [[ "$OOS_BOT101_INTRADAY" == "1" ]]; then
+    TRADE_DATE="$(today_date)"
+  else
+    TRADE_DATE="$(latest_trade_date "$(today_date)")" || { echo "no trading day <= $(today_date) in calendar $CALENDAR_PATH" >&2; exit 2; }
+  fi
 fi
 if [[ ! "$TRADE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   echo "bad TRADE_DATE: $TRADE_DATE" >&2

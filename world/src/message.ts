@@ -48,6 +48,9 @@ export interface DailyMessageContext {
   // 用：替代旧的 skill 注入自跑流水线——主线/regime/组合骨架由系统预生成，bot 直接消费、不自己识别。
   // 由 run.ts 从 fund.db 的 market_reports 表读出填充。空/缺省 → 跳过整块。
   marketReports?: { context: string; mainline: string; rotation: string; macroNews?: string }
+  // 系统在 chat 前预取的盘中实时行情块。仅同一天 14:30 一类实盘 OOS 决策注入；
+  // 历史回测 / T+1 早盘跑昨日时为空，避免把 host 当天实时行情污染历史世界日。
+  intradayMarketBlock?: string
   // 末条 standing belief 的关键 horizon 上涨概率（t+5 / t+20 的 p_up），由 caller 从
   // buildBeliefContext 一并取出（同一次扫盘，不二次 IO）。用于「belief ↔ 仓位 言行一致」核对块：
   // bot 上次说看多却空仓 / 说看空却重仓 = 言行不一，每天硬拦。null/缺省（无历史 belief）→ 不核对。
@@ -681,6 +684,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
     : ''
   // History window 放在 daily message 的最顶部——它已经包含自己的"【交易记忆窗口】"标头，
   // 直接拼到 rules block 之前即可。空串（Day 1 / 无 prior session）→ 跳过。
+  const intraday = ctx.intradayMarketBlock && ctx.intradayMarketBlock.trim() ? ctx.intradayMarketBlock : ""
   const history = ctx.historyWindow && ctx.historyWindow.trim() ? `${ctx.historyWindow.trim()}\n\n` : ''
   // Belief block 由 caller (run.ts) 先 await buildBeliefContext(...) 渲染成完整字符串塞进来；
   // 已自带 header / schema 要求 / 21d 校准反馈，本函数只前置两个换行做分隔即可。空/缺省 → 跳过。
@@ -688,7 +692,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${buyable}${pipelineBlock}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${buyable}${pipelineBlock}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -701,5 +705,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${buyable}${pipelineBlock}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${buyable}${pipelineBlock}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${coherence}${review}\n`
 }

@@ -16,6 +16,7 @@ import { createMemoryServer, type MemoryServerHandle } from './memory-server/ser
 import { createSimworldProxy, HIDDEN_TOOLS, type SimworldProxyHandle } from './simworld-proxy/server.ts'
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
 import { createStrategyServer, type StrategyServerHandle, runSqlite, sqlStr } from './strategy-server/server.ts'
+import { fetchIntradayQuoteBlock } from './intraday-market.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
 import * as P from './paths.ts'
@@ -1148,6 +1149,20 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           }
           periodInfo = { tradingDays: periodTradingDays, sinceDate: periodSinceDate, benchMovePct }
         }
+        const kind = botKindOf(b.botId)
+        const marketReports = kind === "multi-fund"
+          ? readMarketReportsForInjection(P.fundDbFile(worldRoot), date)
+          : undefined
+        let intradayMarketBlock = ""
+        if (!config.reporterMode && kind === "multi-fund" && marketReports) {
+          const rt = await fetchIntradayQuoteBlock({ repoRoot: resolve(worldRoot, "..", ".."), date, reports: marketReports })
+          if (rt.block) {
+            intradayMarketBlock = rt.block
+            log(worldRoot, runId, "[intraday-market] bot " + b.botId + " " + date + ": injected " + rt.instruments.length + " instruments")
+          } else if (rt.error) {
+            log(worldRoot, runId, "[intraday-market] bot " + b.botId + " " + date + ": skipped after fetch error: " + rt.error)
+          }
+        }
         // reporter 模式：daily message 极简——研究员的任务（产出哪份研报、读哪些上游、怎么 submit）
         // 已全在其 AGENTS.md/METHODOLOGY.md（splice 进 system prompt）里写死。不注入持仓/buyable/
         // 交易规则/行情预取，避免把研究员当交易员。**不含日期**（PIT：reporter 不该知道世界日）。
@@ -1160,10 +1175,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           buyableFundCodes: botBuyableFundCodes,
           injectedSkills: readInjectedPipelineSkills(worldRoot, runId, b.botId),
           // 系统预读注入三份市场研报：仅多基金权益 bot（multi-fund，bot101/102/103）——与 message.ts
-          // 的注入分流口径一致（botKindOf）；single-fund / multi-asset 不读、不注入，省一次 DB 查询。
-          marketReports: botKindOf(b.botId) === 'multi-fund'
-            ? readMarketReportsForInjection(P.fundDbFile(worldRoot), date)
-            : undefined,
+          // 的注入分流口径一致；single-fund / multi-asset 不读、不注入，省一次 DB 查询。
+          marketReports,
+          intradayMarketBlock,
           dailyContext,
           historyWindow,
           beliefBlock,

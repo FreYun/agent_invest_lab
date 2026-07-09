@@ -489,3 +489,135 @@ def test_place_buy_cannot_use_cash_receivable(reload_server):
         trade_date="2026-05-11", reason="", run_id="run-T",
     )))
     assert not resp["success"], "cash=0 时即使有 receivable 也不能买"
+
+
+# =============================================================================
+#  盘中无 T 日 NAV：先接单，NAV 入库后按 T 日净值定价
+# =============================================================================
+
+def test_intraday_buy_without_t_nav_prices_after_nav_arrives(reload_server):
+    bot_id, fund, run_id = "botIB", "000888", "run-T"
+    s = reload_server
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_fund(conn, fund)
+        _seed_account(conn, bot_id, cash=100_000.0, initial=100_000.0, run_id=run_id)
+        conn.commit()
+
+    resp = json.loads(asyncio.run(s.portfolio_place_buy_order(
+        bot_id=bot_id, fund_code=fund, amount=10_000.0,
+        trade_date="2026-05-11", reason="intraday buy", run_id=run_id,
+    )))
+    assert resp["success"], resp
+    assert resp["reference_nav"] is None
+    assert resp["pricing_status"] == "awaiting_nav"
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        order = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id=?", (bot_id,))
+        acc = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id=?", (bot_id,))
+    assert order["reference_nav"] is None
+    assert order["pricing_status"] == "awaiting_nav"
+    assert abs(acc["cash"] - 90_000.0) < 1e-6
+    assert abs(acc["cash_in_transit"] - 10_000.0) < 1e-6
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_nav(conn, fund, "2026-05-11", 2.00)
+        conn.commit()
+
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id=bot_id, as_of_date="2026-05-12", run_id="run-T1",
+    )))
+    assert settled["success"], settled
+    assert settled["settled"][0]["nav"] == 2.0
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        order = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id=?", (bot_id,))
+        holding = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id=?", (bot_id,))
+        action = _row(conn, "SELECT * FROM fund_bot_actions WHERE bot_id=?", (bot_id,))
+        acc = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id=?", (bot_id,))
+    assert order["status"] == "confirmed"
+    assert order["reference_nav"] == 2.0
+    assert order["pricing_status"] == "priced"
+    assert order["pricing_nav_date"] == "2026-05-11"
+    assert order["settle_run_id"] == "run-T1"
+    assert abs(order["confirmed_shares"] - 5000.0) < 1e-6
+    assert holding["run_id"] == run_id
+    assert abs(holding["shares"] - 5000.0) < 1e-6
+    assert action["action_date"] == "2026-05-11"
+    assert action["run_id"] == run_id
+    assert abs(acc["cash_in_transit"]) < 1e-6
+
+
+def test_intraday_sell_without_t_nav_freezes_then_prices_after_nav_arrives(reload_server):
+    bot_id, fund, run_id = "botIS", "000889", "run-T"
+    s = reload_server
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_fund(conn, fund)
+        _seed_nav(conn, fund, "2026-04-10", 1.00)
+        _seed_account(conn, bot_id, cash=0.0, initial=10_000.0, run_id=run_id)
+        cur = conn.execute(
+            "INSERT INTO fund_bot_holdings "
+            "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
+            " shares, pending_sell_shares, amount_invested, market_value, status, run_id) "
+            "VALUES (?, ?, '测试基金', '股票类', 'core', '2026-04-10', 1.00, 1.00, "
+            " 10000, 0, 10000, 10000, 'active', ?)",
+            (bot_id, fund, run_id),
+        )
+        holding_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO fund_bot_holding_lots "
+            "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, "
+            " shares_initial, shares_remaining, cost_initial, cost_remaining, "
+            " source_order_id, status) "
+            "VALUES (?, ?, ?, ?, '2026-04-10', 1.00, 10000, 10000, 10000, 10000, NULL, 'open')",
+            (bot_id, fund, run_id, holding_id),
+        )
+        conn.commit()
+
+    resp = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id=bot_id, fund_code=fund, shares=3000.0,
+        trade_date="2026-05-11", reason="intraday sell", run_id=run_id,
+    )))
+    assert resp["success"], resp
+    assert resp["reference_nav"] is None
+    assert resp["pricing_status"] == "awaiting_nav"
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        holding = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id=?", (bot_id,))
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id=?", (bot_id,))
+    assert abs(holding["shares"] - 10000.0) < 1e-6
+    assert abs(holding["pending_sell_shares"] - 3000.0) < 1e-6
+    assert actions == []
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_nav(conn, fund, "2026-05-11", 1.20)
+        conn.commit()
+
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id=bot_id, as_of_date="2026-05-12", run_id="run-T1",
+    )))
+    assert settled["success"], settled
+    assert settled["settled"][0]["settled_via"] == "legacy"
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        holding = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id=?", (bot_id,))
+        order = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id=?", (bot_id,))
+        action = _row(conn, "SELECT * FROM fund_bot_actions WHERE bot_id=?", (bot_id,))
+        acc = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id=?", (bot_id,))
+    assert holding["run_id"] == run_id
+    assert abs(holding["shares"] - 7000.0) < 1e-6
+    assert abs(holding["pending_sell_shares"]) < 1e-6
+    assert order["status"] == "confirmed"
+    assert order["reference_nav"] == 1.2
+    assert order["pricing_status"] == "priced"
+    assert order["pricing_nav_date"] == "2026-05-11"
+    assert abs(order["confirmed_amount"] - 3600.0) < 1e-3
+    assert action["action_date"] == "2026-05-11"
+    assert action["run_id"] == run_id
+    assert abs(action["shares"] - 3000.0) < 1e-6
+    assert abs(acc["cash"] - 3600.0) < 1e-3

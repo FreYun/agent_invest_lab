@@ -187,6 +187,9 @@ CREATE TABLE IF NOT EXISTS fund_bot_orders (
     fee                 REAL,
     action_reason       TEXT,
     status              TEXT DEFAULT 'pending',
+    pricing_status      TEXT DEFAULT 'priced',
+    pricing_nav_date    TEXT,
+    priced_at           TEXT,
     order_run_id        TEXT,
     settle_run_id       TEXT,
     created_at          TEXT DEFAULT (datetime('now'))
@@ -501,6 +504,16 @@ def _migrate_perf_annualized_columns(conn):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN annualized_return_pct REAL")
 
 
+def _migrate_order_pricing_columns(conn):
+    """订单定价状态列：支持盘中先接单，T 日 NAV 入库后再按 T 日净值成交。"""
+    if not _column_exists(conn, "fund_bot_orders", "pricing_status"):
+        conn.execute("ALTER TABLE fund_bot_orders ADD COLUMN pricing_status TEXT DEFAULT 'priced'")
+    if not _column_exists(conn, "fund_bot_orders", "pricing_nav_date"):
+        conn.execute("ALTER TABLE fund_bot_orders ADD COLUMN pricing_nav_date TEXT")
+    if not _column_exists(conn, "fund_bot_orders", "priced_at"):
+        conn.execute("ALTER TABLE fund_bot_orders ADD COLUMN priced_at TEXT")
+
+
 def _migrate_run_id_columns(conn):
     """7 张执行表加 run_id 审计字段。
        - 5 张直接 ALTER TABLE ADD COLUMN（旧行 NULL）。
@@ -580,6 +593,7 @@ def init_db():
     _migrate_paradigm_columns(conn)
     _migrate_freeze_columns(conn)
     _migrate_perf_annualized_columns(conn)
+    _migrate_order_pricing_columns(conn)
     _migrate_run_id_columns(conn)
     conn.commit()
     conn.close()

@@ -87,12 +87,19 @@ fi
 
 echo "[$(date '+%F %T')] nav refresh start run_id=$RUN_ID nav_max=$NAV_MAX window=${DATES[0]}..${DATES[-1]} (${#DATES[@]} trading days)"
 
-# 两遍走：先把整个窗口结算+重算完，再统一镜像。镜像不能跟在每天后面——
-# D+1 的 settle 会改 D 日订单的 status/confirm_date，若 D 日已先镜像就会停在 pending。
+# 三遍走：
+#   1) 先把窗口内可收口的 pending 单全部 settle。注意 T 日订单要等 T+1 才满足
+#      order_date < as_of_date；净值刷新脚本通常在 T+1 早晨跑，所以 as_of 用系统今天，
+#      让最新 NAV_MAX=T 的订单也能在 T 日 NAV 入库后定价。
+#   2) 再统一重算窗口快照。这样 T+1 settle 写回的 T 日 action 会被 T 日快照吃到。
+#   3) 最后统一镜像。镜像不能跟在每天后面——D+1 的 settle 会改 D 日订单的
+#      status/confirm_date，若 D 日已先镜像就会停在 pending。
+SETTLE_AS_OF="${SETTLE_AS_OF:-$(date +%F)}"
+"$PYTHON" "$CLI" settle_pending_orders --bot-id "$BOT_ID" --run-id "$RUN_ID" --as-of-date "$SETTLE_AS_OF" >/dev/null
+echo "[$(date "+%F %T")]   pending settled as_of=$SETTLE_AS_OF"
 for D in "${DATES[@]}"; do
-  "$PYTHON" "$CLI" settle_pending_orders --bot-id "$BOT_ID" --run-id "$RUN_ID" --as-of-date "$D" >/dev/null
   "$PYTHON" "$CLI" close_my_day          --bot-id "$BOT_ID" --run-id "$RUN_ID" --trade-date "$D" >/dev/null
-  echo "[$(date '+%F %T')]   $D settled + snapshot recomputed"
+  echo "[$(date "+%F %T")]   $D snapshot recomputed"
 done
 for D in "${DATES[@]}"; do
   mirror_oos_results_for_date "$D"
