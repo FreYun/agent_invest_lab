@@ -31,6 +31,7 @@ fi
 RUN_ID="${RUN_ID:-market-reports-daily-${TRADE_DATE}}"
 OUT_DIR="${OUT_DIR:-runtime-market-reports-daily}"
 RETRIES="${RETRIES:-2}"
+CONFIG_PATH="${CONFIG_PATH:-config/world-market-reports.yaml}"
 
 missing="$(missing_reports)"
 if [[ -z "$missing" ]]; then
@@ -40,7 +41,7 @@ fi
 
 cd "$WORLD_DIR"
 node --experimental-strip-types src/market-reports/prepass-driver.ts \
-  --config config/world-market-reports.yaml \
+  --config "$CONFIG_PATH" \
   --from "$TRADE_DATE" \
   --to "$TRADE_DATE" \
   --freq daily \

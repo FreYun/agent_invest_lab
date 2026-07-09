@@ -47,6 +47,52 @@ is_trading_day() {
   node -e 'const fs=require("fs"); const cal=new Set(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).trading_days); process.exit(cal.has(process.argv[2]) ? 0 : 1)' "$CALENDAR_PATH" "$1"
 }
 
+is_weekday() {
+  node -e 'const d=new Date(`${process.argv[1]}T00:00:00+08:00`); const day=d.getDay(); process.exit(day >= 1 && day <= 5 ? 0 : 1)' "$1"
+}
+
+make_intraday_calendar() {
+  local target="$1"
+  local tmp_dir="$2"
+  local tmp_calendar="$tmp_dir/calendar.json"
+  node -e '
+const fs = require("fs");
+const src = process.argv[1], dst = process.argv[2], target = process.argv[3];
+const doc = JSON.parse(fs.readFileSync(src, "utf8"));
+const days = Array.isArray(doc.trading_days) ? [...doc.trading_days] : [];
+if (!days.includes(target)) {
+  days.push(target);
+  days.sort();
+}
+doc.trading_days = days;
+fs.writeFileSync(dst, JSON.stringify(doc, null, 2) + String.fromCharCode(10));
+' "$CALENDAR_PATH" "$tmp_calendar" "$target"
+  echo "$tmp_calendar"
+}
+
+make_intraday_config() {
+  local tmp_dir="$1"
+  local tmp_calendar="$2"
+  local src_config="$3"
+  local tmp_config="$tmp_dir/$(basename "${src_config%.yaml}").intraday.yaml"
+  node -e '
+const fs = require("fs");
+const src = process.argv[1], dst = process.argv[2], cal = process.argv[3];
+const lines = fs.readFileSync(src, "utf8").split(/\r?\n/);
+let done = false;
+for (let i = 0; i < lines.length; i++) {
+  if (/^calendar:\s*/.test(lines[i])) {
+    lines[i] = `calendar: ${JSON.stringify(cal)}`;
+    done = true;
+    break;
+  }
+}
+if (!done) lines.unshift(`calendar: ${JSON.stringify(cal)}`);
+fs.writeFileSync(dst, lines.join(String.fromCharCode(10)));
+' "$src_config" "$tmp_config" "$tmp_calendar"
+  echo "$tmp_config"
+}
+
 # 无显式日期时：
 #   - 旧早盘/T+1 模式取 calendar 最新交易日（数据已就绪的 T 日）
 #   - 14:30 盘中模式取系统当天；当天 NAV 尚未出，订单由 awaiting_nav → 净值刷新后定价
@@ -73,9 +119,25 @@ if [[ "$REQUIRE_PREV_TRADING" == "1" ]] && ! prev_trade_date "$TRADE_DATE" >/dev
   echo "[$(date '+%F %T')] skip: no prior trading day before $TRADE_DATE in calendar"
   exit 0
 fi
+INTRADAY_TMP_DIR=""
+DRIVER_CONFIG="$WORLD_DIR/config/world-multi-fund-backtest.yaml"
+PREPASS_CONFIG="config/world-market-reports.yaml"
 if [[ "$REQUIRE_TARGET_TRADING" == "1" ]] && ! is_trading_day "$TRADE_DATE"; then
-  echo "[$(date '+%F %T')] skip: target day $TRADE_DATE is not a trading day"
-  exit 0
+  if [[ "$OOS_BOT101_INTRADAY" == "1" ]]; then
+    if ! is_weekday "$TRADE_DATE"; then
+      echo "[$(date '+%F %T')] skip: intraday target day $TRADE_DATE is weekend and absent from calendar"
+      exit 0
+    fi
+    INTRADAY_TMP_DIR="$(mktemp -d /tmp/oos-bot101-intraday-calendar.XXXXXX)"
+    trap '[[ -n "${INTRADAY_TMP_DIR:-}" ]] && rm -rf "$INTRADAY_TMP_DIR"' EXIT
+    INTRADAY_CALENDAR_PATH="$(make_intraday_calendar "$TRADE_DATE" "$INTRADAY_TMP_DIR")"
+    DRIVER_CONFIG="$(make_intraday_config "$INTRADAY_TMP_DIR" "$INTRADAY_CALENDAR_PATH" "$WORLD_DIR/config/world-multi-fund-backtest.yaml")"
+    PREPASS_CONFIG="$(make_intraday_config "$INTRADAY_TMP_DIR" "$INTRADAY_CALENDAR_PATH" "$WORLD_DIR/config/world-market-reports.yaml")"
+    echo "[$(date '+%F %T')] WARN: intraday target day $TRADE_DATE absent from close-data calendar; using temporary calendar $INTRADAY_CALENDAR_PATH"
+  else
+    echo "[$(date '+%F %T')] skip: target day $TRADE_DATE is not a trading day"
+    exit 0
+  fi
 fi
 
 mkdir -p "$LOG_DIR"
@@ -145,7 +207,7 @@ summary() {
 }
 
 status=failed
-trap 'summary "$status"' EXIT
+trap '[[ -n "${INTRADAY_TMP_DIR:-}" ]] && rm -rf "$INTRADAY_TMP_DIR"; summary "$status"' EXIT
 
 ensure_oos_tables
 
@@ -154,7 +216,7 @@ echo "[$(date '+%F %T')] OOS bot101 daily start date=$TRADE_DATE live_run_id=$RU
 # 研报有午夜批预生成兜底在库，且 bot 走 get_market_report 的 PIT 提取（取 as_of<=世界日的最新一期），
 # 缺当日某份最多回退到前一日；bot 的「当日决策」才是难复算的核心产物，绝不能被一份研报连坐掐掉。
 prepass_rc=0
-RUN_ID="market-reports-daily-${TRADE_DATE}" "$ROOT_DIR/scripts/run-oos-market-reports-daily.sh" "$TRADE_DATE" || prepass_rc=$?
+RUN_ID="market-reports-daily-${TRADE_DATE}" CALENDAR_PATH="${INTRADAY_CALENDAR_PATH:-$CALENDAR_PATH}" CONFIG_PATH="$PREPASS_CONFIG" "$ROOT_DIR/scripts/run-oos-market-reports-daily.sh" "$TRADE_DATE" || prepass_rc=$?
 if [[ "$prepass_rc" != "0" ]]; then
   echo "[$(date '+%F %T')] WARN: prepass(market-reports) rc=$prepass_rc —— 某份研报可能缺/未更新；继续跑 bot 决策（bot 走 PIT 读 DB，午夜批兜底）" >&2
 fi
@@ -179,7 +241,7 @@ driver_rc=0
     node --experimental-strip-types src/oos-daily-driver.ts \
     --date "$TRADE_DATE" \
     --run-id "$RUN_ID" \
-    --config config/world-multi-fund-backtest.yaml \
+    --config "$DRIVER_CONFIG" \
     --world-dir runtime
 ) || driver_rc=$?
 if [[ "$driver_rc" == "124" || "$driver_rc" == "137" ]]; then
