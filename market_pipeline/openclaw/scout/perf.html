@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>策略累计表现</title>
+<style>
+  :root{
+    --bg:#eef4fd; --panel:#ffffff; --panel2:#eef3fb; --bd:#e2eaf4;
+    --fg:#22324c; --mut:#7c8aa3; --up:#ef4848; --dn:#15a35a; --flat:#9aa7bd;
+    --blue:#2f86d6; --gold:#cf8a17; --acc:#6f5ad6;
+    --shadow:0 1px 2px rgba(40,84,150,.06),0 8px 24px rgba(40,84,150,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:var(--bg) linear-gradient(180deg,#d7e7fb 0%,#e9f1fd 240px,var(--bg) 520px) no-repeat;color:var(--fg);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  a{color:var(--blue);text-decoration:none}
+  .wrap{max-width:1480px;margin:0 auto;padding:12px}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .topbar h1{font-size:17px;margin:0}
+  .panel{background:var(--panel);border:1px solid var(--bd);border-radius:12px;margin-bottom:12px;box-shadow:var(--shadow)}
+  .ph{padding:9px 12px;border-bottom:1px solid var(--bd);font-weight:700;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+  .ph small{color:var(--mut);font-weight:400}
+  .ranges{display:flex;gap:6px}
+  .rbtn{background:var(--panel2);border:1px solid var(--bd);border-radius:14px;padding:3px 12px;cursor:pointer;color:var(--mut);user-select:none}
+  .rbtn.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;padding:8px 12px}
+  .lg{display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;font-size:12px}
+  .lg .sw{width:12px;height:3px;border-radius:2px}
+  .lg.off{opacity:.35;text-decoration:line-through}
+  .chart-wrap{padding:6px 12px 12px;position:relative}
+  svg{display:block;width:100%;height:auto}
+  .grid{stroke:#e6eef8;stroke-width:1}
+  .axis{fill:var(--mut);font-size:10px}
+  .navline{fill:none;stroke-width:1.6}
+  .navline.live{stroke-dasharray:4 3}
+  .benchline{fill:none;stroke-width:1;stroke-dasharray:2 2}
+  .hovl{stroke:#9fb3cd;stroke-width:1}
+  .tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--bd);border-radius:7px;padding:7px 9px;font-size:11.5px;display:none;z-index:5;min-width:120px;box-shadow:var(--shadow)}
+  .tip .td{color:var(--mut);margin-bottom:3px}
+  .tip .row{display:flex;justify-content:space-between;gap:12px}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th,td{padding:6px 9px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--bd)}
+  th{color:var(--mut);font-weight:600;font-size:11px}
+  td.l,th.l{text-align:left}
+  .pos{color:var(--up)} .neg{color:var(--dn)}
+  .stag{display:inline-block;min-width:22px;text-align:center;border-radius:5px;padding:1px 5px;font-size:11px;color:#fff}
+  .cols2{display:grid;grid-template-columns:1.4fr 1fr;gap:12px}
+  @media(max-width:1000px){.cols2{grid-template-columns:1fr}}
+  .bar{display:flex;height:16px;border-radius:4px;overflow:hidden;min-width:120px}
+  .bar i{display:block;height:100%}
+  .barlbl{display:flex;gap:10px;font-size:11px;color:var(--mut);margin-top:3px}
+  .empty{color:var(--mut);padding:18px;text-align:center}
+  .foot{color:var(--mut);font-size:11px;line-height:1.7;padding:4px 2px 20px}
+  .msel{background:var(--panel2);border:1px solid var(--bd);color:var(--fg);border-radius:6px;padding:2px 8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1>盘中实时选股看板 · 策略累计表现</h1>
+    <a href="/">← 盯盘</a>
+  </div>
+
+  <div class="panel">
+    <div class="ph">
+      <span>多策略净值曲线 <small id="navmeta"></small></span>
+      <span class="ranges" id="ranges">
+        <span class="rbtn" data-r="3m">近3月</span>
+        <span class="rbtn on" data-r="1y">近1年</span>
+        <span class="rbtn" data-r="all">全历史</span>
+      </span>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="chart-wrap">
+      <div id="chart"><div class="empty">加载中…</div></div>
+      <div class="tip" id="tip"></div>
+    </div>
+  </div>
+
+  <div class="cols2">
+    <div class="panel">
+      <div class="ph">策略统计表 <small>全历史</small></div>
+      <div style="overflow:auto"><table id="stats"></table></div>
+    </div>
+    <div class="panel">
+      <div class="ph">退出原因分布 <small>全历史</small></div>
+      <div id="exits" style="padding:10px 12px"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="ph">
+      <span>月度收益</span>
+      <select class="msel" id="mstrat"></select>
+    </div>
+    <div class="chart-wrap"><div id="monthly"><div class="empty">—</div></div></div>
+  </div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const PALETTE={s1:"#2f86d6",s2:"#6f5ad6",s3:"#cf8a17",s4:"#15a35a",s5:"#ef4848",s6:"#0e9aa7",s7:"#e8590c"};
+const SNAME={s1:"平台突破",s2:"龙头板接力",s3:"首板接力",s4:"回踩",s5:"龙回头",s6:"趋势持有",s7:"超跌反弹"};
+const BENCH={"000300.SH":{c:"#6e7681",n:"沪深300"},"000852.SH":{c:"#aab3c0",n:"中证1000"}};
+let DATA=null, RANGE="1y", HIDDEN=new Set(), MSTRAT=null;
+
+const parseD = s => new Date(s+"T00:00:00").getTime();
+const fmtPct = v => v==null?"—":(v>=0?"+":"")+(v*100).toFixed(1)+"%";
+const fmtNum = (v,d=2)=> v==null?"—":(+v).toFixed(d);
+
+function rangeStart(){
+  if(RANGE==="all") return "0000-00-00";
+  const ref=DATA.meta.trade_today||DATA.meta.latest_t_date;
+  if(!ref) return "0000-00-00";
+  const d=new Date(ref+"T00:00:00");
+  d.setMonth(d.getMonth()-(RANGE==="3m"?3:12));
+  return d.toISOString().slice(0,10);
+}
+const clip = ser => { const s=rangeStart(); return (ser||[]).filter(p=>p[0]>=s); };
+function normBench(ser){ const c=clip(ser); if(!c.length) return []; const base=c[0][1]; return c.map(p=>[p[0],p[1]/base]); }
+
+function visibleStrats(){ return Object.keys(DATA.strategies).filter(s=>!HIDDEN.has(s)); }
+
+async function load(){
+  try{ DATA = await (await fetch("/api/perf",{cache:"no-store"})).json(); }
+  catch(e){ document.getElementById("chart").innerHTML='<div class="empty">加载失败: '+e+'</div>'; return; }
+  if(DATA.error){ document.getElementById("chart").innerHTML='<div class="empty">'+DATA.error+'</div>'; return; }
+  DATA.strategies = DATA.strategies || {};
+  DATA.benchmarks = DATA.benchmarks || {};
+  if(MSTRAT===null){
+    const ks=Object.keys(DATA.strategies);
+    MSTRAT = ks.sort((a,b)=>(DATA.strategies[b].stats.total_ret||-9)-(DATA.strategies[a].stats.total_ret||-9))[0]||null;
+  }
+  renderLegend(); renderChart(); renderStats(); renderExits(); renderMonthlySel(); renderMonthly(); renderFoot();
+}
+
+function renderLegend(){
+  const el=document.getElementById("legend");
+  let h="";
+  for(const s of Object.keys(DATA.strategies)){
+    h+=`<span class="lg ${HIDDEN.has(s)?'off':''}" data-s="${s}"><span class="sw" style="background:${PALETTE[s]}"></span>${s.toUpperCase()} ${SNAME[s]||''}</span>`;
+  }
+  for(const b of Object.keys(DATA.benchmarks||{})){
+    h+=`<span class="lg" data-b="${b}"><span class="sw" style="background:${BENCH[b]?BENCH[b].c:'#888'}"></span>${BENCH[b]?BENCH[b].n:b}</span>`;
+  }
+  el.innerHTML=h;
+  el.querySelectorAll(".lg[data-s]").forEach(g=>g.onclick=()=>{
+    const s=g.dataset.s; HIDDEN.has(s)?HIDDEN.delete(s):HIDDEN.add(s);
+    renderLegend(); renderChart(); renderStats();
+  });
+}
+
+function renderChart(){
+  const W=1400,H=440,PAD={l:52,r:14,t:14,b:26};
+  const series=[];
+  for(const s of visibleStrats()){
+    const nav=clip(DATA.strategies[s].nav);
+    if(nav.length) series.push({key:s,color:PALETTE[s],pts:nav,live:DATA.strategies[s].today_live});
+  }
+  if(!series.length){ document.getElementById("chart").innerHTML='<div class="empty">该区间无数据</div>'; return; }
+  // 重新归一化: 每条线以区间首点为 1.0, 便于公平对比
+  series.forEach(o=>{ const b=o.pts[0][1]||1; o.pts=o.pts.map(p=>[p[0],p[1]/b]); if(o.live && o.live.mean_ret!=null){o.liveNav=(o.pts[o.pts.length-1][1])*(1+o.live.mean_ret/100);} });
+  const benches=[];
+  for(const b of Object.keys(DATA.benchmarks||{})){ const ser=normBench(DATA.benchmarks[b]); if(ser.length) benches.push({key:b,color:BENCH[b]?BENCH[b].c:'#888',pts:ser}); }
+
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  const scan=pts=>pts.forEach(p=>{const x=parseD(p[0]); if(x<x0)x0=x; if(x>x1)x1=x; if(p[1]<y0)y0=p[1]; if(p[1]>y1)y1=p[1];});
+  series.forEach(o=>{scan(o.pts); if(o.liveNav!=null){y0=Math.min(y0,o.liveNav);y1=Math.max(y1,o.liveNav);}});
+  benches.forEach(o=>scan(o.pts));
+  if(x0===x1)x1=x0+86400000;
+  const pad=(y1-y0)*0.08||0.05; y0-=pad; y1+=pad;
+  const xs=d=>PAD.l+(parseD(d)-x0)/(x1-x0)*(W-PAD.l-PAD.r);
+  const xsT=t=>PAD.l+(t-x0)/(x1-x0)*(W-PAD.l-PAD.r);
+  const ys=v=>H-PAD.b-(v-y0)/(y1-y0)*(H-PAD.t-PAD.b);
+  const dpath=pts=>pts.map((p,i)=>(i?"L":"M")+xs(p[0]).toFixed(1)+" "+ys(p[1]).toFixed(1)).join(" ");
+
+  let svg=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" id="navsvg">`;
+  // y 网格 + 刻度
+  const TICKS=5;
+  for(let i=0;i<=TICKS;i++){ const v=y0+(y1-y0)*i/TICKS, y=ys(v);
+    svg+=`<line class="grid" x1="${PAD.l}" y1="${y.toFixed(1)}" x2="${W-PAD.r}" y2="${y.toFixed(1)}"/>`;
+    svg+=`<text class="axis" x="${PAD.l-6}" y="${(y+3).toFixed(1)}" text-anchor="end">${v.toFixed(2)}</text>`; }
+  // x 刻度 (首/中/尾)
+  [0,0.5,1].forEach(f=>{ const t=x0+(x1-x0)*f, d=new Date(t).toISOString().slice(0,10);
+    svg+=`<text class="axis" x="${xsT(t).toFixed(1)}" y="${H-8}" text-anchor="${f===0?'start':f===1?'end':'middle'}">${d}</text>`; });
+  // 基准
+  benches.forEach(o=>{ svg+=`<path class="benchline" stroke="${o.color}" d="${dpath(o.pts)}"/>`; });
+  // 策略线 + 今日盘中虚线延伸
+  series.forEach(o=>{
+    svg+=`<path class="navline" stroke="${o.color}" d="${dpath(o.pts)}"/>`;
+    if(o.liveNav!=null){ const last=o.pts[o.pts.length-1];
+      svg+=`<path class="navline live" stroke="${o.color}" d="M${xs(last[0]).toFixed(1)} ${ys(last[1]).toFixed(1)} L${(W-PAD.r).toFixed(1)} ${ys(o.liveNav).toFixed(1)}"/>`;
+      svg+=`<circle cx="${(W-PAD.r).toFixed(1)}" cy="${ys(o.liveNav).toFixed(1)}" r="3" fill="${o.color}"/>`; }
+  });
+  // s8 今日孤立点
+  if(DATA.s8_today){ const yv=DATA.s8_today.nav; if(yv>=y0&&yv<=y1){
+    svg+=`<circle cx="${(W-PAD.r).toFixed(1)}" cy="${ys(yv).toFixed(1)}" r="4" fill="none" stroke="#cf8a17" stroke-width="1.5"/>`;
+    svg+=`<text class="axis" x="${(W-PAD.r-6).toFixed(1)}" y="${(ys(yv)-6).toFixed(1)}" text-anchor="end" fill="#cf8a17">S8今日</text>`; }}
+  svg+=`<line class="hovl" id="hovl" x1="0" y1="${PAD.t}" x2="0" y2="${H-PAD.b}" style="display:none"/>`;
+  svg+=`<rect id="hovr" x="${PAD.l}" y="${PAD.t}" width="${W-PAD.l-PAD.r}" height="${H-PAD.t-PAD.b}" fill="transparent"/>`;
+  svg+=`</svg>`;
+  document.getElementById("chart").innerHTML=svg;
+  document.getElementById("navmeta").textContent=`${series.length} 策略 · 各线区间首日归一 1.0 · 数据 ${DATA.meta.latest_t_date||"—"}`;
+  bindHover(series, xs, x0, x1, W, PAD);
+}
+
+function bindHover(series, xs, x0, x1, W, PAD){
+  const svg=document.getElementById("navsvg"), hovl=document.getElementById("hovl"),
+        rect=document.getElementById("hovr"), tip=document.getElementById("tip");
+  if(!svg||!rect) return;
+  const alldates=[...new Set(series.flatMap(o=>o.pts.map(p=>p[0])))].sort();
+  rect.addEventListener("mousemove",ev=>{
+    const r=svg.getBoundingClientRect();
+    const px=(ev.clientX-r.left)/r.width*W;
+    const t=x0+(px-PAD.l)/(W-PAD.l-PAD.r)*(x1-x0);
+    // 最近日期
+    let best=alldates[0],bd=1e18;
+    for(const d of alldates){const dd=Math.abs(parseD(d)-t); if(dd<bd){bd=dd;best=d;}}
+    const xpx=xs(best);
+    hovl.setAttribute("x1",xpx); hovl.setAttribute("x2",xpx); hovl.style.display="block";
+    let rows="";
+    for(const o of series){ const hit=o.pts.find(p=>p[0]===best);
+      if(hit) rows+=`<div class="row"><span style="color:${o.color}">${o.key.toUpperCase()}</span><span>${hit[1].toFixed(3)}</span></div>`; }
+    tip.innerHTML=`<div class="td">${best}</div>${rows}`;
+    tip.style.display="block";
+    const cw=document.querySelector(".chart-wrap").getBoundingClientRect();
+    let left=ev.clientX-cw.left+12; if(left>cw.width-140) left=ev.clientX-cw.left-130;
+    tip.style.left=left+"px"; tip.style.top=(ev.clientY-cw.top+8)+"px";
+  });
+  rect.addEventListener("mouseleave",()=>{hovl.style.display="none";tip.style.display="none";});
+}
+
+function renderStats(){
+  const head=`<tr><th class="l">策略</th><th>总收益</th><th>胜率</th><th>平均单笔</th><th>最大回撤</th><th>盈亏比</th><th>信号</th><th>成交</th><th>持仓</th></tr>`;
+  let body="";
+  for(const s of Object.keys(DATA.strategies)){
+    if(HIDDEN.has(s)) continue;
+    const st=DATA.strategies[s].stats;
+    body+=`<tr>
+      <td class="l"><span class="stag" style="background:${PALETTE[s]}">${s.toUpperCase()}</span> ${SNAME[s]||''}</td>
+      <td class="${(st.total_ret||0)>=0?'pos':'neg'}">${fmtPct(st.total_ret)}</td>
+      <td>${st.win_rate==null?'—':(st.win_rate*100).toFixed(0)+'%'}</td>
+      <td class="${(st.avg_pnl||0)>=0?'pos':'neg'}">${st.avg_pnl==null?'—':(st.avg_pnl>=0?'+':'')+st.avg_pnl+'%'}</td>
+      <td class="neg">${fmtPct(st.max_dd)}</td>
+      <td>${fmtNum(st.profit_factor)}</td>
+      <td>${st.signals==null?'—':st.signals}</td>
+      <td>${st.trades}</td>
+      <td>${st.exposure==null?'—':(st.exposure*100).toFixed(0)+'%'}</td></tr>`;
+  }
+  document.getElementById("stats").innerHTML=head+body;
+}
+
+function renderExits(){
+  const C={stop:"#ef4848",take_profit:"#15a35a",expire:"#9aa7bd"};
+  const L={stop:"止损",take_profit:"止盈",expire:"到期"};
+  let h="";
+  for(const s of Object.keys(DATA.strategies)){
+    const d=DATA.strategies[s].exit_dist||{};
+    h+=`<div style="margin-bottom:9px"><div style="font-size:12px;margin-bottom:3px"><span class="stag" style="background:${PALETTE[s]}">${s.toUpperCase()}</span> ${SNAME[s]||''}</div>
+      <div class="bar">${["stop","take_profit","expire"].map(k=>`<i style="width:${((d[k]||0)*100).toFixed(1)}%;background:${C[k]}"></i>`).join("")}</div>
+      <div class="barlbl">${["stop","take_profit","expire"].map(k=>`${L[k]} ${((d[k]||0)*100).toFixed(0)}%`).join(" · ")}</div></div>`;
+  }
+  document.getElementById("exits").innerHTML=h||'<div class="empty">—</div>';
+}
+
+function renderMonthlySel(){
+  const sel=document.getElementById("mstrat");
+  sel.innerHTML=Object.keys(DATA.strategies).map(s=>`<option value="${s}" ${s===MSTRAT?'selected':''}>${s.toUpperCase()} ${SNAME[s]||''}</option>`).join("");
+  sel.onchange=()=>{MSTRAT=sel.value;renderMonthly();};
+}
+
+function renderMonthly(){
+  const el=document.getElementById("monthly");
+  if(!MSTRAT||!DATA.strategies[MSTRAT]){ el.innerHTML='<div class="empty">—</div>'; return; }
+  const m=clip(DATA.strategies[MSTRAT].monthly);
+  if(!m.length){ el.innerHTML='<div class="empty">该区间无数据</div>'; return; }
+  const W=1400,H=200,PAD={l:44,r:10,t:10,b:30};
+  const vals=m.map(p=>p[1]); let lo=Math.min(0,...vals),hi=Math.max(0,...vals); const pd=(hi-lo)*0.1||0.01; lo-=pd;hi+=pd;
+  const bw=(W-PAD.l-PAD.r)/m.length;
+  const ys=v=>H-PAD.b-(v-lo)/(hi-lo)*(H-PAD.t-PAD.b);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+  const zy=ys(0);
+  svg+=`<line class="grid" x1="${PAD.l}" y1="${zy.toFixed(1)}" x2="${W-PAD.r}" y2="${zy.toFixed(1)}"/>`;
+  svg+=`<text class="axis" x="${PAD.l-6}" y="${(zy+3).toFixed(1)}" text-anchor="end">0%</text>`;
+  svg+=`<text class="axis" x="${PAD.l-6}" y="${(ys(hi)+8).toFixed(1)}" text-anchor="end">${(hi*100).toFixed(0)}%</text>`;
+  m.forEach((p,i)=>{ const v=p[1], x=PAD.l+i*bw+1, y=v>=0?ys(v):zy, hgt=Math.abs(ys(v)-zy);
+    svg+=`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw-2).toFixed(1)}" height="${hgt.toFixed(1)}" fill="${v>=0?'#ef4848':'#15a35a'}"/>`; });
+  // 稀疏 x 标签
+  const step=Math.ceil(m.length/12);
+  m.forEach((p,i)=>{ if(i%step===0) svg+=`<text class="axis" x="${(PAD.l+i*bw+bw/2).toFixed(1)}" y="${H-8}" text-anchor="middle">${p[0].slice(2)}</text>`; });
+  svg+=`</svg>`;
+  el.innerHTML=svg;
+}
+
+function renderFoot(){
+  const n=(DATA.meta&&DATA.meta.slots)||10;
+  const adj=(DATA.meta&&DATA.meta.adjusted)?"复权(本地 pct_chg 重建累计因子,修正分红送配)":"未复权";
+  document.getElementById("foot").innerHTML=
+    `口径说明 (v2 真实化):净值=现金约束逐笔组合模拟,起始资金 1.0,固定 ${n} 个等权仓位,同日超容量按 signal_score 取前 K;持有期按实际 t1→exit 定位,出场释放资金供再入场(不盯市,净值仅在出场日跳变)。`+
+    `交易成本=券商佣金 0.00854% 双边 + 印花税卖出(主板 0.05%/科创创业 0.06%) + 过户费沪市 0.001% 双向;价格 ${adj}。`+
+    `信号=策略候选总数,成交=现金约束下实际入场笔数,持仓=活跃窗口内平均仓位占用率。`+
+    `图中每条线在所选区间首日重新归一为 1.0 便于公平对比;虚线=今日盘中浮盈估算(trigger_log);S8 仅当日盘中点,与历史净值口径不同不可比。回测结算口径,不构成投资建议。`;
+}
+
+document.getElementById("ranges").querySelectorAll(".rbtn").forEach(b=>b.onclick=()=>{
+  RANGE=b.dataset.r;
+  document.querySelectorAll("#ranges .rbtn").forEach(x=>x.classList.toggle("on",x===b));
+  renderChart(); renderStats(); renderMonthly();
+});
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
