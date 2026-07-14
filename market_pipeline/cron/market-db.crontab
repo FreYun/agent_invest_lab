@@ -1,0 +1,20 @@
+# === AGENT_INVEST_LAB_MARKET_PIPELINE BEGIN ===
+# Project-local market.db update line. Existing .openclaw jobs are intentionally left active.
+# Database: /home/rooot/agent_invest_lab/data/market.db
+# Times are staggered from the legacy line to reduce SQLite/API contention while both lines run.
+
+7 21 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-daily-regime-pipeline /bin/bash /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/daily-regime-pipeline.sh >> /home/rooot/agent_invest_lab/logs/lab-market-daily-regime-pipeline.log 2>&1
+27 21 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-s5-daily-cron /bin/bash /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/s5-daily-cron.sh >> /home/rooot/agent_invest_lab/logs/lab-market-s5-daily.log 2>&1
+32 21 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-s1s2s3s4-daily-cron /bin/bash /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/s1s2s3s4-daily-cron.sh >> /home/rooot/agent_invest_lab/logs/lab-market-s1s2s3s4-daily.log 2>&1
+52 21 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-stock-select-daily /bin/bash /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/stock-select-daily.sh >> /home/rooot/agent_invest_lab/logs/lab-market-stock-select-daily.log 2>&1
+8 22 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-s8-daily-cron /bin/bash /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/s8/s8-daily-cron.sh >> /home/rooot/agent_invest_lab/logs/lab-market-s8-daily.log 2>&1
+13 22 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-s9-daily-cron /bin/bash /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/s9/s9-daily-cron.sh >> /home/rooot/agent_invest_lab/logs/lab-market-s9-daily.log 2>&1
+
+# Intraday collector: project line uses its own lock and logs, running every 2 minutes to avoid doubling upstream load every minute.
+*/2 9-11,13-15 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-scout-collect /usr/bin/flock -n -E 0 /tmp/lab-market-scout-collect.lock /usr/bin/timeout 100 /home/rooot/agent_invest_lab/.venv/bin/python /home/rooot/agent_invest_lab/market_pipeline/openclaw/scout/collect.py >> /home/rooot/agent_invest_lab/logs/lab-market-scout-collect.log 2>&1
+42 15 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-scout-prune /home/rooot/agent_invest_lab/.venv/bin/python /home/rooot/agent_invest_lab/market_pipeline/openclaw/scout/prune.py >> /home/rooot/agent_invest_lab/logs/lab-market-scout-prune.log 2>&1
+
+35 9 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-margin-flow-morning /home/rooot/agent_invest_lab/.venv/bin/python /home/rooot/agent_invest_lab/market_pipeline/openclaw/scout/margin_flow.py >> /home/rooot/agent_invest_lab/logs/lab-market-margin-flow-morning.log 2>&1
+50 8 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-earnings-refresh /bin/bash /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/earnings-refresh.sh >> /home/rooot/agent_invest_lab/logs/lab-market-earnings-refresh.log 2>&1
+25 22 * * 1-5 /home/rooot/agent_invest_lab/market_pipeline/openclaw/scripts/cron-wrapper.sh lab-market-sw-industry-sync /home/rooot/agent_invest_lab/.venv/bin/python /home/rooot/agent_invest_lab/market_pipeline/openclaw/scout/sw_industry_sync.py >> /home/rooot/agent_invest_lab/logs/lab-market-sw-industry-sync.log 2>&1
+# === AGENT_INVEST_LAB_MARKET_PIPELINE END ===

@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>估值带 · Scout</title>
+<style>
+ :root{--bg:#f5f6f8;--panel:#fff;--bd:#e3e6eb;--mut:#8a919e;--up:#c0392b;--dn:#1e8449;
+       --band:#4472d8;--bandfill:rgba(68,114,216,.08);
+       --stband:#e08a2e;--stfill:rgba(224,138,46,.10)}
+ body{margin:0;font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+      background:var(--bg);color:#1a1d24}
+ .wrap{display:flex;gap:12px;padding:12px;max-width:1900px;margin:0 auto}
+ .side{width:250px;flex:none}
+ .main{flex:1;min-width:0}
+ .card{background:var(--panel);border:1px solid var(--bd);border-radius:10px;margin-bottom:12px;overflow:hidden}
+ .card h3{margin:0;padding:10px 12px;font-size:13px;border-bottom:1px solid var(--bd)}
+ .tgt{padding:10px 12px;border-bottom:1px solid var(--bd);cursor:pointer}
+ .tgt:hover{background:#f0f3f8}.tgt.active{background:#eef3ff}
+ .tgt .nm{font-weight:600}
+ .tgt .sub{color:var(--mut);font-size:11.5px;font-variant-numeric:tabular-nums}
+ .posbar{height:6px;border-radius:3px;background:linear-gradient(90deg,#d9efe2,#e8ebf0 50%,#f6e0dd);
+         position:relative;margin-top:5px}
+ .posbar i{position:absolute;top:-2px;width:2px;height:10px;background:#1b3a8f;border-radius:1px}
+ .chart-wrap{padding:8px 12px 4px}
+ svg{display:block;width:100%;height:auto}
+ .kv{display:flex;flex-wrap:wrap;gap:10px 56px;padding:6px 16px 14px}
+ .kv div{min-width:170px}.kv .k{color:var(--mut);font-size:12px;margin-bottom:2px}
+ .kv .k.tip{text-decoration:underline dotted #b9c0cc;text-underline-offset:3px;cursor:help}
+ .kv .v{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums}
+ .kvhd{padding:12px 16px 0;font-size:12.5px;font-weight:700}
+ .kvhd .sub{font-weight:400;color:var(--mut)}
+ .kvfoot{padding:8px 16px 14px;color:var(--mut);font-size:11.5px;border-top:1px dashed var(--bd);margin-top:6px}
+ table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+ td,th{padding:6px 10px;border-bottom:1px solid var(--bd);text-align:right;font-size:12.5px}
+ th{color:var(--mut);font-weight:600;font-size:11px}
+ td.l,th.l{text-align:left}
+ tr:last-child td{border-bottom:none}
+ .tag{display:inline-block;border-radius:4px;padding:0 6px;font-size:11px}
+ .tag.actual{background:#e8f6ee;color:#1e8449}.tag.forecast{background:#fff4e0;color:#b26a00}
+ .tag.estimated{background:#eef3ff;color:#1b3a8f}
+ .src-auto{color:var(--mut)}.src-agent{color:#7a3fb0;font-weight:600}.src-manual{color:#b26a00;font-weight:600}
+ .warn{background:#fff8dc;border:1px solid #e8d48a;border-radius:6px;padding:6px 10px;
+       margin:8px 12px;font-size:12px}
+ .rationale{padding:4px 16px 14px;white-space:pre-wrap;font-size:12.5px;line-height:1.75;color:#333;max-width:1080px}
+ .meta-line{padding:0 12px 10px;color:var(--mut);font-size:11.5px}
+ .empty{color:var(--mut);text-align:center;padding:30px 0}
+ .gear{float:right;cursor:pointer;color:var(--mut);font-size:14px}
+ .gear:hover{color:#1a1d24}
+ .tgt.off{opacity:.55}
+ .mgr-row{padding:10px 12px;display:flex;gap:8px;align-items:center}
+ .mgr-row input{flex:1;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;font:inherit}
+ .btn{border:1px solid var(--bd);background:#fff;border-radius:6px;padding:4px 10px;
+      font:inherit;font-size:12px;cursor:pointer}
+ .btn:hover{background:#f0f3f8}
+ .btn.pri{background:#1b3a8f;border-color:#1b3a8f;color:#fff}
+ .btn.pri:hover{background:#2a4bab}
+ .dcard{border-top:1px solid var(--bd);padding:10px 12px}
+ .dcard textarea{width:100%;box-sizing:border-box;min-height:76px;margin:4px 0;
+      border:1px solid var(--bd);border-radius:6px;padding:6px 8px;font:12px/1.5 inherit}
+ .badge{display:inline-block;border-radius:4px;padding:0 6px;font-size:11px;
+      background:#f0f3f8;font-weight:600}
+ .msg{font-size:12px;color:#b26a00}
+ .sugg-wrap{position:relative;flex:1;display:flex}
+ .sugg-wrap input{flex:1}
+ .sugg{position:absolute;top:100%;left:0;right:0;z-index:9;background:var(--panel);
+       border:1px solid var(--bd);border-radius:6px;max-height:260px;overflow:auto;
+       box-shadow:0 4px 14px rgba(0,0,0,.08)}
+ .sugg-it{padding:6px 10px;cursor:pointer;font-size:12.5px}
+ .sugg-it:hover{background:#eef3ff}
+ .sugg-it span{color:var(--mut);font-size:11.5px;margin-left:6px}
+ .msg .btn{margin:0 2px}
+ .st-review{margin:6px 16px 4px;padding:8px 12px;background:rgba(224,138,46,.06);
+      border:1px solid rgba(224,138,46,.35);border-radius:8px;max-width:1080px}
+ .st-review .k{color:var(--stband);font-weight:700;font-size:12px;margin-bottom:3px}
+ .st-method{margin:2px 16px 8px;font-size:12px;max-width:1080px}
+ .st-method summary{cursor:pointer;color:var(--mut)}
+ .tl-deep{border-top:1px solid var(--bd);padding:8px 12px}
+ .tl-deep summary{cursor:pointer;color:var(--mut);font-size:12px}
+ .tl-daily{padding:3px 12px;font-size:12px;cursor:pointer;border-top:1px dashed #f0f2f5}
+ .tl-daily .full{display:none;white-space:pre-wrap;color:#333;padding:4px 0}
+ .tl-daily.open .full{display:block}
+ .tl-daily.hid{display:none}
+ .tl-more{padding:6px 12px;font-size:12px;color:#1b3a8f;cursor:pointer}
+ .trig{display:inline-block;border-radius:4px;padding:0 6px;font-size:10.5px;
+      background:#eef3ff;color:#1b3a8f}
+</style>
+</head>
+<body>
+<div class="wrap">
+ <div class="side">
+  <div class="card"><h3>周期股估值带(做T参考)<span class="gear" id="mgrbtn" title="管理标的">⚙</span></h3><div id="tgts"><div class="empty">加载中…</div></div></div>
+ </div>
+ <div class="main">
+  <div class="card" id="mgr" style="display:none"><h3>标的管理</h3>
+   <div class="mgr-row"><span class="sugg-wrap"><input id="addcode" placeholder="代码或名称(如 600519 / 紫金矿业 / zjky)" autocomplete="off"><div id="sugg" style="display:none" class="sugg"></div></span>
+    <button class="btn pri" onclick="addTarget()">发起建模研判</button>
+    <span class="msg" id="addmsg"></span></div>
+   <div id="drafts"></div><div id="enlist"></div>
+  </div>
+  <div class="card"><h3 id="ttl">估值带</h3>
+   <div class="chart-wrap"><div id="chart"><div class="empty">← 选择标的</div></div></div>
+   <div id="kv"></div><div id="stale"></div>
+  </div>
+  <div class="card"><h3>📐 建模配置 <span style="font-weight:400;color:var(--mut);font-size:12px">· 该股实际运行的估值模型</span></h3><div id="model"><div class="empty">—</div></div></div>
+  <div class="card"><h3>季度盈利明细(近8季, 亿)</h3><div id="qtbl"><div class="empty">—</div></div></div>
+  <div class="card"><h3>Agent 锚点观点(小奶龙)</h3><div id="agent"><div class="empty">—</div></div></div>
+  <div class="card"><h3>研判历史</h3><div id="timeline"><div class="empty">—</div></div></div>
+ </div>
+</div>
+<script>
+const J=u=>fetch(u).then(r=>r.json());
+const fmt=(v,d=2)=>v==null?'—':Number(v).toFixed(d);
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const SRC={auto:'自动',agent:'AI修正',manual:'手动',quantile:'机械',rule:'机械'};
+const srcTag=s=>`<span class="src-${s==='quantile'||s==='rule'?'auto':s}">${SRC[s]||s||'—'}</span>`;
+let CUR=null;
+
+const MODEL_CHAIN={commodity_pe:'商品价锚 → 季度盈利区间(规则法g因子) → PIT动态PE分位带 → 价格带',
+  pe_band:'PE-TTM 历史分位带 × TTM每股收益 → 价格带',
+  pb_band:'PB 历史分位带 × 每股净资产 → 价格带',
+  consensus_pe:'一致预期净利(日度序列) → 前瞻PE分位带 × 预期EPS → 价格带'};
+const RATIO_LBL={commodity_pe:'PE带',pe_band:'PE-TTM带',pb_band:'PB带',consensus_pe:'前瞻PE带'};
+const PROFIT_LBL={commodity_pe:'年化净利(亿)',pe_band:'TTM净利(亿)',consensus_pe:'一致预期净利(亿)'};
+const mkOf=d=>((d.latest||{}).meta||{}).model_kind||((d.config||{}).model||{}).kind||'commodity_pe';
+
+async function loadTargets(){
+  let d; try{ d=await J('/api/valuation/targets'); }
+  catch(e){ document.getElementById('tgts').innerHTML='<div class="empty">加载失败</div>'; return; }
+  const el=document.getElementById('tgts');
+  if(!d.targets||!d.targets.length){ el.innerHTML='<div class="empty">无配置标的</div>'; return; }
+  el.innerHTML=d.targets.map(t=>{
+    const p=t.st_pos!=null?t.st_pos:t.band_pos;
+    const pos=p==null?null:Math.min(1.08,Math.max(-0.08,p));
+    const bar=pos==null?'':`<div class="posbar"><i style="left:${(pos*100).toFixed(1)}%"></i></div>`;
+    const sub=t.st_lo!=null
+      ?`T带 [${fmt(t.st_lo)}, ${fmt(t.st_hi)}] · 现价 ${fmt(t.close)} · 位置 ${t.st_pos==null?'—':(t.st_pos*100).toFixed(0)+'%'}`
+      :t.price_lo?`带 [${fmt(t.price_lo)}, ${fmt(t.price_hi)}] · 现价 ${fmt(t.close)} · 位置 ${t.band_pos==null?'—':(t.band_pos*100).toFixed(0)+'%'}`:'尚无带子数据';
+    return `<div class="tgt${t.enabled===false?' off':''}" data-c="${t.ts_code}"><div class="nm">${esc(t.name)} <span style="color:var(--mut);font-weight:400">${t.ts_code}</span>${t.enabled===false?' <span class="badge">停用</span>':''}</div><div class="sub">${sub}</div>${bar}</div>`;
+  }).join('');
+  el.querySelectorAll('.tgt').forEach(x=>x.onclick=()=>select(x.dataset.c));
+  select(d.targets[0].ts_code);
+}
+
+function select(code){
+  CUR=code;
+  document.querySelectorAll('.tgt').forEach(x=>x.classList.toggle('active',x.dataset.c===code));
+  loadBand(code);
+}
+
+async function loadBand(code){
+  let d; try{ d=await J('/api/valuation/band?code='+code+'&days=250'); }
+  catch(e){ document.getElementById('chart').innerHTML='<div class="empty">加载失败: '+e+'</div>'; return; }
+  if(d.error){ document.getElementById('chart').innerHTML='<div class="empty">'+esc(d.error)+'</div>'; return; }
+  document.getElementById('ttl').textContent=`${d.config.name} ${code} · 估值带`;
+  renderChart(d); renderKv(d); renderModel(d); renderQ(d); renderAgent(d); loadTimeline(d.ts_code);
+}
+
+// 建模配置卡: 该股实际运行的估值模型(config 来自 targets.json 经 load_targets 合并缺省)
+function renderModel(d){
+  const el=document.getElementById('model'), cfg=d.config||{};
+  const drv=cfg.driver||{}, mdl=cfg.model||{};
+  const m=(d.latest||{}).meta||{}, bk=(m.driver||{}).basket, reg=m.regression;
+  let drvHtml;
+  if(!drv||!drv.kind){
+    drvHtml='';
+  } else if(drv.kind==='basket'){
+    const real={}; (bk&&bk.components||[]).forEach(c=>real[c.symbol]=c);
+    drvHtml=`<div style="padding:8px 16px 0"><b>驱动: 加权商品篮子指数</b> <span style="color:var(--mut)">${esc(drv.label||'')} · 各成分按自身基期归一后加权合成, 基期=100${bk?` · 基期窗 ${bk.base_start} 起 ${bk.base_days} 日 · 交集 ${bk.n_days} 交易日`:''}</span></div>`+
+      `<table style="margin:6px 0"><tr><th class="l">成分</th><th class="l">代码</th><th>权重</th><th>基期价</th><th>现价</th><th>20日均</th></tr>`+
+      (drv.components||[]).map(c=>{const r=real[c.symbol]||{};
+        return `<tr><td class="l">${esc(c.label||'')}</td><td class="l" style="color:var(--mut)">${esc(c.kind)}:${esc(c.symbol)}</td>`+
+          `<td><b>${Math.round((c.weight||0)*100)}%</b></td><td>${fmt(r.base)}</td><td>${fmt(r.close)}</td><td>${fmt(r.center20)}</td></tr>`;}).join('')+
+      `</table>`;
+  }else{
+    drvHtml=`<div style="padding:8px 16px 6px"><b>驱动: 单商品</b> ${esc(drv.label||'')} <span style="color:var(--mut)">(${esc(drv.kind||'')}:${esc(drv.symbol||'')})</span></div>`;
+  }
+  const ov=[];
+  if(mdl.kind==='commodity_pe'){
+    if(cfg.driver_override) ov.push(`商品价锚=手动 ${JSON.stringify(cfg.driver_override)}`);
+    if(cfg.earnings_override) ov.push(`盈利=手动 ${esc(JSON.stringify(cfg.earnings_override))}`);
+  }
+  el.innerHTML=
+    `<div style="padding:6px 16px 0;color:var(--mut);font-size:12px">模型 <b style="color:#1a1d24">${esc(mdl.kind||'commodity_pe')}</b> · 链路: ${esc(MODEL_CHAIN[mdl.kind]||MODEL_CHAIN.commodity_pe)}</div>`+
+    drvHtml+
+    `<div style="padding:0 16px 4px;font-size:12px;color:var(--mut)">参数: PE窗口 ${cfg.pe_window||250}日 分位 [${((cfg.pe_lo_q??0.1)*100).toFixed(0)}%, ${((cfg.pe_hi_q??0.9)*100).toFixed(0)}%]`+
+    (mdl.kind==='commodity_pe'?` · 规则容差 ±${((cfg.rule_tolerance??0.1)*100).toFixed(0)}%`:'')+
+    ` · AI锚点保鲜 ${cfg.agent_ttl_days??10} 交易日`+
+    (ov.length?` · <span style="color:#b26a00">override: ${ov.join('; ')}</span>`:' · 无手动 override')+
+    (reg?` · 驱动价-盈利回归 β=${reg.beta} r²=${reg.r2} (n=${reg.n})`:'')+`</div>`+
+    `<div style="padding:0 16px 4px;font-size:12px;color:var(--mut)">行业关键词: ${(cfg.research_industries||[]).map(esc).join('、')||'—'}</div>`+
+    `<div class="kvhd" style="padding-top:6px">方法论(研究部确认, 注入AI每次研判)</div>`+
+    `<div class="rationale" style="padding-top:2px">${esc(mdl.brief||'—')}</div>`+
+    (cfg.notes?`<div class="kvfoot">📌 ${esc(cfg.notes)}</div>`:'');
+}
+
+function renderChart(d){
+  const band={}; (d.series||[]).forEach(r=>band[r.trade_date]=r);
+  const ks=(d.kline||[]).filter(k=>k.close!=null);
+  const el=document.getElementById('chart');
+  if(!ks.length && !(d.series||[]).length){ el.innerHTML='<div class="empty">无数据</div>'; return; }
+  const days=ks.length?ks:(d.series||[]).map(r=>({trade_date:r.trade_date,open:r.close,high:r.close,low:r.close,close:r.close}));
+  const W=940,H=378,P={l:52,r:14,t:30,b:26},iw=W-P.l-P.r,ih=H-P.t-P.b;
+  let lo=Infinity,hi=-Infinity;
+  days.forEach(k=>{lo=Math.min(lo,k.low);hi=Math.max(hi,k.high);});
+  Object.values(band).forEach(r=>{if(r.price_lo){lo=Math.min(lo,r.price_lo);hi=Math.max(hi,r.price_hi);}
+    if(r.st_lo!=null){lo=Math.min(lo,r.st_lo);hi=Math.max(hi,r.st_hi);}});
+  const pad=(hi-lo)*0.04; lo-=pad; hi+=pad;
+  const X=i=>P.l+iw*(i+0.5)/days.length, Y=v=>P.t+ih*(1-(v-lo)/(hi-lo));
+  let s=`<svg viewBox="0 0 ${W} ${H}">`;
+  for(let g=0;g<=4;g++){ const v=lo+(hi-lo)*g/4, y=Y(v);
+    s+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#eceff3"/>`+
+       `<text x="${P.l-6}" y="${y+3.5}" text-anchor="end" font-size="10" fill="#8a919e">${v.toFixed(1)}</text>`; }
+  // 当前带水平参考: 最新带值贯穿全图(带子历史积累前唯一可见的带展示)
+  const L=d.latest||{};
+  let hlabels='';  // 数值标签攒起来最后画, 避免被 K 线盖住
+  const hband=(vlo,vhi,color,fill,dash)=>{
+    const y1=Y(vhi),y2=Y(vlo);
+    hlabels+=`<text x="${W-P.r-2}" y="${(y1-3).toFixed(1)}" text-anchor="end" font-size="9.5" fill="${color}" stroke="#fff" stroke-width="2.5" paint-order="stroke">${vhi.toFixed(2)}</text>`+
+      `<text x="${W-P.r-2}" y="${(y2+10).toFixed(1)}" text-anchor="end" font-size="9.5" fill="${color}" stroke="#fff" stroke-width="2.5" paint-order="stroke">${vlo.toFixed(2)}</text>`;
+    return `<rect x="${P.l}" y="${y1.toFixed(1)}" width="${iw}" height="${Math.max(0,y2-y1).toFixed(1)}" fill="${fill}"/>`+
+      `<line x1="${P.l}" y1="${y1.toFixed(1)}" x2="${W-P.r}" y2="${y1.toFixed(1)}" stroke="${color}" stroke-width="1.1"${dash} opacity="0.65"/>`+
+      `<line x1="${P.l}" y1="${y2.toFixed(1)}" x2="${W-P.r}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="1.1"${dash} opacity="0.65"/>`;
+  };
+  if(L.price_lo!=null) s+=hband(L.price_lo,L.price_hi,'var(--band)','var(--bandfill)','');
+  if(L.st_lo!=null) s+=hband(L.st_lo,L.st_hi,'var(--stband)','var(--stfill)',' stroke-dasharray="5 4"');
+  // 带子历史(带值是逐日离散决策→阶梯线): 不足 MIN_HIST 天不画, 只靠上面的当前水平带,
+  // 避免上线初期一两个点被连成陡峭斜线
+  const MIN_HIST=10, slot=iw/days.length;
+  const stepPts=(arr,get)=>arr.flatMap(x=>{
+    const y=Y(get(x.b)).toFixed(1), x0=(P.l+slot*x.i).toFixed(1), x1=(P.l+slot*(x.i+1)).toFixed(1);
+    return [`${x0},${y}`,`${x1},${y}`];
+  });
+  const bd=days.map((k,i)=>({i,b:band[k.trade_date]})).filter(x=>x.b&&x.b.price_lo!=null);
+  if(bd.length>=MIN_HIST){
+    const up=stepPts(bd,b=>b.price_hi), dn=stepPts(bd,b=>b.price_lo);
+    s+=`<polygon points="${up.join(' ')} ${dn.slice().reverse().join(' ')}" fill="var(--bandfill)"/>`;
+    s+=`<polyline points="${up.join(' ')}" fill="none" stroke="var(--band)" stroke-width="1.4"/>`;
+    s+=`<polyline points="${dn.join(' ')}" fill="none" stroke="var(--band)" stroke-width="1.4"/>`;
+  }
+  // 短期做T带(橙, 虚线)
+  const sd=days.map((k,i)=>({i,b:band[k.trade_date]})).filter(x=>x.b&&x.b.st_lo!=null);
+  if(sd.length>=MIN_HIST){
+    const up=stepPts(sd,b=>b.st_hi), dn=stepPts(sd,b=>b.st_lo);
+    s+=`<polygon points="${up.join(' ')} ${dn.slice().reverse().join(' ')}" fill="var(--stfill)"/>`;
+    s+=`<polyline points="${up.join(' ')}" fill="none" stroke="var(--stband)" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+    s+=`<polyline points="${dn.join(' ')}" fill="none" stroke="var(--stband)" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+  }
+  const maLine=(n,color)=>{
+    if(days.length<n) return '';
+    const pts=[];
+    for(let i=n-1;i<days.length;i++){
+      let sum=0; for(let j=i-n+1;j<=i;j++) sum+=days[j].close;
+      pts.push(`${X(i).toFixed(1)},${Y(sum/n).toFixed(1)}`);
+    }
+    return `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="1" opacity="0.85"/>`;
+  };
+  s+=maLine(20,'#c58cd9')+maLine(60,'#7fa8d9');
+  const cw=Math.max(1.2,Math.min(7,iw/days.length*0.62));
+  days.forEach((k,i)=>{ const c=k.close>=k.open?'var(--up)':'var(--dn)',x=X(i);
+    s+=`<line x1="${x}" y1="${Y(k.high)}" x2="${x}" y2="${Y(k.low)}" stroke="${c}" stroke-width="0.8"/>`;
+    const y1=Y(Math.max(k.open,k.close)),y2=Y(Math.min(k.open,k.close));
+    s+=`<rect x="${(x-cw/2).toFixed(1)}" y="${y1.toFixed(1)}" width="${cw.toFixed(1)}" height="${Math.max(1,y2-y1).toFixed(1)}" fill="${c}"/>`; });
+  s+=hlabels;
+  const step=Math.max(1,Math.floor(days.length/6));
+  for(let i=0;i<days.length;i+=step){ const t=days[i].trade_date;
+    s+=`<text x="${X(i)}" y="${H-8}" text-anchor="middle" font-size="10" fill="#8a919e">${t.slice(4,6)}/${t.slice(6,8)}</text>`; }
+  // 图例放绘图区上方独立横条, 不与带线/K线重叠
+  s+=`<g font-size="10"><rect x="${P.l+8}" y="6" width="12" height="9" fill="rgba(224,138,46,.35)" stroke="var(--stband)" stroke-dasharray="3 2"/><text x="${P.l+24}" y="15" fill="var(--stband)" font-weight="600">短期做T带</text>`+
+     `<rect x="${P.l+124}" y="6" width="12" height="9" fill="rgba(68,114,216,.30)" stroke="var(--band)"/><text x="${P.l+140}" y="15" fill="var(--band)" font-weight="600">长期估值带</text>`+
+     `<line x1="${P.l+240}" y1="10.5" x2="${P.l+254}" y2="10.5" stroke="#c58cd9"/><text x="${P.l+258}" y="15" fill="#8a919e">MA20</text>`+
+     `<line x1="${P.l+330}" y1="10.5" x2="${P.l+344}" y2="10.5" stroke="#7fa8d9"/><text x="${P.l+348}" y="15" fill="#8a919e">MA60</text></g>`;
+  el.innerHTML=s+'</svg>';
+}
+
+// 做T带旁: 小奶龙最新研判全文(st_agent 可能是 daily_st 或含 st 修正的深度行)
+function stAgentBlock(d){
+  const a=d.st_agent;
+  if(!a) return `<div class="st-review"><div class="k">🦎 小奶龙研判</div>`+
+    `<div style="color:var(--mut)">尚无研判, 每晚 22:20 盘后生成</div></div>`;
+  const adj=[a.st_center_adj!=null?`中枢→${fmt(a.st_center_adj)}`:null,
+             a.st_width_pct!=null?`半宽→${(a.st_width_pct*100).toFixed(1)}%`:null]
+            .filter(Boolean).join(' · ')||'维持机械值';
+  const kind=a.trigger==='daily_st'?'每日情绪':'深度研判';
+  return `<div class="st-review"><div class="k">🦎 小奶龙研判 · ${a.run_at.slice(0,16)} · ${kind}</div>`+
+    `<div class="meta-line" style="padding:0 0 4px">${esc(adj)} · 置信 ${fmt(a.confidence,1)} · `+
+    (a.active?'<b style="color:#1e8449">生效中</b>'
+             :'<span style="color:var(--mut)">已过期, 带子回落机械值</span>')+`</div>`+
+    `<div class="rationale" style="padding:0">${esc(fmtRationale(a.rationale||''))}</div></div>`;
+}
+
+// 带子怎么算的: 动态代入 meta.st; 修正行由 latest 带值与机械值实际差异推导
+// (不依赖 st_agent —— 最新研判"维持机械值"而带子仍被更早深度行修正时才对得上账)
+function stMethodBlock(d){
+  const L=d.latest||{}, st=(L.meta||{}).st;
+  const mk=mkOf(d);
+  if(!st||st.center_mech==null||!st.pe_med60) return '';
+  const eps=st.center_mech/st.pe_med60;
+  let adjLine='';
+  if(L.st_source==='agent'&&L.st_lo!=null&&L.st_hi>L.st_lo){
+    const c=(L.st_lo+L.st_hi)/2, w=(L.st_hi-L.st_lo)/(L.st_hi+L.st_lo);
+    const dc=(c/st.center_mech-1)*100, dw=(w-st.width_mech)*100, parts=[];
+    if(Math.abs(dc)>=0.05) parts.push(`中枢→${fmt(c)} (${dc>0?'+':''}${dc.toFixed(1)}%)`);
+    if(Math.abs(dw)>=0.05) parts.push(`半宽→${(w*100).toFixed(1)}% (机械 ${(st.width_mech*100).toFixed(1)}%)`);
+    if(parts.length) adjLine=`小奶龙修正: ${parts.join(' · ')}\n`;
+  }
+  return `<details class="st-method"><summary>⚙ 带子怎么算的</summary>`+
+    `<div class="rationale" style="padding:4px 0 0">`+
+    esc(`机械中枢 ${fmt(st.center_mech)} = 近60日${mk==='pb_band'?'PB':'PE'}中位 ${fmt(st.pe_med60,1)} × ${mk==='pb_band'?'BPS':'年化EPS中点'} ${fmt(eps,2)}\n`+
+        `机械半宽 ${(st.width_mech*100).toFixed(1)}% = PE 20/80分位散度 [${fmt(st.pe_q20,1)}, ${fmt(st.pe_q80,1)}] (钳 3%~15%)\n`+
+        adjLine+
+        `最终带 = [${fmt(L.st_lo)}, ${fmt(L.st_hi)}]`)+
+    `</div></details>`;
+}
+
+function renderKv(d){
+  const L=d.latest, kv=document.getElementById('kv'), st=document.getElementById('stale');
+  st.innerHTML='';
+  if(!L){ kv.innerHTML=''; return; }
+  const mk=mkOf(d);
+  const m=L.meta||{}, drv=m.driver||{}, reg=m.regression;
+  const item=(k,v,tip)=>`<div${tip?` title="${esc(tip)}"`:''}><div class="k${tip?' tip':''}">${k}</div><div class="v">${v}</div></div>`;
+  const posTxt=p=>p==null?'—':(p*100).toFixed(0)+'%'+(p<0?' · 低于下沿':p>1?' · 高于上沿':'');
+  const ratioTip=mk==='pe_band'?'市盈率TTM区间':mk==='pb_band'?'市净率区间':mk==='consensus_pe'?'前瞻市盈率区间(市值÷一致预期净利)':'估值倍数区间; 机械=历史市盈率的25/75分位, AI修正=agent按行业景气调整';
+  kv.innerHTML=
+    `<div class="kvhd" style="color:var(--stband)">短期做T带 <span class="sub">· 短线高抛低吸的价格区间(图中橙色虚线带)</span></div><div class="kv">`+
+      item('带区间',L.st_lo!=null?`[${fmt(L.st_lo)}, ${fmt(L.st_hi)}] ${srcTag(L.st_source)}`:'—',
+        '短线做T参考: 靠近下沿=低吸区, 靠近上沿=高抛区。AI修正=当日情绪研判在机械基准上微调')+
+      item('现价位置',posTxt(L.st_pos),'现价在带内的位置: 0%=贴着下沿, 100%=贴着上沿')+
+      item('机械基准',m.st?`中枢 ${fmt(m.st.center_mech)} 半宽 ${(m.st.width_mech*100).toFixed(1)}%`:'—',
+        '纯数据基准: 近60日市盈率中位数×年化每股盈利=中枢, 市盈率20-80分位振幅=半宽; AI在此基础上修正')+
+    `</div>`+
+    stAgentBlock(d)+stMethodBlock(d)+
+    `<div class="kvhd" style="color:var(--band)">长期估值带 <span class="sub">· 合理价值区间 = ${RATIO_LBL[mk]} × 年化每股盈利(图中蓝色带)</span></div><div class="kv">`+
+      item('带区间',`[${fmt(L.price_lo)}, ${fmt(L.price_hi)}]`,
+        '基本面推出的合理股价区间: 下沿=PE下限×盈利下限, 上沿=PE上限×盈利上限')+
+      item('现价位置',posTxt(L.band_pos),'现价在估值带内的位置; 负数=低于带下沿(偏低估), 超100%=高于带上沿(偏高估)')+
+      (mk!=='pb_band'?item(PROFIT_LBL[mk]||'年化净利(亿)',`[${fmt(L.profit_year_lo,1)}, ${fmt(L.profit_year_hi,1)}] ${srcTag(L.earnings_source)}`,
+        '全年归母净利预估区间 = 四个季度加总(已公告的用实际/预告, 未公告的按规则或AI估计)'):'')+
+      item(RATIO_LBL[mk],`[${fmt(L.pe_lo,1)}, ${fmt(L.pe_hi,1)}] ${srcTag(L.pe_source)}`,
+        ratioTip)+
+      (L.driver_center!=null?item(`${drv.basket?'商品篮子指数':'商品价锚'} ${drv.label||''}`,`${fmt(L.driver_center)} ${srcTag(L.driver_source)}`,
+        drv.basket?'多商品加权合成的指数(基期=100), 盈利估计依赖其中枢假设; 自动=近20日均值'
+                  :'盈利估计依赖的商品中枢价假设; 自动=近20日均价'):'')+
+      (L.driver_center!=null?item(drv.basket?'指数假设区间':'商品假设区间',`[${fmt(L.driver_low)}, ${fmt(L.driver_high)}]`,
+        (drv.basket?'指数':'商品价')+'的悲观~乐观假设(默认近60日波动范围), 对应盈利区间的下限和上限'):'')+
+      (L.driver_center!=null&&drv.basket?item('篮子成分(真实价)',
+        (drv.basket.components||[]).map(c=>`${esc(c.label||c.symbol)} ${Math.round((c.weight||0)*100)}% @${fmt(c.close)}`).join(' · '),
+        `各成分按自身基期(${drv.basket.base_start||'—'}起${drv.basket.base_days||20}日均价)归一后加权合成指数`):'')+
+    `</div>`+
+    ((m.anchor&&mk!=='commodity_pe')?(()=>{const a=m.anchor;
+      if(mk==='pe_band') return `<div class="kvhd" style="color:#5a6472">估值锚(TTM)</div><div class="kv">`+
+        item('TTM EPS',fmt(a.eps_ttm,2)+' 元/股','市值÷市盈率TTM反推的每股收益')+
+        item('当前PE-TTM',fmt(a.pe_ttm,1),'当日市盈率TTM')+`</div>`;
+      if(mk==='pb_band') return `<div class="kvhd" style="color:#5a6472">估值锚(净资产)</div><div class="kv">`+
+        item('BPS',fmt(a.bps,2)+' 元/股','每股净资产(事实值, AI不可修)')+
+        item('当前PB',fmt(a.pb,2),'当日市净率')+`</div>`;
+      const fy=a.fy||{};
+      return `<div class="kvhd" style="color:#5a6472">一致预期锚</div><div class="kv">`+
+        item('预期EPS',fmt(a.eps_fwd,2)+' 元/股',`TTM一致预期净利÷总股本(数据日 ${a.consensus_date||'—'})`)+
+        item('预期净利',fmt(a.profit_consensus_yi,1)+' 亿','卖方一致预期TTM归母净利')+
+        item('30日预期变动',a.chg30==null?'—':`<span style="color:${a.chg30>=0?'var(--up)':'var(--dn)'}">${(a.chg30*100).toFixed(1)}%</span>`,'一致预期净利近30个交易日变动率; 上调=景气向上')+
+        (fy.fy1_yi!=null?item('FY1/FY2 预期',`${fmt(fy.fy1_yi,1)} / ${fmt(fy.fy2_yi,1)} 亿`,'当年/下年一致预期归母净利(旁证)'):'')+
+        ((a.lag_days||0)>10?item('⚠ 预期断更',`${a.lag_days} 交易日`,'一致预期序列未更新, 锚可能陈旧'):'')+
+        (a.cache_only?item('⚠ 数据源',' 本地缓存','research-mcp 当日取数失败, 用本地缓存出带'):'')+`</div>`;})():'')+
+    (m.mv&&m.mv.total_mv_yi?
+    `<div class="kvhd" style="color:#5a6472">市值与股息</div><div class="kv">`+
+      item('总市值',`${Number(m.mv.total_mv_yi).toLocaleString()}亿`,'当日总市值')+
+      item('PE(TTM)',m.mv.pe_ttm!=null?fmt(m.mv.pe_ttm,1):'—','现价÷近12个月归母净利')+
+      item('股息率(TTM)',m.mv.dv_ttm!=null?fmt(m.mv.dv_ttm,2)+'%':'—','近12个月每股分红合计÷现价')+
+      item(`股利支付率${m.mv.payout_year?'('+m.mv.payout_year+'年度)':''}`,
+        m.mv.payout!=null?(m.mv.payout*100).toFixed(1)+'%':'—',
+        `归属${m.mv.payout_year||'该'}年度的分红总额${m.mv.div_yi!=null?'('+fmt(m.mv.div_yi,0)+'亿)':''}÷当年归母净利${m.mv.profit_yi!=null?'('+fmt(m.mv.profit_yi,0)+'亿)':''}; 取最近一个分红与四季净利都齐的年度`)+
+      item('预期股息率',m.mv.fwd_dv_lo!=null?`[${fmt(m.mv.fwd_dv_lo,2)}%, ${fmt(m.mv.fwd_dv_hi,2)}%]`:'—',
+        `按${m.mv.payout_year||'最近'}年度支付率不变假设: 支付率×年化净利预估区间÷当前总市值`)+
+    `</div>`:'')+
+    `<div class="kvfoot">数据日期 ${L.trade_date}`+
+    (m.pe_quantile_raw?` · ${RATIO_LBL[mk]}分位原始(未经AI修正) [${fmt(m.pe_quantile_raw.lo,1)}, ${fmt(m.pe_quantile_raw.hi,1)}] n=${m.pe_n}`:'')+
+    (reg?` · ${drv.basket?'篮子指数':'金价'}-盈利回归旁证 β=${reg.beta} r²=${reg.r2} (n=${reg.n}, 仅交叉验证用)`:'')+
+    `</div>`;
+  if(m.stale) st.innerHTML=`<div class="warn">⚠ 数据 stale: 取数失败沿用 ${esc(m.stale.from)} 的带子 (${esc(m.stale.error)})</div>`;
+}
+
+function renderQ(d){
+  const el=document.getElementById('qtbl');
+  const card=el.closest('.card')||el.parentElement;
+  card.style.display='';
+  if(!(d.quarters||[]).length){ el.innerHTML='<div class="empty">—</div>'; return; }
+  const st={actual:'实际',forecast:'预告',estimated:'估计'};
+  el.innerHTML='<table><tr><th class="l">季度</th><th>状态</th><th>下限</th><th>上限</th><th class="l">依据</th></tr>'+
+    d.quarters.map(q=>{
+      let basis={}; try{ basis=JSON.parse(q.basis_json||'{}'); }catch(e){}
+      const b=basis.method==='manual'?'研究部手动覆盖':basis.method==='agent'?'agent 修正':
+        basis.method==='rule'?`规则法 g=${basis.g} 参照${(basis.ref_quarters||[]).join('/')}`:
+        basis.method==='revenue_margin'?`营收×净利率 参照${(basis.ref_quarters||[]).join('/')}`:
+        basis.ann_date?`公告 ${basis.ann_date}`:'';
+      return `<tr><td class="l">${q.quarter}</td><td><span class="tag ${q.status}">${st[q.status]||q.status}</span></td>`+
+             `<td>${fmt(q.profit_lo,1)}</td><td>${fmt(q.profit_hi,1)}</td><td class="l" style="color:var(--mut)">${b}</td></tr>`;
+    }).join('')+'</table>';
+}
+
+// 老观点 rationale 是无换行的整段: 在"。+短标签:"处自动断段(新观点 agent 已按约定自带换行)
+function fmtRationale(r){
+  if(r.includes('\n')) return r;
+  return r.replace(/。\s*(?=[^,，。;；:：\n]{2,12}[:：])/g, '。\n\n');
+}
+
+function renderAgent(d){
+  const el=document.getElementById('agent'), a=d.agent;
+  if(!a){ el.innerHTML='<div class="empty">尚无 agent 观点</div>'; return; }
+  let srcs=[],clamped=null,padj=null;
+  try{ srcs=JSON.parse(a.sources_json||'[]'); }catch(e){}
+  try{ clamped=JSON.parse(a.clamped_json||'null'); }catch(e){}
+  try{ padj=JSON.parse(a.profit_adj_json||'null'); }catch(e){}
+  const adj=[], isBk=!!(((d.latest||{}).meta||{}).driver||{}).basket;
+  if(a.driver_center!=null) adj.push(`商品价锚→${a.driver_center}${isBk?'(指数)':''} [${fmt(a.driver_low)}, ${fmt(a.driver_high)}]`);
+  if(padj) adj.push('盈利: '+Object.entries(padj).map(([q,p])=>
+    `${q==='anchor'?'锚':q}→[${p[0]},${p[1]}]${q==='anchor'?'亿':''}`).join(' '));
+  if(a.pe_lo_adj!=null||a.pe_hi_adj!=null) adj.push(`PE带→[${fmt(a.pe_lo_adj,1)}, ${fmt(a.pe_hi_adj,1)}]`);
+  if(a.st_center_adj!=null||a.st_width_pct!=null) adj.push(`短期带: 中枢→${fmt(a.st_center_adj)} 半宽→${a.st_width_pct==null?'—':(a.st_width_pct*100).toFixed(1)+'%'}`);
+  el.innerHTML=
+    `<div class="meta-line">${a.run_at} · ${a.reviewer} · 触发=${a.trigger} · 置信度 ${fmt(a.confidence,1)} · `+
+    `生效至 ${a.valid_until} ${a.active?'<b style="color:#1e8449">(生效中)</b>':'<span style="color:var(--mut)">(已过期, 回落机械)</span>'}</div>`+
+    (adj.length?`<div class="meta-line">修正: ${adj.join(' · ')}</div>`:'<div class="meta-line">本次判断: 无需修正, 维持机械值</div>')+
+    (clamped?`<div class="warn">⚠ 部分建议被 sanity 钳制: ${Object.keys(clamped).join(', ')}</div>`:'')+
+    `<div class="rationale">${esc(fmtRationale(a.rationale||''))}</div>`+
+    (srcs.length?`<div class="meta-line">来源: ${srcs.map(s=>esc(String(s))).join(' | ')}</div>`:'');
+}
+
+const POST=(u,b)=>{const tok=localStorage.getItem('scout_token')||'';const hd={'Content-Type':'application/json'};if(tok)hd['Authorization']='Bearer '+tok;return fetch(u,{method:'POST',headers:hd,body:JSON.stringify(b)}).then(async r=>({http:r.status,...(await r.json().catch(()=>({})))}));};
+const AUTH401='未登录: 请先在 Scout 主看板(端口18901首页)右上角登录 admin 账号后再操作';
+const TRIG={weekly:'例行',earnings:'财报',driver_shift:'商品价偏移',band_breach:'破带',manual:'手动',consensus_shift:'预期偏移'};
+
+async function loadTimeline(code){
+  const el=document.getElementById('timeline');
+  let d; try{ d=await J('/api/valuation/agent?code='+code); }
+  catch(e){ el.innerHTML='<div class="empty">加载失败</div>'; return; }
+  const deep=d.deep||[], daily=d.daily||[];
+  if(!deep.length&&!daily.length){ el.innerHTML='<div class="empty">尚无研判记录</div>'; return; }
+  let h='';
+  if(deep.length){
+    h+='<div class="kvhd" style="color:var(--band)">深度研判(锚点修正)</div>';
+    h+=deep.map(a=>{
+      let clamped=null,padj=null,srcs=[];
+      try{ clamped=JSON.parse(a.clamped_json||'null'); }catch(e){}
+      try{ padj=JSON.parse(a.profit_adj_json||'null'); }catch(e){}
+      try{ srcs=JSON.parse(a.sources_json||'[]'); }catch(e){}
+      const adj=[];
+      if(a.driver_center!=null) adj.push(`商品价锚→${a.driver_center}`);
+      if(padj) adj.push('盈利: '+Object.entries(padj).map(([q,p])=>
+        `${q==='anchor'?'锚':q}→[${p[0]},${p[1]}]${q==='anchor'?'亿':''}`).join(' '));
+      if(a.pe_lo_adj!=null||a.pe_hi_adj!=null) adj.push(`PE带→[${fmt(a.pe_lo_adj,1)}, ${fmt(a.pe_hi_adj,1)}]`);
+      if(a.st_center_adj!=null||a.st_width_pct!=null) adj.push(`短期带: 中枢→${fmt(a.st_center_adj)} 半宽→${a.st_width_pct==null?'—':(a.st_width_pct*100).toFixed(1)+'%'}`);
+      return `<div class="tl-deep"><b>${a.run_at.slice(0,16)}</b> <span class="trig">${TRIG[a.trigger]||a.trigger}</span>`+
+        ` · 置信 ${fmt(a.confidence,1)} · 生效至 ${a.valid_until}`+
+        (clamped?` <span style="color:#b26a00">⚠钳制 ${Object.keys(clamped).join(',')}</span>`:'')+
+        `<div style="font-size:12px;margin:2px 0">${adj.length?('修正: '+adj.map(esc).join(' · ')):'无需修正, 维持机械值'}</div>`+
+        `<details><summary>研判依据</summary><div class="rationale" style="padding:4px 0">${esc(a.rationale||'')}</div>`+
+        (srcs.length?`<div class="meta-line" style="padding:0">来源: ${srcs.map(s=>esc(String(s))).join(' | ')}</div>`:'')+
+        `</details></div>`;
+    }).join('');
+  }
+  if(daily.length){
+    h+='<div class="kvhd" style="color:var(--stband)">每日情绪研判(短期带微调)</div>';
+    h+=daily.map((a,i)=>{
+      const adj=[a.st_center_adj!=null?`中枢→${fmt(a.st_center_adj)}`:null,
+                 a.st_width_pct!=null?`半宽→${(a.st_width_pct*100).toFixed(1)}%`:null]
+                .filter(Boolean).join(' ')||'维持机械值';
+      const r=a.rationale||'';
+      // 摘要优先取『结论:』段(三段式规范); 无分段旧格式回落前 80 字
+      const concl=r.split('\n').map(s=>s.trim()).find(s=>/^结论[:：]/.test(s));
+      const sum=(concl||r).slice(0,80);
+      return `<div class="tl-daily${i>=10?' hid':''}" onclick="this.classList.toggle('open')">`+
+        `<b>${a.run_at.slice(5,16)}</b> ${esc(adj)} · <span style="color:var(--mut)">${esc(sum)}${(concl||r).length>80?'…':''}</span>`+
+        `<div class="full">${esc(r)}${a.clamped_json&&a.clamped_json!=='null'?' ⚠钳制':''}</div></div>`;
+    }).join('');
+    if(daily.length>10)
+      h+=`<div class="tl-more" onclick="document.querySelectorAll('.tl-daily.hid').forEach(x=>x.classList.remove('hid'));this.remove()">展开更早 ${daily.length-10} 条</div>`;
+  }
+  el.innerHTML=h;
+}
+
+let MGRPOLL=null;
+document.getElementById('mgrbtn').onclick=()=>{
+  const m=document.getElementById('mgr'), show=m.style.display==='none';
+  m.style.display=show?'block':'none';
+  if(show) loadMgr(); else clearTimeout(MGRPOLL);
+};
+const DSTAT={drafting:['研判中…','#b26a00'],draft_ready:['待确认','#1e8449'],
+  unsupported:['不适用','#c0392b'],failed:['失败','#c0392b']};
+
+async function loadMgr(){
+  clearTimeout(MGRPOLL);
+  let d,t;
+  try{ d=await J('/api/valuation/target/drafts'); t=await J('/api/valuation/targets'); }
+  catch(e){ document.getElementById('drafts').innerHTML='<div class="empty">加载失败</div>'; return; }
+  const act=(d.drafts||[]).filter(x=>DSTAT[x.status]);
+  document.getElementById('drafts').innerHTML=act.map(x=>{
+    const dj=x.draft||{}, s=DSTAT[x.status];
+    let body='';
+    if(x.status==='draft_ready'){
+      const drv=dj.driver||{};
+      const drvTxt=drv.kind==='basket'
+        ?`篮子: ${(drv.components||[]).map(c=>`${esc(c.label||c.symbol)} ${Math.round((c.weight||0)*100)}%`).join(' + ')}`
+        :`${esc(drv.label||'')} (${esc(drv.kind||'')}: ${esc(drv.symbol||'')})`;
+      const MK_OPT={commodity_pe:'商品驱动',pe_band:'白马PE-TTM',pb_band:'金融PB',consensus_pe:'成长一致预期'};
+      const kind0=(dj.model||{}).kind||'';
+      const kindSel=`<select id="kind-${x.ts_code}">`+Object.entries(MK_OPT).map(([k,v])=>
+        `<option value="${k}"${k===kind0?' selected':''}>${v}(${k})</option>`).join('')+`</select>`;
+      body=`<div style="font-size:12px;margin:4px 0"><span style="color:var(--mut)">模型</span> ${kindSel}`+
+        (dj.driver?` · <span style="color:var(--mut)">驱动</span> ${drvTxt}`:'')+
+        ` · <span style="color:var(--mut)">行业</span> ${esc((dj.research_industries||[]).join('、'))}</div>`+
+        `<div style="color:var(--mut);font-size:11px">估值方法论(可修改后启用)</div>`+
+        `<textarea id="brief-${x.ts_code}">${esc((dj.model||{}).brief||'')}</textarea>`+
+        `<details><summary style="cursor:pointer;font-size:12px;color:var(--mut)">建模分析全文</summary><div class="rationale" style="padding:4px 0">${esc(dj.rationale||'')}</div></details>`+
+        `<button class="btn pri" onclick="enableTarget('${x.ts_code}')">确认启用</button> `+
+        `<button class="btn" onclick="dismissDraft('${x.ts_code}')">放弃</button>`;
+    }else if(x.status==='unsupported'){
+      body=`<div class="rationale" style="padding:4px 0">${esc(dj.rationale||'')}</div>`+
+        `<div class="warn" style="margin:6px 0">该标的暂不适配任何机械模型(商品PE/白马PE/金融PB/一致预期PE), 分析已留档</div>`+
+        `<button class="btn" onclick="dismissDraft('${x.ts_code}')">知道了(归档)</button>`;
+    }else if(x.status==='failed'){
+      body=`<div class="warn" style="margin:6px 0">${esc(x.error||'')}</div>`+
+        `<button class="btn" onclick="addCode('${x.ts_code}')">重试</button> `+
+        `<button class="btn" onclick="dismissDraft('${x.ts_code}')">放弃</button>`;
+    }
+    return `<div class="dcard"><b>${esc(x.name)}</b> ${x.ts_code} <span class="badge" style="color:${s[1]}">${s[0]}</span>${body}</div>`;
+  }).join('')||'<div class="empty" style="padding:16px 0">暂无进行中草案</div>';
+  document.getElementById('enlist').innerHTML='<div class="kvhd">已配置标的</div>'+
+    (t.targets||[]).map(x=>`<div class="dcard">${esc(x.name)} ${x.ts_code}`+
+      (x.enabled===false?' <span class="badge">已停用</span>':'')+
+      ` <button class="btn" onclick="toggleTarget('${x.ts_code}',${x.enabled===false})">${x.enabled===false?'恢复':'停用'}</button>`+
+      ` <button class="btn" onclick="addCode('${x.ts_code}')">重新建模</button></div>`).join('');
+  if(act.some(x=>x.status==='drafting')) MGRPOLL=setTimeout(loadMgr,10000);
+}
+function msg(s){ document.getElementById('addmsg').textContent=s||''; }
+let SUGT=null;
+function hideSugg(){ const el=document.getElementById('sugg'); el.style.display='none'; el.innerHTML=''; }
+async function suggest(){
+  const q=document.getElementById('addcode').value.trim();
+  if(!q){ hideSugg(); return; }
+  let d; try{ d=await J('/api/valuation/stock-search?q='+encodeURIComponent(q)); }catch(e){ return; }
+  if(!d.stocks||!d.stocks.length){ hideSugg(); return; }
+  const el=document.getElementById('sugg');
+  el.innerHTML=d.stocks.map(s=>`<div class="sugg-it" data-c="${esc(s.ts_code)}">${esc(s.name)}<span>${esc(s.code)}</span></div>`).join('');
+  el.style.display='block';
+  el.querySelectorAll('.sugg-it').forEach(x=>x.onclick=()=>{ document.getElementById('addcode').value=x.dataset.c; hideSugg(); });
+}
+document.getElementById('addcode').addEventListener('input',()=>{ clearTimeout(SUGT); SUGT=setTimeout(suggest,300); });
+document.getElementById('addcode').addEventListener('blur',()=>setTimeout(hideSugg,200));
+async function addTarget(){ addCode(document.getElementById('addcode').value); }
+async function addCode(code){
+  hideSugg();
+  const r=await POST('/api/valuation/target/add',{code});
+  if(r.candidates&&r.candidates.length){
+    document.getElementById('addmsg').innerHTML='匹配到多只, 点选: '+
+      r.candidates.map(s=>`<button class="btn" onclick="addCode('${s.ts_code}')">${esc(s.name)} ${esc(s.code)}</button>`).join('');
+    return;
+  }
+  msg(r.http===401?AUTH401:r.error||(r.remodel?'已发起重新建模, 小奶龙深度研究中(约20-45分钟)':'已发起建模研判, 首次建模走深度研究(约20-45分钟)'));
+  loadMgr();
+}
+async function enableTarget(c){
+  const ta=document.getElementById('brief-'+c), ks=document.getElementById('kind-'+c);
+  const r=await POST('/api/valuation/target/enable',
+    {ts_code:c,brief:ta?ta.value:null,model_kind:ks?ks.value:null});
+  msg(r.http===401?AUTH401:r.error||'已启用, 首次出带已在后台发起(约1-2分钟)');
+  loadMgr(); loadTargets();
+}
+async function dismissDraft(c){ const r=await POST('/api/valuation/target/dismiss',{ts_code:c}); msg(r.http===401?AUTH401:r.error||''); loadMgr(); }
+async function toggleTarget(c,en){ const r=await POST('/api/valuation/target/toggle',{ts_code:c,enabled:en}); msg(r.http===401?AUTH401:r.error||''); loadMgr(); loadTargets(); }
+
+loadTargets();
+</script>
+</body>
+</html>

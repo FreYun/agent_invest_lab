@@ -1,0 +1,5 @@
+# Runtime/generated market pipeline data
+openclaw/workspace-bot11/memory/
+openclaw/workspace-bot11/scripts/review/sector_cache/
+openclaw/workspace-bot11/scripts/review/erp_cache.json
+openclaw/scripts/s5/.industry_cache.json

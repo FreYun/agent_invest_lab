@@ -1,0 +1,602 @@
+{
+  "_doc": "scout 板块强弱榜粗粒度白名单 (draft v1, 2026-05-26). 编辑此文件后, 设计定稿再 rename 去掉 .draft. 字段说明: name=显示名, code=东财板块码, members=成分数(快照),仅供您选板块时参考, 不会被代码使用.",
+  "version": 2,
+  "updated": "2026-07-08",
+  "groups": [
+    {
+      "name": "算力 / AI / 数据",
+      "boards": [
+        {
+          "name": "算力概念",
+          "code": "BK1134.DC",
+          "members": 200
+        },
+        {
+          "name": "CPO概念",
+          "code": "BK1128.DC",
+          "members": 54
+        },
+        {
+          "name": "光通信模块",
+          "code": "BK1136.DC",
+          "members": 91
+        },
+        {
+          "name": "液冷概念",
+          "code": "BK1138.DC",
+          "members": 134
+        },
+        {
+          "name": "数据要素",
+          "code": "BK1135.DC",
+          "members": 161
+        },
+        {
+          "name": "AIGC概念",
+          "code": "BK1111.DC",
+          "members": 112
+        },
+        {
+          "name": "AI智能体",
+          "code": "BK0809.DC",
+          "members": 142
+        },
+        {
+          "name": "AI芯片",
+          "code": "BK1127.DC",
+          "members": 39
+        }
+      ]
+    },
+    {
+      "name": "半导体 / 芯片",
+      "boards": [
+        {
+          "name": "半导体",
+          "code": "BK1036.DC",
+          "members": 177
+        },
+        {
+          "name": "半导体设备",
+          "code": "BK1326.DC",
+          "members": 22
+        },
+        {
+          "name": "半导体材料",
+          "code": "BK1325.DC",
+          "members": 30
+        },
+        {
+          "name": "集成电路封测",
+          "code": "BK1328.DC",
+          "members": 13
+        },
+        {
+          "name": "集成电路制造",
+          "code": "BK1329.DC",
+          "members": 8
+        },
+        {
+          "name": "第三代半导体",
+          "code": "BK0952.DC",
+          "members": 109
+        },
+        {
+          "name": "存储芯片",
+          "code": "BK1137.DC",
+          "members": 117
+        },
+        {
+          "name": "高带宽内存",
+          "code": "BK1152.DC",
+          "members": 28
+        },
+        {
+          "name": "光刻机(胶)",
+          "code": "BK0884.DC",
+          "members": 95
+        },
+        {
+          "name": "数字芯片设计",
+          "code": "BK1331.DC",
+          "members": 51
+        },
+        {
+          "name": "模拟芯片设计",
+          "code": "BK1330.DC",
+          "members": 35
+        },
+        {
+          "name": "华为海思",
+          "code": "BK1180.DC",
+          "members": 40
+        },
+        {
+          "name": "EDA概念",
+          "code": "BK0946.DC",
+          "members": 12
+        },
+        {
+          "name": "国产芯片",
+          "code": "BK0891.DC",
+          "members": 377
+        }
+      ]
+    },
+    {
+      "name": "PCB / 电子元器件 / 消费电子",
+      "boards": [
+        {
+          "name": "PCB",
+          "code": "BK0877.DC",
+          "members": 146
+        },
+        {
+          "name": "MLCC",
+          "code": "BK0890.DC",
+          "members": 18
+        },
+        {
+          "name": "被动元件",
+          "code": "BK1339.DC",
+          "members": 19
+        },
+        {
+          "name": "面板",
+          "code": "BK1335.DC",
+          "members": 42
+        },
+        {
+          "name": "玻璃基板",
+          "code": "BK1175.DC",
+          "members": 36
+        },
+        {
+          "name": "消费电子",
+          "code": "BK1037.DC",
+          "members": 98
+        },
+        {
+          "name": "AI眼镜",
+          "code": "BK1178.DC",
+          "members": 121
+        },
+        {
+          "name": "智能穿戴",
+          "code": "BK0641.DC",
+          "members": 127
+        },
+        {
+          "name": "苹果概念",
+          "code": "BK0666.DC",
+          "members": 127
+        }
+      ]
+    },
+    {
+      "name": "软件 / 国产化 / 网络",
+      "boards": [
+        {
+          "name": "鸿蒙概念",
+          "code": "BK0953.DC",
+          "members": 124
+        },
+        {
+          "name": "信创",
+          "code": "BK1104.DC",
+          "members": 245
+        },
+        {
+          "name": "软件开发",
+          "code": "BK0737.DC",
+          "members": 135
+        },
+        {
+          "name": "网络安全",
+          "code": "BK0655.DC",
+          "members": 132
+        },
+        {
+          "name": "云计算",
+          "code": "BK0579.DC",
+          "members": 141
+        },
+        {
+          "name": "数字经济",
+          "code": "BK1061.DC",
+          "members": 185
+        },
+        {
+          "name": "国产软件",
+          "code": "BK0696.DC",
+          "members": 234
+        }
+      ]
+    },
+    {
+      "name": "智能车 / 智驾 / 储能",
+      "boards": [
+        {
+          "name": "新能源车",
+          "code": "BK0900.DC",
+          "members": 677
+        },
+        {
+          "name": "锂电池概念",
+          "code": "BK0574.DC",
+          "members": 415
+        },
+        {
+          "name": "储能概念",
+          "code": "BK0989.DC",
+          "members": 447
+        },
+        {
+          "name": "钠离子电池",
+          "code": "BK0988.DC",
+          "members": 69
+        },
+        {
+          "name": "激光雷达",
+          "code": "BK1002.DC",
+          "members": 43
+        },
+        {
+          "name": "汽车一体化压铸",
+          "code": "BK1093.DC",
+          "members": 28
+        },
+        {
+          "name": "华为汽车",
+          "code": "BK0984.DC",
+          "members": 119
+        },
+        {
+          "name": "小米汽车",
+          "code": "BK1155.DC",
+          "members": 103
+        },
+        {
+          "name": "固态电池",
+          "code": "BK0968.DC",
+          "members": 211
+        }
+      ]
+    },
+    {
+      "name": "新能源 / 电力",
+      "boards": [
+        {
+          "name": "光伏概念",
+          "code": "BK0588.DC",
+          "members": 435
+        },
+        {
+          "name": "钙钛矿电池",
+          "code": "BK1094.DC",
+          "members": 44
+        },
+        {
+          "name": "风电设备",
+          "code": "BK1032.DC",
+          "members": 31
+        },
+        {
+          "name": "燃料电池概念",
+          "code": "BK0682.DC",
+          "members": 144
+        },
+        {
+          "name": "可控核聚变",
+          "code": "BK1163.DC",
+          "members": 78
+        },
+        {
+          "name": "核能核电",
+          "code": "BK0577.DC",
+          "members": 198
+        },
+        {
+          "name": "特高压",
+          "code": "BK0918.DC",
+          "members": 88
+        },
+        {
+          "name": "绿色电力",
+          "code": "BK1024.DC",
+          "members": 168
+        }
+      ]
+    },
+    {
+      "name": "周期 / 资源",
+      "boards": [
+        {
+          "name": "钢铁",
+          "code": "BK0479.DC",
+          "members": 46
+        },
+        {
+          "name": "煤炭",
+          "code": "BK0437.DC",
+          "members": 33
+        },
+        {
+          "name": "有色金属",
+          "code": "BK0478.DC",
+          "members": 144
+        },
+        {
+          "name": "黄金概念",
+          "code": "BK0547.DC",
+          "members": 71
+        },
+        {
+          "name": "稀土永磁",
+          "code": "BK0578.DC",
+          "members": 53
+        },
+        {
+          "name": "铜",
+          "code": "BK1615.DC",
+          "members": 17
+        },
+        {
+          "name": "油气资源",
+          "code": "BK1649.DC",
+          "members": 156
+        },
+        {
+          "name": "水泥",
+          "code": "BK0424.DC",
+          "members": 23
+        },
+        {
+          "name": "铝",
+          "code": "BK1613.DC",
+          "members": 30
+        }
+      ]
+    },
+    {
+      "name": "化工 / 新材料",
+      "boards": [
+        {
+          "name": "化学制品",
+          "code": "BK0538.DC",
+          "members": 180
+        },
+        {
+          "name": "化工原料",
+          "code": "BK0512.DC",
+          "members": 77
+        },
+        {
+          "name": "碳纤维",
+          "code": "BK1171.DC",
+          "members": 41
+        },
+        {
+          "name": "碳化硅",
+          "code": "BK0977.DC",
+          "members": 46
+        },
+        {
+          "name": "合成生物",
+          "code": "BK1174.DC",
+          "members": 119
+        },
+        {
+          "name": "石油石化",
+          "code": "BK0464.DC",
+          "members": 49
+        }
+      ]
+    },
+    {
+      "name": "医药",
+      "boards": [
+        {
+          "name": "创新药",
+          "code": "BK1106.DC",
+          "members": 173
+        },
+        {
+          "name": "中药概念",
+          "code": "BK0615.DC",
+          "members": 144
+        },
+        {
+          "name": "医疗器械",
+          "code": "BK1041.DC",
+          "members": 137
+        },
+        {
+          "name": "医美概念",
+          "code": "BK0889.DC",
+          "members": 76
+        },
+        {
+          "name": "减肥药",
+          "code": "BK1146.DC",
+          "members": 35
+        },
+        {
+          "name": "CRO",
+          "code": "BK0899.DC",
+          "members": 38
+        },
+        {
+          "name": "基因测序",
+          "code": "BK0693.DC",
+          "members": 40
+        },
+        {
+          "name": "生物疫苗",
+          "code": "BK0548.DC",
+          "members": 69
+        }
+      ]
+    },
+    {
+      "name": "消费",
+      "boards": [
+        {
+          "name": "白酒",
+          "code": "BK0896.DC",
+          "members": 47
+        },
+        {
+          "name": "食品饮料",
+          "code": "BK0438.DC",
+          "members": 130
+        },
+        {
+          "name": "跨境电商",
+          "code": "BK1115.DC",
+          "members": 165
+        },
+        {
+          "name": "谷子经济",
+          "code": "BK1183.DC",
+          "members": 76
+        },
+        {
+          "name": "培育钻石",
+          "code": "BK1023.DC",
+          "members": 15
+        },
+        {
+          "name": "宠物经济",
+          "code": "BK0993.DC",
+          "members": 69
+        },
+        {
+          "name": "新消费",
+          "code": "BK1652.DC",
+          "members": 82
+        },
+        {
+          "name": "免税概念",
+          "code": "BK0927.DC",
+          "members": 18
+        }
+      ]
+    },
+    {
+      "name": "军工 / 航天",
+      "boards": [
+        {
+          "name": "国防军工",
+          "code": "BK1204.DC",
+          "members": 143
+        },
+        {
+          "name": "商业航天",
+          "code": "BK0963.DC",
+          "members": 300
+        },
+        {
+          "name": "卫星互联网",
+          "code": "BK0921.DC",
+          "members": 91
+        },
+        {
+          "name": "大飞机",
+          "code": "BK0814.DC",
+          "members": 100
+        },
+        {
+          "name": "北斗导航",
+          "code": "BK0629.DC",
+          "members": 75
+        }
+      ]
+    },
+    {
+      "name": "金融 / 支付",
+      "boards": [
+        {
+          "name": "银行",
+          "code": "BK1283.DC",
+          "members": 42
+        },
+        {
+          "name": "券商概念",
+          "code": "BK0711.DC",
+          "members": 55
+        },
+        {
+          "name": "数字货币",
+          "code": "BK0883.DC",
+          "members": 83
+        },
+        {
+          "name": "跨境支付",
+          "code": "BK1071.DC",
+          "members": 62
+        }
+      ]
+    },
+    {
+      "name": "机器人 / 新兴",
+      "boards": [
+        {
+          "name": "人形机器人",
+          "code": "BK1184.DC",
+          "members": 244
+        },
+        {
+          "name": "机器人执行器",
+          "code": "BK1145.DC",
+          "members": 35
+        },
+        {
+          "name": "减速器",
+          "code": "BK1100.DC",
+          "members": 84
+        },
+        {
+          "name": "工业母机",
+          "code": "BK1004.DC",
+          "members": 84
+        },
+        {
+          "name": "机器视觉",
+          "code": "BK0998.DC",
+          "members": 88
+        },
+        {
+          "name": "量子科技",
+          "code": "BK0710.DC",
+          "members": 54
+        },
+        {
+          "name": "低空经济",
+          "code": "BK1166.DC",
+          "members": 293
+        }
+      ]
+    },
+    {
+      "name": "农业",
+      "boards": [
+        {
+          "name": "生猪养殖",
+          "code": "BK1512.DC",
+          "members": 11
+        },
+        {
+          "name": "农林牧渔",
+          "code": "BK0433.DC",
+          "members": 113
+        },
+        {
+          "name": "肉鸡养殖",
+          "code": "BK1511.DC",
+          "members": 8
+        }
+      ]
+    }
+  ]
+}
