@@ -40,6 +40,34 @@ def get_tushare_token() -> str:
     )
 
 
+def get_tushare_official_token() -> str:
+    token = (
+        os.getenv("TUSHARE_TOKEN_OFFICIAL")
+        or os.getenv("OFFICIAL_TUSHARE_TOKEN")
+        or os.getenv("TUSHARE_OFFICIAL_TOKEN")
+    )
+    if token:
+        return token.strip()
+    token = _read_first_existing([
+        "~/.openclaw/.tushare-official-token",
+        "~/.tushare-official-token",
+    ])
+    if token:
+        return token
+    raise RuntimeError(
+        "未找到官方 Tushare token: 设置 TUSHARE_TOKEN_OFFICIAL/OFFICIAL_TUSHARE_TOKEN "
+        "或写入 ~/.openclaw/.tushare-official-token"
+    )
+
+
+def __getattr__(name: str):
+    if name == "TUSHARE_TOKEN":
+        return get_tushare_token()
+    if name == "TUSHARE_TOKEN_OFFICIAL":
+        return get_tushare_official_token()
+    raise AttributeError(name)
+
+
 def get_tushare_pro():
     """Return a Tushare Pro client routed through the configured brze proxy."""
     import tushare as ts
