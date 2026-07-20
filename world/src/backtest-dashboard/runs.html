@@ -179,7 +179,12 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 /* ---- 方法论弹窗 ---- */
 .mdl-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;align-items:flex-start;justify-content:center;overflow:auto;padding:24px}
 .mdl-backdrop.open{display:flex}
-.mdl-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);width:min(1100px,92vw);max-height:90vh;overflow:auto;padding:18px 20px;position:relative}
+.mdl-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);width:min(1560px,96vw);max-height:90vh;overflow:auto;padding:18px 22px;position:relative}
+.mdl-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;margin-top:16px}
+.mdl-grid .mdl-sec{margin-top:0;padding-top:0;border-top:none}
+.mdl-chart .cp-chart{height:300px}
+.mdl-chart .cp-pos-chart{height:64px}
+@media (max-width:1020px){.mdl-grid{grid-template-columns:1fr}}
 .mdl-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;padding-right:32px}
 .mdl-title{font-size:15px;font-weight:600}
 .mdl-sub{font-size:12px;color:var(--dim)}
@@ -946,7 +951,11 @@ function wireChart(panel, rec, bot, geom){
     const b = e.target.closest('button[data-win]'); if (!b || b.disabled || b.classList.contains('active')) return
     renderChartInto(panel, rec, bot, b.dataset.win); syncBlockHeights()
   })
-  const svg = panel.querySelector('.cp-chart'), wrap = panel.querySelector('.cp-chart-wrap')
+  wireChartCursor(panel, geom, bot)
+}
+// 十字光标绑定（可复用）：root 为含 .cp-chart / .cp-chart-wrap 的容器；mousemove 吸附最近交易日、移动准星、更新浮层
+function wireChartCursor(root, geom, bot){
+  const svg = root.querySelector('.cp-chart'), wrap = root.querySelector('.cp-chart-wrap')
   if (!svg || !wrap || !geom || !geom.pts.length) return
   const cursor = svg.querySelector('.cp-cursor'), tip = wrap.querySelector('.cp-tooltip')
   const line = cursor.querySelector('.cp-cursor-line')
@@ -1123,11 +1132,15 @@ function openMethodologyModal(rec, bot){
   body.innerHTML = `<div class="mdl-head"><div class="mdl-title">${esc(botId)} · ${esc(rec._ixName)}</div>`
     + `<div class="mdl-sub">${esc(rec['对标指数'])} · ${esc(runId)}</div></div>`
     + `<div class="mdl-chart"></div>`
-    + `<div class="mdl-sec" id="mdlMeth"><h3>📐 方法论进化</h3><div class="mdl-empty">加载中…</div></div>`
-    + `<div class="mdl-sec" id="mdlRfl"><h3>当日反思</h3><div class="mdl-empty">加载中…</div></div>`
-  // 放大净值图：复用现有 body 渲染（不接光标 wiring，静态展示即可；如需光标可后续接）
-  const { html } = renderChartBody(bot, 'all')
-  body.querySelector('.mdl-chart').innerHTML = html
+    + `<div class="mdl-grid">`
+    +   `<div class="mdl-sec" id="mdlMeth"><h3>📐 方法论进化</h3><div class="mdl-empty">加载中…</div></div>`
+    +   `<div class="mdl-sec" id="mdlRfl"><h3>当日反思</h3><div class="mdl-empty">加载中…</div></div>`
+    + `</div>`
+  // 放大净值图：复用现有 body 渲染，并接上十字光标
+  const chartEl = body.querySelector('.mdl-chart')
+  const { html, geom } = renderChartBody(bot, 'all')
+  chartEl.innerHTML = html
+  wireChartCursor(chartEl, geom, bot)
   m.classList.add('open')
   // 懒加载方法论与反思（Task 4 / Task 5 填充）
   void loadMethodologyInto(body.querySelector('#mdlMeth'), botId, runId)
