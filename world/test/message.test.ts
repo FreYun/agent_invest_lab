@@ -428,17 +428,14 @@ test('Day N always injects methodology hint (no strategy block, system prompt ha
   rmSync(w, { recursive: true, force: true })
 })
 
-test('Day N 复盘日（trading_days % 5 === 0）注入策略强制复盘硬契约：第一步定性大趋势 → 第二步业绩对照 → 第三步二选一；非复盘日不注入', () => {
-  // 这个 hook 历史上被悄悄从 message.ts 删过一次（dash-2026-06-01 run 带着它跑，之后 working tree 丢了）。
-  // 这条测试是 guard：① 复盘日（每 5 个交易日）必须注入硬契约；② 三步结构齐全（用户要求"先定性大趋势"）；
-  // ③ 你 vs 躺平的 alpha / 回撤差口径正确；④ 非复盘日（trading_days=4）返回空、不注入。
-  const w = tmpWorldWithOverview('2024-03-25', 'overview')
+// 复盘块 fixture 工厂：可调 total_return_pct（决定 alpha）与账户仓位（决定是否触发踏空升级）。
+function reviewFixture(opts: { tradingDays?: number; totalReturnPct?: number; benchReturnPct?: number; marketValue?: number } = {}) {
   const perf = {
     asOfDate: '2024-03-25',
     summary: {
-      first_date: '2024-03-15', last_date: '2024-03-25', trading_days: 5,
+      first_date: '2024-03-15', last_date: '2024-03-25', trading_days: opts.tradingDays ?? 5,
       initial_capital: 1_000_000, latest_total_value: 1_030_000, latest_net_value: 1.03,
-      total_return_pct: 3.0, annualized_return_pct: 9.0, max_drawdown_pct: -8.0, max_drawdown_date: '2024-03-20',
+      total_return_pct: opts.totalReturnPct ?? 3.0, annualized_return_pct: 9.0, max_drawdown_pct: -8.0, max_drawdown_date: '2024-03-20',
       volatility_pct_annualized: 5.0, sharpe_ratio_rf0: 0.5,
       win_days: 3, loss_days: 2, flat_days: 0,
       best_day: null, worst_day: null,
@@ -448,33 +445,81 @@ test('Day N 复盘日（trading_days % 5 === 0）注入策略强制复盘硬契�
     completedPositions: [],
   }
   const benchmark = {
-    code: '000300.SH', name: '沪深300', pointsByDate: {}, latestCumulativePct: 10.0,
-    metrics: { return_pct: 10.0, max_drawdown_pct: -5.0, volatility_pct: 6.0, sharpe_ratio: 0.6, calmar_ratio: 2.0, data_points: 5 },
+    code: '000300.SH', name: '沪深300', pointsByDate: {}, latestCumulativePct: opts.benchReturnPct ?? 10.0,
+    metrics: { return_pct: opts.benchReturnPct ?? 10.0, max_drawdown_pct: -5.0, volatility_pct: 6.0, sharpe_ratio: 0.6, calmar_ratio: 2.0, data_points: 5 },
   }
+  const account = opts.marketValue === undefined ? undefined : {
+    asOfDate: '2024-03-25',
+    account: { initial_capital: 1_000_000, cash_available: 1_000_000 - opts.marketValue, cash_in_transit: 0, market_value: opts.marketValue, total_value: 1_000_000 },
+    holdings: [], pendingOrders: [],
+  }
+  return { performance: perf, benchmark, account }
+}
+
+test('单指数复盘日（trading_days%5===0）日常分支软化：去掉"自 Day1 累计 vs 躺平"全程记分牌，改滚动自评 + 无证伪就维持；非复盘日不注入', () => {
+  // 病根（bot19 化工）：复盘块每 5 日把"自 Day 1 累计跑输躺平 -34pct"摆给 bot，逼它重写 →
+  // 过拟合成大盘+情绪择时器。软化后单指数日常分支不再亮全程记分牌、不逼为"做点什么"而改。
+  const w = tmpWorldWithOverview('2024-03-25', 'overview')
+  const ctx = reviewFixture({ totalReturnPct: 3.0, benchReturnPct: 10.0 })  // alpha=-7（未达 -10 升级线）、无账户 → 日常分支
   const review = renderDailyMessage({
     worldRoot: w, date: '2024-03-25', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
-    dailyContext: { performance: perf, benchmark },
+    dailyContext: { performance: ctx.performance, benchmark: ctx.benchmark },
   })
-  // 硬契约标题 + 三步结构
+  // 硬契约标题 + 三步结构仍在
   assert.match(review, /【⚠ 第 5 个交易日 · 策略强制复盘（每 5 个交易日一次，今天不可跳过）】/)
   assert.match(review, /▍ 第一步 · 先对当前市场大趋势做一句话定性判断/)
-  assert.match(review, /▍ 第二步 · 你 vs 沪深300（不择时买入持有）/)
-  assert.match(review, /▍ 第三步 · 今天必须二选一/)
-  // alpha = 3.0 - 10.0 = -7.00pct（跑输）；ddGap = -8.0 - (-5.0) = -3.00pct（你回撤更深）
-  assert.match(review, /超额 -7\.00pct（你已跑输躺平 7\.00pct）/)
-  assert.match(review, /差 -3\.00pct（负=你回撤更深）/)
-  // 二选一里的 update_my_strategy 带上字面 bot_id
+  // 软化关键：第二步是滚动自评、明确"刻意不摆全程记分"；不出现累计 vs 躺平的 alpha 行
+  assert.match(review, /看你自己近一段的滚动表现/)
+  assert.match(review, /刻意不在这里摆"自 Day 1 累计跑赢没跑赢躺平"的全程记分/)
+  assert.doesNotMatch(review, /你已跑输躺平/)
+  assert.doesNotMatch(review, /超额 -7\.00pct/)
+  // 第三步：可"维持"、不逼乱改，但 update_my_strategy 仍是选项①
+  assert.match(review, /结论可以是"维持"/)
+  assert.match(review, /不必为了"做点什么"而改/)
   assert.match(review, /update_my_strategy\(bot_id="bot7"/)
-  // 复盘块在最末尾（recency 最高）
-  assert.match(review.trimEnd(), /该改就改，别用"不轻易改"麻痹自己。$/)
+  assert.match(review.trimEnd(), /也别用"必须做点什么"逼自己乱改。$/)
 
   // 非复盘日（trading_days=4）→ 不注入
-  const perf4 = { ...perf, summary: { ...perf.summary, trading_days: 4 } }
+  const ctx4 = reviewFixture({ tradingDays: 4 })
   const noReview = renderDailyMessage({
     worldRoot: w, date: '2024-03-25', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
-    dailyContext: { performance: perf4, benchmark },
+    dailyContext: { performance: ctx4.performance, benchmark: ctx4.benchmark },
   })
   assert.doesNotMatch(noReview, /策略强制复盘/)
+  rmSync(w, { recursive: true, force: true })
+})
+
+test('单指数复盘日 · 踏空升级条款（累计跑输躺平≥10pct 且仓位<20%）仍保留：亮累计 vs 躺平 + 强制重写', () => {
+  const w = tmpWorldWithOverview('2024-03-25', 'overview')
+  // alpha = -5 - 10 = -15 ≤ -10；仓位 100k/1M = 10% < 20% → 触发升级
+  const ctx = reviewFixture({ totalReturnPct: -5.0, benchReturnPct: 10.0, marketValue: 100_000 })
+  const review = renderDailyMessage({
+    worldRoot: w, date: '2024-03-25', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    dailyContext: { performance: ctx.performance, benchmark: ctx.benchmark, account: ctx.account },
+  })
+  // 踏空场景：累计 vs 躺平硬对照亮出来（错过的涨幅 = 逼它动手的证据）
+  assert.match(review, /▍ 第二步 · 你 vs 沪深300（不择时买入持有）· 自 Day 1 起累计/)
+  assert.match(review, /你已跑输躺平 15\.00pct/)
+  assert.match(review, /⛔ 升级条款已触发/)
+  assert.match(review, /今天必须调 `mcp__strategy_mcp__update_my_strategy\(bot_id="bot7"/)
+  rmSync(w, { recursive: true, force: true })
+})
+
+test('多基金（bot101）复盘块走原版逻辑，软化不波及：日常分支仍亮"自 Day1 累计 vs 躺平" + 今天必须二选一', () => {
+  const w = tmpWorldWithOverview('2024-03-25', 'overview')
+  const ctx = reviewFixture({ totalReturnPct: 3.0, benchReturnPct: 10.0 })  // alpha=-7、无账户 → 原版日常分支
+  const review = renderDailyMessage({
+    worldRoot: w, date: '2024-03-25', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json',
+    dailyContext: { performance: ctx.performance, benchmark: ctx.benchmark },
+  })
+  // 原版行为：累计 vs 躺平记分牌 + 二选一 + 原版结尾，一字未动
+  assert.match(review, /▍ 第二步 · 你 vs 沪深300（不择时买入持有）/)
+  assert.match(review, /超额 -7\.00pct（你已跑输躺平 7\.00pct）/)
+  assert.match(review, /▍ 第三步 · 今天必须二选一/)
+  assert.match(review.trimEnd(), /该改就改，别用"不轻易改"麻痹自己。$/)
+  // 软化版独有措辞绝不出现在多基金路径
+  assert.doesNotMatch(review, /看你自己近一段的滚动表现/)
+  assert.doesNotMatch(review, /结论可以是"维持"/)
   rmSync(w, { recursive: true, force: true })
 })
 

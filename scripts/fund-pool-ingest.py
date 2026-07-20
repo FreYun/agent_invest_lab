@@ -180,6 +180,8 @@ def upsert_info(conn: sqlite3.Connection, code: str, m: dict) -> None:
         parse_float(m.get("基金托管费率")),
         parse_float(m.get("最高申购费率")),
         parse_float(m.get("销售服务费率")),
+        m.get("跟踪指数代码"),
+        m.get("跟踪指数名称"),
         now,
     )
     with conn:
@@ -188,8 +190,9 @@ def upsert_info(conn: sqlite3.Connection, code: str, m: dict) -> None:
             INSERT INTO fund_info
               (fund_code, fund_name, fund_company, fund_manager, fund_type,
                established_date, scale, mgmt_fee, custody_fee, purchase_fee,
-               sales_service_fee, purchase_status, redeem_status, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'open', ?)
+               sales_service_fee, track_index_code, track_index_name,
+               purchase_status, redeem_status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'open', ?)
             ON CONFLICT(fund_code) DO UPDATE SET
               fund_name=excluded.fund_name,
               fund_company=excluded.fund_company,
@@ -201,6 +204,8 @@ def upsert_info(conn: sqlite3.Connection, code: str, m: dict) -> None:
               custody_fee=excluded.custody_fee,
               purchase_fee=excluded.purchase_fee,
               sales_service_fee=excluded.sales_service_fee,
+              track_index_code=excluded.track_index_code,
+              track_index_name=excluded.track_index_name,
               updated_at=excluded.updated_at
             """,
             params,

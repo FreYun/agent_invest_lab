@@ -22,6 +22,7 @@
 //   可选：--run-id <id> --out-dir <dir> --retries <n> --from YYYY-MM-DD --to YYYY-MM-DD
 
 import { join, resolve, isAbsolute } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { mkdirSync, writeFileSync, copyFileSync, existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { loadWorldConfig, type WorldConfig } from '../config.ts'
@@ -98,6 +99,74 @@ function log(msg: string): void {
   process.stdout.write(`[prepass] ${msg}\n`)
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(res => setTimeout(res, Math.max(0, ms)))
+}
+
+// ── 单个 reporter 单日落库的「重试 + 硬重启兜底」编排 ────────────────────────────
+//
+// 两层防御，针对两类不同的瞬时故障：
+//   阶段一 同进程内重试：处理纯 LLM 抖动（chat_llm 超时、偶发空回复）。廉价，复用已 warm 的
+//          子进程与其 MCP 连接。
+//   阶段二 硬重启兜底：处理**进程级 MCP 初始化瞬时失败**——研究循环 rust 子进程在启动窗口里
+//          没连上上游 MCP（"simworld-data 0 tools / strategy-mcp init_failed / submit_market_report
+//          不可用"），这个失败被缓存在进程内，同进程再 chat 也救不回来（2026-06-23 market_context
+//          缺失即此故障）。唯一解是 shutdown 子进程后重新 BotServer.start，逼出一次全新的 MCP init，
+//          并换一个干净的 session_key 让 agent 重新发现工具、从头研究。
+//
+// 全部 IO（落库校验 / chat / 重启 / sleep / 日志）依赖注入，便于单测（见 test/prepass-fallback.test.ts）。
+export interface ReporterFallbackDeps {
+  /** 该 reportType@date 是否已落库（每次调用都实时查，作为唯一成功判据）。 */
+  reportExists: () => boolean
+  /** 在当前子进程上跑一次 chat（传入本次使用的 session_key）。抛错即视为本次失败。 */
+  chat: (sessionKey: string) => Promise<{ chatErr?: string }>
+  /** 硬重启该 reporter 的子进程（全新 MCP 连接）。返回 false 表示重启失败、兜底无法继续。 */
+  restart: () => Promise<boolean>
+  sleep: (ms: number) => Promise<void>
+  log: (msg: string) => void
+  /** 同进程内重试次数（阶段一），不含首次。 */
+  retries: number
+  /** 硬重启兜底次数（阶段二）。 */
+  hardRestarts: number
+  retryBackoffMs?: number
+  restartBackoffMs?: number
+}
+
+/** 返回 true = 报告已落库（含幂等命中）；false = 重试与硬重启兜底均未落库。 */
+export async function generateReportWithFallback(
+  botId: string,
+  sessionKeyBase: string,
+  deps: ReporterFallbackDeps,
+): Promise<boolean> {
+  const retryBackoffMs = deps.retryBackoffMs ?? 5000
+  const restartBackoffMs = deps.restartBackoffMs ?? 8000
+  if (deps.reportExists()) return true   // 幂等：已落库直接成功
+
+  const runOnce = async (sessionKey: string): Promise<boolean> => {
+    let chatErr: string | undefined
+    try { chatErr = (await deps.chat(sessionKey)).chatErr }
+    catch (e) { chatErr = e instanceof Error ? e.message : String(e) }
+    if (deps.reportExists()) return true   // 落库校验才算成功
+    if (chatErr) deps.log(`  ${botId} 本次未落库（chat_error: ${chatErr.slice(0, 80)}）`)
+    return false
+  }
+
+  // 阶段一：同进程内重试
+  for (let attempt = 0; attempt <= deps.retries; attempt++) {
+    if (attempt > 0) { deps.log(`  ${botId} 重试 ${attempt}/${deps.retries}`); await deps.sleep(retryBackoffMs) }
+    if (await runOnce(sessionKeyBase)) return true
+  }
+
+  // 阶段二：硬重启兜底（全新 MCP 连接 + 干净 session_key）
+  for (let r = 1; r <= deps.hardRestarts; r++) {
+    deps.log(`  ${botId} 同进程重试耗尽仍未落库 → 硬重启 server 第 ${r}/${deps.hardRestarts} 次（全新 MCP 连接）`)
+    if (!(await deps.restart())) { deps.log(`  ${botId} server 重启失败，放弃兜底`); break }
+    await deps.sleep(restartBackoffMs)
+    if (await runOnce(`${sessionKeyBase}-rs${r}`)) return true
+  }
+  return false
+}
+
 async function main(argv = process.argv.slice(2)): Promise<number> {
   if (argv.includes('-h') || argv.includes('--help')) {
     process.stdout.write(
@@ -107,7 +176,8 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       '  --run-id <id>     缺省 prepass-<ts>\n' +
       '  --from / --to     覆盖 config 的 replay 窗口（YYYY-MM-DD）\n' +
       '  --freq <f>        决策日频率 monthly（缺省，每月第一个交易日）| weekly（每 ISO 周第一个交易日）| daily（每个交易日）\n' +
-      '  --retries <n>     每个 reporter 落库失败重试次数，缺省 2\n')
+      '  --retries <n>     每个 reporter 同进程内落库失败重试次数，缺省 2\n' +
+      '  --hard-restarts <n> 同进程重试耗尽后，硬重启子进程（全新 MCP 连接）兜底次数，缺省 1\n')
     return 0
   }
 
@@ -119,6 +189,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   const outRoot = resolve(argVal(argv, '--out-dir') ?? join(process.cwd(), 'runtime-prepass'))
   const runId = argVal(argv, '--run-id') ?? `prepass-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`
   const retries = Math.max(0, parseInt(argVal(argv, '--retries') ?? '2', 10) || 0)
+  const hardRestarts = Math.max(0, parseInt(argVal(argv, '--hard-restarts') ?? '1', 10) || 0)
   const fundDbPath = resolve(join(process.cwd(), '..', 'data', 'fund.db'))
   const from = argVal(argv, '--from') ?? config.replay.from
   const to = argVal(argv, '--to') ?? config.replay.to
@@ -159,7 +230,10 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
 
   // ── spawn 三个 reporter（顺序：context→mainline→rotation 由 config.bots 顺序保证）────────
   const overrideFile = P.worldDateOverrideFile(outRoot, runId)
-  const bots: { botId: string; reportType: string; server: BotServer }[] = []
+  const onBotLog = (l: string): void => { process.stderr.write(l + '\n') }
+  const onBotNotification = (method: string): void => { if (method === 'tool.call') process.stdout.write('.') }
+  // server 可被硬重启替换 → 用可变字段；同时保留 argv/env 以便原样重启。
+  const bots: { botId: string; reportType: string; server: BotServer; argv: string[]; env: Record<string, string> }[] = []
   for (const botId of reporters) {
     const srcWs = isAbsolute(botId) ? botId : join(config.botsRoot, botId)
     if (!existsSync(srcWs)) { process.stderr.write(`source workspace not found: ${srcWs}\n`); return 2 }
@@ -169,15 +243,25 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     const argvBot = botServerArgv(config, botId, shadow, loopConfigPath(config, outRoot, runId))
     const env: Record<string, string> = { WORLD_DATE_OVERRIDE_FILE: overrideFile, ...proxyEnvSupplement() }
     const server = await BotServer.start(botId, {
-      argv: argvBot, env, readyTimeoutMs: 60_000,
-      onLog: (l) => process.stderr.write(l + '\n'),
-      onNotification: (method) => { if (method === 'tool.call') process.stdout.write('.') },
+      argv: argvBot, env, readyTimeoutMs: 60_000, onLog: onBotLog, onNotification: onBotNotification,
     })
-    bots.push({ botId, reportType: REPORT_TYPE_BY_BOT[botId], server })
+    bots.push({ botId, reportType: REPORT_TYPE_BY_BOT[botId], server, argv: argvBot, env })
     log(`bot ${botId} ready`)
   }
 
   const perBotTimeoutMs = (config.researchDayTimeoutSeconds ?? config.perBotTimeoutSeconds ?? 900) * 1000
+
+  // 硬重启某 reporter 的子进程：shutdown 旧进程 → 重新 BotServer.start（全新 MCP init）。
+  // 成功后原地替换 b.server，后续 chat / 收尾 shutdown 都作用在新进程上。
+  const restartBot = async (b: typeof bots[number]): Promise<boolean> => {
+    try { await b.server.shutdown({ timeoutMs: 5000 }) } catch { /* 旧进程可能已死，忽略 */ }
+    try {
+      b.server = await BotServer.start(b.botId, {
+        argv: b.argv, env: b.env, readyTimeoutMs: 60_000, onLog: onBotLog, onNotification: onBotNotification,
+      })
+      return true
+    } catch (e) { log(`  ${b.botId} server 重启异常：${e instanceof Error ? e.message : String(e)}`); return false }
+  }
 
   // ── 月度循环 ──────────────────────────────────────────────────────────────
   let generated = 0, skipped = 0, failed = 0
@@ -189,19 +273,14 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       log(`=== 决策日 ${di + 1}/${decisionDays.length}: ${date} ===`)
       for (const b of bots) {
         if (reportExists(fundDbPath, b.reportType, date)) { log(`  ${b.botId} 已有 ${b.reportType}@${date}，跳过`); skipped++; continue }
-        let ok = false
-        for (let attempt = 0; attempt <= retries && !ok; attempt++) {
-          if (attempt > 0) log(`  ${b.botId} 重试 ${attempt}/${retries}`)
-          let chatErr: string | undefined
-          try {
-            const r = await b.server.chat({ message: REPORTER_MESSAGE, session_key: `agent:${b.botId}:prepass-${runId}-${date}`, history: [] }, { timeoutMs: perBotTimeoutMs })
-            chatErr = r.chat_error
-          } catch (e) { chatErr = e instanceof Error ? e.message : String(e) }
-          ok = reportExists(fundDbPath, b.reportType, date)   // 落库校验才算成功
-          if (!ok && chatErr) log(`  ${b.botId} 本次未落库（chat_error: ${chatErr.slice(0, 80)}）`)
-        }
+        const ok = await generateReportWithFallback(b.botId, `agent:${b.botId}:prepass-${runId}-${date}`, {
+          reportExists: () => reportExists(fundDbPath, b.reportType, date),
+          chat: (sessionKey) => b.server.chat({ message: REPORTER_MESSAGE, session_key: sessionKey, history: [] }, { timeoutMs: perBotTimeoutMs }).then(r => ({ chatErr: r.chat_error })),
+          restart: () => restartBot(b),
+          sleep, log, retries, hardRestarts,
+        })
         if (ok) { log(`  ${b.botId} ✓ ${b.reportType}@${date}`); generated++ }
-        else { log(`  ${b.botId} ✗ ${b.reportType}@${date} —— ${retries + 1} 次仍未落库，跳过`); failed++ }
+        else { log(`  ${b.botId} ✗ ${b.reportType}@${date} —— 重试+硬重启兜底均未落库，跳过`); failed++ }
       }
     }
   } finally {
@@ -217,7 +296,10 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   return failed > 0 ? 1 : 0
 }
 
-main().then(code => { if (code) process.exitCode = code }).catch(err => {
-  process.stderr.write(`[prepass] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
-  process.exitCode = 1
-})
+// 仅在作为脚本直接运行时启动 main()；被 import（如单测）时不自动执行。
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then(code => { if (code) process.exitCode = code }).catch(err => {
+    process.stderr.write(`[prepass] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
+    process.exitCode = 1
+  })
+}

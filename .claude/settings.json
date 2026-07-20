@@ -101,10 +101,28 @@
       "Bash(git -C /home/ubuntu/rooot/.openclaw status --short -- research-loop/rust/src/compact.rs)",
       "Bash(git -C /home/ubuntu/rooot/.openclaw log --oneline -1 -- research-loop/rust/src/compact.rs)",
       "Bash(awk '{print $2, $9, $11, $12, $13, $14, $15}')",
-      "Bash(OPENCLAW_DIR=/home/ubuntu/rooot/.openclaw ./node_modules/.bin/tsx main.ts \"紫金矿业 601899 深度估值与交易策略研究：铜金利润贡献拆解、量价敏感性模型、产能达成率核实（卡莫事故影响）、宏观利率路径对矿企估值的二阶影响、资金筹码结构分析（融资盘/北向/机构博弈）、基于情景分析的目标价矩阵\" --workspace bot7 --once)"
+      "Bash(OPENCLAW_DIR=/home/ubuntu/rooot/.openclaw ./node_modules/.bin/tsx main.ts \"紫金矿业 601899 深度估值与交易策略研究：铜金利润贡献拆解、量价敏感性模型、产能达成率核实（卡莫事故影响）、宏观利率路径对矿企估值的二阶影响、资金筹码结构分析（融资盘/北向/机构博弈）、基于情景分析的目标价矩阵\" --workspace bot7 --once)",
+      "Bash(ps -p 1850248 -o pid,etime,stat)",
+      "Bash(timeout 8 bash -c 'echo > /dev/tcp/172.31.41.30/22')",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 rooot@172.31.41.30 'echo SSH_OK; hostname; hostname -I')",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 rooot@172.31.41.30 '/usr/bin/python3.12 -c \" *)",
+      "Bash(timeout 10 stat -c '%s %y' /home/rooot/agent_invest_lab/data/fund.db)",
+      "Bash(echo \"=== /home/rooot/database 现状 ===\" *)",
+      "Bash(timeout 8 stat -c '%y' /home/rooot/agent_invest_lab/data/fund.db)",
+      "Bash(echo \"rc=$? lines=$\\(wc -l < /tmp/dbreaders.txt\\)\")",
+      "Bash(echo \"rc=$? lines=$\\(wc -l < /tmp/r1.txt\\)\")",
+      "Bash(scp -o BatchMode=yes -o ConnectTimeout=8 /tmp/qtab.py rooot@172.31.41.30:/tmp/qtab.py)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 rooot@172.31.41.30 'python3 /tmp/qtab.py 2>/dev/null || /usr/bin/python3.12 /tmp/qtab.py')",
+      "Bash(awk '/COMMON:END/{f=1;next} f' bots/bot20/AGENTS.md)",
+      "Bash(ls -la strategies/index-products/robot.md)",
+      "Bash(awk '/^## 二、趋势视角/,/^## 三、/' strategies/index-products/robot.md)",
+      "Bash(awk '/^# 投资执行/,/^# 方法论迭代机制/' strategies/index-products/robot.md)",
+      "Bash(awk '/择时|趋势|绿灯|donchian|erp_vix|动量|因子定级|可用的/{print NR\": \"$0}' strategies/index-products/zz500.md)",
+      "Bash(awk '/^### 三-Z/,/^## /' zz1000.md)"
     ],
     "additionalDirectories": [
-      "/home/ubuntu/rooot/.openclaw/research-loop/rust/src"
+      "/home/ubuntu/rooot/.openclaw/research-loop/rust/src",
+      "/home/rooot"
     ]
   }
 }

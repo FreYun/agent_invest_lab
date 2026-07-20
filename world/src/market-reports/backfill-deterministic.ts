@@ -29,8 +29,8 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url))           // world/src/market-reports
 const REPO_ROOT = resolve(HERE, '..', '..', '..')              // agent_invest_lab
 const V5_SCRIPT = join(REPO_ROOT, 'scripts', 'v5_mainline_plan.py')
-const SCOUT_DB = process.env.SCOUT_DB ?? '/home/rooot/database/market.db'
-const COARSE_THEMES = process.env.COARSE_THEMES ?? '/home/rooot/.openclaw/scout/coarse_themes.json'
+const SCOUT_DB = process.env.SCOUT_DB ?? join(REPO_ROOT, 'data', 'market.db')
+const COARSE_THEMES = process.env.COARSE_THEMES ?? join(REPO_ROOT, 'market_pipeline', 'openclaw', 'scout', 'coarse_themes.json')
 
 // v5 阈值（与 v5_mainline_plan.py / skill 文本一致，仅用于日度计数器展示）
 const K_ENTRY = 5
@@ -194,10 +194,15 @@ function regimeOnDay(cache: DayCache, rawDate: string): string {
   return domCount >= DOMINANT_MIN ? '抱主线·v4' : '无主线·宽基'
 }
 
-/** regime 连续维持天数（从决策日往回数同名 regime）。 */
-function regimeDays(cache: DayCache, currentRegime: string): number {
+/** regime 连续维持天数（从锚定日往回数同名 regime）。
+ *  anchorRaw 缺省 = 从 cache 最新日（tdaysDesc[0]）起算（monthly/weekly：cache 即建在决策日）；
+ *  daily 下 cache 建在「实际交易日」、但 regime 节锚定 v5「月首决策日」以与所示 dist/集中度证据自洽，
+ *  故传决策日做锚：先跳到该日再起算。 */
+function regimeDays(cache: DayCache, currentRegime: string, anchorRaw?: string): number {
   let n = 0
+  let started = anchorRaw === undefined
   for (const d of cache.tdaysDesc) {
+    if (!started) { if (d === anchorRaw) started = true; else continue }
     if (regimeOnDay(cache, d) === currentRegime) n++
     else break
     if (n >= LOOKBACK_TDAYS) break
@@ -294,12 +299,13 @@ type HoldIdentity = { code: string; role: string }
 function renderRotation(
   plan: V5Plan, cache: DayCache, tradingRawAll: string[], decisionRaw: string,
   prev: { regime: string; identity: HoldIdentity[] } | null,
+  regimeAnchorRaw?: string,
 ): { content: string; structured: string; identity: HoldIdentity[] } {
   const rg = plan.regime?.name ?? '—'
   const holdings = (plan.v4_holdings ?? []) as unknown as V5Holding[]
   const fm = new Map((plan.fund_matches ?? []).map(m => [m.board_code ?? '', (m.selected ?? null) as FundSel | null]))
   const isMainline = rg.startsWith('抱主线')
-  const rgDays = regimeDays(cache, rg)
+  const rgDays = regimeDays(cache, rg, regimeAnchorRaw)
 
   // 组合行：抱主线 → v4 核心/卫星 + 双测度基金；其余 → v5 的红利/宽基底线 ETF
   const portfolio: RotationRow[] = []
@@ -461,7 +467,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     process.stdout.write(
       'market-reports 确定性回补（market_mainline + mainline_rotation）\n' +
       '  --from / --to    回补窗口（YYYY-MM 或 YYYY-MM-DD），按决策日频率生成\n' +
-      '  --freq <f>       决策日频率 monthly（缺省，每月第一个交易日）| weekly（每 ISO 周第一个交易日）\n' +
+      '  --freq <f>       决策日频率 monthly（缺省，每月第一个交易日）| weekly（每 ISO 周第一个交易日）| daily（每个交易日）\n' +
       '  --fund-db <p>    缺省 <repo>/data/fund.db\n' +
       '  --calendar <p>   缺省 <repo>/world/runtime/calendar.json\n' +
       '  --run-id <id>    缺省 backfill-det[-weekly]-<from>-<to>\n' +
@@ -473,10 +479,11 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   const from = fromArg.length === 7 ? `${fromArg}-01` : fromArg
   const to = toArg.length === 7 ? `${toArg}-31` : toArg
   const freq = argVal(argv, '--freq') ?? 'monthly'
-  if (freq !== 'monthly' && freq !== 'weekly') { process.stderr.write(`--freq 只支持 monthly|weekly，得到 ${freq}\n`); return 2 }
+  if (freq !== 'monthly' && freq !== 'weekly' && freq !== 'daily') { process.stderr.write(`--freq 只支持 monthly|weekly|daily，得到 ${freq}\n`); return 2 }
   const fundDb = resolve(argVal(argv, '--fund-db') ?? join(REPO_ROOT, 'data', 'fund.db'))
   const calendarPath = resolve(argVal(argv, '--calendar') ?? join(REPO_ROOT, 'world', 'runtime', 'calendar.json'))
-  const runId = argVal(argv, '--run-id') ?? `backfill-det${freq === 'weekly' ? '-weekly' : ''}-${ymd(from).slice(0, 6)}-${ymd(to).slice(0, 6)}`
+  const freqSuffix = freq === 'weekly' ? '-weekly' : freq === 'daily' ? '-daily' : ''
+  const runId = argVal(argv, '--run-id') ?? `backfill-det${freqSuffix}-${ymd(from).slice(0, 6)}-${ymd(to).slice(0, 6)}`
   const force = argv.includes('--force')
 
   const cal = loadCalendar(calendarPath)
@@ -484,8 +491,10 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   // 日期窗从 2024-01 起：regimeOnDay 的 MA120 + regime_days 回看共需 ~250 个交易日余量。
   const allDates = computeTradingDates(cal, '2024-01-01', to)
   const tradingRawAll = allDates.map(ymd)
-  const decisionDays = freq === 'weekly' ? weekFirstTradingDays(allDates) : monthFirstTradingDays(allDates)
-  const freqLabel = freq === 'weekly' ? '周度' : '月度'
+  const decisionDays = freq === 'weekly' ? weekFirstTradingDays(allDates)
+    : freq === 'daily' ? allDates
+    : monthFirstTradingDays(allDates)
+  const freqLabel = freq === 'weekly' ? '周度' : freq === 'daily' ? '日度' : '月度'
   const firstIdx = decisionDays.findIndex(d => d >= from)
   if (firstIdx < 0) { process.stderr.write(`窗口 ${from}..${to} 内无${freqLabel}决策日\n`); return 2 }
   const loopDays = decisionDays.slice(Math.max(0, firstIdx - 1))
@@ -497,25 +506,36 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
 
   let written = 0, skipped = 0, failed = 0
   let prev: { regime: string; identity: HoldIdentity[] } | null = null
+  // v5 plan 按自然月缓存：daily 频率下同一月内 decision 恒为月首（v5 是月度状态机），
+  // board_fund_match（慢，可能经 PIT 调 18078）每月只算一次，月内其余交易日复用。
+  const planCache = new Map<string, V5Plan>()
   for (let i = 0; i < loopDays.length; i++) {
     const date = loopDays[i]
     const isWarmup = i === 0 && firstIdx > 0
-    let plan: V5Plan
-    try {
-      plan = loadV5Plan(date)
-    } catch (e) {
-      // warm-up 落在 v5 数据起点(2025-01)之前会预期失败 → 不计 failed，本期按序列首期处理(prev=null)
-      if (isWarmup) { log(`(warm-up ${date}：v5 无数据[早于状态机起点]，跳过，本期按首期建仓处理)`); prev = null; continue }
-      log(`✗ ${date} v5 引擎失败：${e instanceof Error ? e.message : String(e)}`)
-      failed++; prev = null; continue
+    const monthKey = date.slice(0, 7)
+    let plan = planCache.get(monthKey)
+    let freshPlan = false
+    if (!plan) {
+      try {
+        plan = loadV5Plan(date); freshPlan = true; planCache.set(monthKey, plan)
+      } catch (e) {
+        // warm-up 落在 v5 数据起点(2025-01)之前会预期失败 → 不计 failed，本期按序列首期处理(prev=null)
+        if (isWarmup) { log(`(warm-up ${date}：v5 无数据[早于状态机起点]，跳过，本期按首期建仓处理)`); prev = null; continue }
+        log(`✗ ${date} v5 引擎失败：${e instanceof Error ? e.message : String(e)}`)
+        failed++; prev = null; continue
+      }
     }
-    const decisionRaw = ymd(plan.decision_trade_date ?? date)
+    // daily：计数器/已持天数/regime_days 按「实际交易日」算（逐日变化的展示信号，与用户敲定的口径）；
+    // monthly/weekly：沿用 v5 月度决策日（月首），原口径不变。
+    const counterRaw = freq === 'daily' ? ymd(date) : ymd(plan.decision_trade_date ?? date)
     const holdings = (plan.v4_holdings ?? []) as unknown as V5Holding[]
     const counterBoards = new Set<string>(holdings.map(h => h.code))
     for (const t of plan.top15 ?? []) if (t.rank <= K_ENTRY) counterBoards.add(t.code)
-    const cache = buildDayCache(decisionRaw, tradingRawAll, [...counterBoards], groups)
+    const cache = buildDayCache(counterRaw, tradingRawAll, [...counterBoards], groups)
 
-    const rot = renderRotation(plan, cache, tradingRawAll, decisionRaw, prev)
+    // regime 节锚定 v5 月首决策日（与所示 dist/集中度自洽）；计数器/held_days 用 counterRaw（实际日）。
+    const regimeAnchorRaw = ymd(plan.decision_trade_date ?? date)
+    const rot = renderRotation(plan, cache, tradingRawAll, counterRaw, prev, regimeAnchorRaw)
     prev = { regime: plan.regime?.name ?? '—', identity: rot.identity }
     if (isWarmup) { log(`(warm-up ${date}：仅取上一期组合，不落库)`); continue }
 
@@ -541,8 +561,9 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       }
     } catch (e) { failed++; log(`✗ ${date} mainline_rotation 失败：${e instanceof Error ? e.message : String(e)}`) }
 
-    // 月份间小睡：board_fund_match 可能经 PIT 调 idx_constituents，18078 与 live run 共用
-    if (i < loopDays.length - 1) await new Promise(r => setTimeout(r, 2000))
+    // 仅在真正调用了 v5 引擎（新月/新决策）后小睡：board_fund_match 可能经 PIT 调
+    // idx_constituents，18078 与 live run 共用；daily 月内缓存命中的日子不碰引擎，无需 sleep。
+    if (freshPlan && i < loopDays.length - 1) await new Promise(r => setTimeout(r, 2000))
   }
 
   // 覆盖矩阵摘要

@@ -44,7 +44,7 @@ _DATE_FIELD_BLOCKLIST = {
 _mcp = FastMCP(
     "ttjj-data-pit",
     # 关掉 MCP SDK 的 DNS rebinding 防护（与 fund-portfolio 一致）：默认 allowed_hosts=[]
-    # 只放行 localhost，远端用 LAN IP（如 172.31.41.68:18078）直连会被回 421 Misdirected
+    # 只放行 localhost，远端用 LAN IP（如 172.31.41.1055:18078）直连会被回 421 Misdirected
     # Request / "Invalid Host header"。本服务跑在可信办公内网、消费方是另一个 LLM（无需
     # 防护），放行所有 Host；裸 HTTP 无鉴权，靠私网/隧道兜底。
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),

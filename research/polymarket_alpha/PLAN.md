@@ -6,7 +6,7 @@
 
 **Architecture:** 三个零耦合单元——`align.py`(PIT 对齐+防未来函数) → `ic_scan.py`(Spearman IC/分位/去趋势检验) → `run_scan.py`(跑全假设出报告)；外加 `collector/`(调 polymarket CLI 灌聪明钱空表)。标的数据先缓存 CSV，检验只读本地。
 
-**Tech Stack:** SQLite(polymarket.db + market.db)、pandas、Spearman IC；数据补齐用 vibe-trading venv 的 AkshareLoader；采集用 Rust `polymarket` CLI。
+**Tech Stack:** SQLite(polymarket.db + market.db)、pandas、Spearman IC；数据补齐用 vibe-trading venv 的 DataLoader；采集用 Rust `polymarket` CLI。
 
 ## Global Constraints
 
@@ -42,8 +42,8 @@ mkdir -p /home/rooot/agent_invest_lab/research/polymarket_alpha/data
 $PY_VBA - <<'PY'
 import sys
 sys.path.insert(0,"/home/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
-from backtest.loaders.akshare_loader import AkshareLoader
-L=AkshareLoader()
+from backtest.loaders.akshare_loader import DataLoader
+L=DataLoader()
 # 黄金ETF(A股) + 美股纳指/标普ETF代理；起始覆盖 polymarket 最早 2025-05
 data=L.fetch(["518880","QQQ","SPY"],"2025-01-01","2026-07-03",interval="1D")
 import os

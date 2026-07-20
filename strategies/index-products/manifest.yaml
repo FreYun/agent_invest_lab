@@ -22,7 +22,7 @@ strategies:
     title: 中证500指数投资框架
     methodology: zz500.md
     target_index: "000905.SH"
-    default_buyable_fund_codes: ["007995"]
+    default_buyable_fund_codes: ["002903"]
 
   sp500:
     title: 标普500指数投资框架
@@ -97,7 +97,7 @@ strategies:
     title: 中证红利投资框架
     methodology: dividend.md
     target_index: "000922.CSI"
-    default_buyable_fund_codes: ["161907"]
+    default_buyable_fund_codes: ["012644"]
 
   innodrug:
     title: 创新药指数投资框架
@@ -203,11 +203,11 @@ strategies:
   #   default_buyable_fund_codes: []
 
   # —— 科技TMT(5) ——
-  # internet50:
-  #   title: 中国互联网50指数投资框架
-  #   methodology: internet50.md
-  #   target_index: "H30533.CSI"       # 注：H30533=中国互联网50，非风电（清单已纠错）
-  #   default_buyable_fund_codes: []
+  internet50:
+    title: 中国互联网50指数投资框架
+    methodology: internet50.md
+    target_index: "H30533.CSI"       # 注：H30533=中国互联网50(中证海外中国互联网50)，非风电（清单已纠错）；行情须带 .CSI 后缀+market=cn，裸码取不到
+    default_buyable_fund_codes: ["006328"]   # 易方达中证海外互联网50ETF联接(QDII)C（跟踪 H30533，2026-06-18 ingest 入库，NAV 起 2024-12）
   # chinext_ai:
   #   title: 创业板人工智能指数投资框架
   #   methodology: chinext-ai.md
@@ -223,11 +223,11 @@ strategies:
     methodology: satellite.md
     target_index: "980018.SZ"
     default_buyable_fund_codes: ["024195"]   # 待配；现有跟踪基金(永赢159206/联接024194)2025年中才成立,净值史短,回测起点需后移
-  # robot:
-  #   title: 机器人指数投资框架
-  #   methodology: robot.md
-  #   target_index: "H30590.CSI"
-  #   default_buyable_fund_codes: []
+  robot:
+    title: 中证机器人指数投资框架（人形机器人主线）
+    methodology: robot.md
+    target_index: "H30590.CSI"
+    default_buyable_fund_codes: ["014881"]   # 天弘中证机器人ETF发起联接C（跟踪 H30590，规模约25亿；A类 014880）
 
   # —— 资源周期(4)：2026-06-11 由广义有色 nonferrous 拆分 + 独立化工，已启用 ——
   #   因子定级见 research/index_timing/RESULT-index-timing-factor-screen.md §十。

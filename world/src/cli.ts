@@ -39,8 +39,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
     config: valueOf('--config'),
     runId: valueOf('--run-id'),
     worldDir: valueOf('--world-dir'),
-    dryRun: argv.includes('--dry-run'),
-    preserveState: argv.includes('--no-state'),
+    ...(argv.includes('--dry-run') ? { dryRun: true } : {}),
+    ...(argv.includes('--no-state') ? { preserveState: true } : {}),
   }
   if (cmd === 'run' || cmd === 'resume' || cmd === 'status' || cmd === 'stop' || cmd === 'pause' || cmd === 'realign') return { ...base, command: cmd }
   return base

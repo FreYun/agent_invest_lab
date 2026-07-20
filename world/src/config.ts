@@ -70,6 +70,10 @@ export interface WorldConfig {
   // 在 fund.db 里的所有行（accounts/holdings/orders/actions/snapshots/runs）。默认 true
   // 当 fundMcpCli 已配置——非 reset 的延续场景请显式传 false。
   fundInitReset?: boolean
+  // 是否允许 bot 自己改 USER.md（风险偏好真相源）—— 透给 strategy-server，开了才暴露
+  // update_my_user/get_my_user。默认 false（生产 bot101/102/103 run 不开）。仅「按 USER.md
+  // 风险偏好建档」的测试/分身 run 设 true（yaml: enable_user_self_edit）。
+  enableUserSelfEdit?: boolean
   // Optional shared strategy library. When botAssignments[botId] is present, world
   // generates that bot's shadow METHODOLOGY.md from the referenced shared strategy.
   strategyLibraryRoot?: string
@@ -326,6 +330,7 @@ export function loadWorldConfig(path: string): WorldConfig {
   const fundInitReset = typeof raw.fund_init_reset === 'boolean'
     ? raw.fund_init_reset
     : (fundMcpCli ? true : undefined)
+  const enableUserSelfEdit = raw.enable_user_self_edit === true
   let buyableFundCodes: string[] | undefined
   if (raw.buyable_fund_codes !== undefined) {
     buyableFundCodes = parseFundCodeList(raw.buyable_fund_codes, 'buyable_fund_codes')
@@ -351,5 +356,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
   }
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
 }

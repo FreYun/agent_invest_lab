@@ -44,10 +44,14 @@ export interface DailyMessageContext {
   // 保证 bot 每个决策日开头就读到完整 skill 算法/工具表）。由 run.ts 按 bot 读取 shadow skills 填充。
   // 空/缺省 → 跳过整块（绝大多数 bot 即此，行为不变）。
   injectedSkills?: { id: string; content: string }[]
-  // 系统预读注入的三份市场研报 content_md（PIT：as_of_date<=世界日的最新一期）。bot101/102/103
+  // 系统预读注入的市场研报 content_md（PIT：as_of_date<=世界日的最新一期）。bot101/102/103
   // 用：替代旧的 skill 注入自跑流水线——主线/regime/组合骨架由系统预生成，bot 直接消费、不自己识别。
-  // 由 run.ts 从 fund.db 的 market_reports 表读出填充。空/缺省 → 跳过整块。
-  marketReports?: { context: string; mainline: string; rotation: string; macroNews?: string }
+  // 由 run.ts 从 fund.db 读出填充（4 份 market_reports + 四研判室 res1/2/4/5 的 res_reports）。空/缺省 → 跳过整块。
+  marketReports?: {
+    context: string; mainline: string; rotation: string; macroNews?: string
+    // 四研判室宏观背景研判（res1 市场策略 / res2 政策 / res4 国际关系 / res5 跨市场）。缺省/全空 → 不渲染该子段。
+    res?: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string }
+  }
   // 系统在 chat 前预取的盘中实时行情块。仅同一天 14:30 一类实盘 OOS 决策注入；
   // 历史回测 / T+1 早盘跑昨日时为空，避免把 host 当天实时行情污染历史世界日。
   intradayMarketBlock?: string
@@ -73,7 +77,10 @@ export type BotKind = 'single-fund' | 'multi-fund' | 'multi-asset'
 
 export function botKindOf(botId: string): BotKind {
   if (botId === 'bot_multi') return 'multi-asset'
-  return /^bot1\d{2}$/.test(botId) ? 'multi-fund' : 'single-fund'
+  // bot1XX 多基金家族 + 其测试分身（带后缀的克隆，如 bot101t_k1）都算多基金。
+  // `(?:[^0-9].*)?` 只允许「bot1+2位数字」后跟非数字分隔再接任意 → bot101t_k1✓、
+  // bot1011✗（不误吞 4 位 id）、bot20/bot10✗（保持单基金）。
+  return /^bot1\d{2}(?:[^0-9].*)?$/.test(botId) ? 'multi-fund' : 'single-fund'
 }
 
 // Prompt 不再注入静态 overview——行情走 simworld-data MCP 实时查；不再区分研究日 vs 交易日
@@ -532,10 +539,19 @@ function periodBlock(p: DailyMessageContext['periodInfo']): string {
 const ESCALATE_ALPHA_PP = -10
 const ESCALATE_POS_WEIGHT = 0.2
 
+// 复盘块入口：按 botKind 岔开。**本次"日常复盘软化"只作用单指数（bot1~20）**；多基金
+// （bot101/102/103）走原版逻辑，一字未动（用户硬约束：要改只能改单指数）。
 function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): string {
   if (!isReviewDay(dc)) return ''
-  const s = dc!.performance!.summary!
-  const bm = dc!.benchmark
+  return botKindOf(botId) === 'single-fund'
+    ? singleFundReviewBlock(dc!, botId)
+    : multiFundReviewBlock(dc!, botId)
+}
+
+// 多基金（bot101/102/103）原版强制复盘——保持改造前行为，请勿在此施加单指数的软化。
+function multiFundReviewBlock(dc: DailyContextData, botId: string): string {
+  const s = dc.performance!.summary!
+  const bm = dc.benchmark
   const m = bm?.metrics
   const lines: string[] = []
   lines.push(`【⚠ 第 ${s.trading_days} 个交易日 · 策略强制复盘（每 ${REVIEW_CADENCE_DAYS} 个交易日一次，今天不可跳过）】`)
@@ -545,7 +561,7 @@ function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): s
   lines.push('')
   let escalate = false
   // 当前仓位权重（账户快照取自今日 settle 后）。account 缺失时无法判定，不触发升级。
-  const acct = dc!.account?.account
+  const acct = dc.account?.account
   const posWeight = acct && acct.total_value > 0 ? acct.market_value / acct.total_value : null
   if (m) {
     const alpha = s.total_return_pct - m.return_pct
@@ -572,6 +588,50 @@ function strategyReviewBlock(dc: DailyContextData | undefined, botId: string): s
     lines.push('  ② 判断方法论仍成立 → mem0_add 写下"复盘结论：方法论仍有效"，并逐条反驳上面每个负面信号（为什么跑输只是暂时、回撤在容忍内、thesis 仍未破），给出数据依据——不是空喊"再观察"。注意：连续多次复盘都选②而超额持续恶化，是"用纪律包装惯性"的红旗——跑输扩大到升级线（跑输 ≥10pct 且仓位 <20%）时②会被直接禁用。')
   }
   lines.push('判据别只盯一天涨跌：结合上方【信念校准】块的 Brier / 活性 + 第一步的趋势定性 + 第二步的累计对照一起判。该改就改，别用"不轻易改"麻痹自己。')
+  return `\n\n${lines.join('\n')}`
+}
+
+// 单指数（bot1~20）软化版：升级（踏空闸门）保持原样硬约束；日常复盘去掉"自 Day 1 累计 vs 躺平"
+// 的全程记分牌，改成滚动近一段自评 + "无具体证伪就维持"，掐掉回测里"偷看整条已知净值→把趋势/情绪
+// 权重拉满"的过拟合重写（教训：bot19 化工照此把价差/油煤框架掀成大盘+情绪择时器，把 +52% 躺平做成 +10%）。
+function singleFundReviewBlock(dc: DailyContextData, botId: string): string {
+  const s = dc.performance!.summary!
+  const bm = dc.benchmark
+  const m = bm?.metrics
+  const lines: string[] = []
+  lines.push(`【⚠ 第 ${s.trading_days} 个交易日 · 策略强制复盘（每 ${REVIEW_CADENCE_DAYS} 个交易日一次，今天不可跳过）】`)
+  lines.push('这是硬契约。按【第一步 定性大趋势 → 第二步 业绩对照 → 第三步 二选一】走完，诚实判断：你的方法论现在还成立吗，还是已经失效（趋势 regime 切换没跟上 / 某条 thesis 被市场证伪 / 长期空仓踏空）？')
+  lines.push('')
+  lines.push('▍ 第一步 · 先对当前市场大趋势做一句话定性判断：上行（牛市 / 主升段）｜ 下行（熊市 / 主跌段）｜ 震荡（盘整 / 磨底 / 筑顶）。依据已注入的主要指数长均线排列（MA60/120/200 多空）+ 你持仓标的所处位置，别用单日涨跌代替趋势。趋势 regime 变了而方法论没跟上，是最典型的失效——先锚定它，再看下面的业绩对照。')
+  lines.push('')
+  // 当前仓位权重（账户快照取自今日 settle 后）。account 缺失时无法判定，不触发升级。
+  const acct = dc.account?.account
+  const posWeight = acct && acct.total_value > 0 ? acct.market_value / acct.total_value : null
+  // 升级（踏空闸门）只在「累计大幅跑输躺平 + 当前低仓位」= 现金囤积型踏空时触发：仍按累计口径，
+  // 此时才把"自 Day 1 累计 vs 躺平"的硬对照亮出来（踏空错过的涨幅就是逼它动手的证据）。
+  const alpha = m ? s.total_return_pct - m.return_pct : null
+  const escalate = alpha !== null && alpha <= ESCALATE_ALPHA_PP && posWeight !== null && posWeight < ESCALATE_POS_WEIGHT
+  if (escalate) {
+    const ddGap = s.max_drawdown_pct - m!.max_drawdown_pct  // 回撤都是负数；你的更负=回撤更深=ddGap<0
+    lines.push(`▍ 第二步 · 你 vs ${bm!.name}（不择时买入持有）· 自 Day 1 起累计`)
+    lines.push(`  累计收益：你 ${fmtPct(s.total_return_pct)} ｜ 躺平 ${fmtPct(m!.return_pct)} ｜ 超额 ${fmtSignedPP(alpha!)}（你已跑输躺平 ${Math.abs(alpha!).toFixed(2)}pct）`)
+    lines.push(`  最大回撤：你 ${fmtPct(s.max_drawdown_pct)} ｜ 躺平 ${fmtPct(m!.max_drawdown_pct)} ｜ 差 ${fmtSignedPP(ddGap)}（负=你回撤更深）`)
+    lines.push('  → 长期低仓位 + 大幅跑输 = 踏空：空仓时回撤天然小，"回撤比躺平浅"不能拿来自证有效，代价就是上面那行被你让掉的超额。')
+    lines.push('')
+    lines.push(`▍ 第三步 · ⛔ 升级条款已触发（累计跑输躺平 ≥${Math.abs(ESCALATE_ALPHA_PP)}pct 且当前仓位 ${fmtNum((posWeight ?? 0) * 100, 1)}% < ${ESCALATE_POS_WEIGHT * 100}%）——选项②今天不可用：`)
+    lines.push('  长期不出手本身就是被证伪的 thesis："等条件满足再进场"的条件被市场反复路过而你从未进场，说明触发器定义有结构性问题（典型：分位/温度类指标"涨=贵=过热=偏空"，趋势市里永远投反对票，凑不齐同号确认）。')
+    lines.push(`  今天必须调 \`mcp__strategy_mcp__update_my_strategy(bot_id="${botId}", strategy, reason)\` 完整重写 METHODOLOGY.md。新版必须回答三件事：① 哪个维度长期投反对票导致永不建仓，怎么改；② 中性档对应多少基准仓位（0% 不是中性，是满仓押注下跌）；③ 什么客观硬信号下允许右侧追入。若论证后仍认为该空仓，就把"为何此环境 0% 最优 + 何时必须重新进场的客观触发器"写进新版——空仓可以是结论，不能是惯性。`)
+  } else {
+    // 在场/非踏空的日常复盘：只看「滚动近一段」自评，不亮"自 Day 1 累计 vs 躺平"的全程记分牌。
+    lines.push('▍ 第二步 · 看你自己近一段的滚动表现（上方【区间业绩】块已注入近 1m / 3m / 6m 的区间收益与回撤）——按区间视角判断你的择时这一段在不在创造价值。**刻意不在这里摆"自 Day 1 累计跑赢没跑赢躺平"的全程记分**：一整条已知净值最容易诱发"跑输就把趋势/动量权重拉满"的过拟合，那不是复盘是追涨。')
+    lines.push('  → 阶段性跑输躺平、或某一段回撤，单独都不是方法论失效的证据：你的标的本就大开大合，跑输买入持有的某一段很正常，强行解释成"方法论错了"再重写，多半是噪声。')
+    lines.push('  → 真正的失效信号只有三类：① 趋势 regime 已切换而你的框架没跟上；② 某条具体 thesis 被硬数据证伪；③ 你长期空仓踏空（这条会单独触发上面的升级条款）。对不上这三类，就是还成立。')
+    lines.push('')
+    lines.push('▍ 第三步 · 今天必须做完这次审视（不允许沉默跳过——既不审也不记 = 违约），但结论可以是"维持"：')
+    lines.push(`  ① 命中上面三类失效之一 → 调 \`mcp__strategy_mcp__update_my_strategy(bot_id="${botId}", strategy, reason)\` 完整重写 METHODOLOGY.md（整篇新版本）。reason 写清：哪条 thesis / regime 判断破了、被什么硬数据证伪。`)
+    lines.push('  ② 没命中失效信号 → mem0_add 写一句"复盘结论：方法论仍有效"，并点明当前处在你 thesis 的哪一段、下一个会让你改主意的客观信号是什么。**不必为了"做点什么"而改——无具体证伪就维持原方法论，频繁重写本身就是过拟合噪声。**')
+  }
+  lines.push('判据别只盯一天涨跌：结合上方【信念校准】块的 Brier / 活性 + 第一步的趋势定性一起判。该改就改、该守就守，别用"不轻易改"麻痹自己，也别用"必须做点什么"逼自己乱改。')
   return `\n\n${lines.join('\n')}`
 }
 
@@ -642,7 +702,10 @@ ${bodies}
 
 // 系统预读注入三份市场研报（PIT）。bot101/102/103 用：主线/regime/组合骨架已由系统预生成，
 // bot 直接消费报告结论做仓位与下单决策，不自己跑主线识别。三类全缺 → 空串（跳过整块）。
-function marketReportsBlock(reports?: { context: string; mainline: string; rotation: string; macroNews?: string }): string {
+function marketReportsBlock(reports?: {
+  context: string; mainline: string; rotation: string; macroNews?: string
+  res?: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string }
+}): string {
   if (!reports) return ''
   const part = (label: string, body: string): string =>
     `────────── ${label} ──────────\n${body && body.trim() ? body.trim() : '（截至今日暂无该报告——按 METHODOLOGY 保守处理）'}`
@@ -654,6 +717,23 @@ function marketReportsBlock(reports?: { context: string; mainline: string; rotat
     ...(hasMacro ? [part('macro_news（宏观 / 政策 / 事件资讯 · 当期）', reports.macroNews as string)] : []),
   ].join('\n\n')
   const n = hasMacro ? '四' : '三'
+  // 四研判室·宏观背景研判（res1/2/4/5）：与上面 4 份同源 PIT 预注入，但定位＝「背景研判」，
+  // 只丰富 regime/风险预算判断，不覆盖主线与组合骨架。全空 → 跳过该子段（旧行为零回归）。
+  const r = reports.res
+  const resPairs: Array<[string, string]> = r ? [
+    ['res1 · 市场策略研判', r.market_strategy],
+    ['res2 · 政策分析', r.policy_analysis],
+    ['res4 · 国际关系', r.intl_relations],
+    ['res5 · 跨市场联动', r.cross_market_linkage],
+  ] : []
+  const resShown = resPairs.filter(([, body]) => !!(body && body.trim()))
+  const resSection = resShown.length
+    ? `\n\n══════════ 四大研判室 · 宏观背景研判（res1/2/4/5）══════════
+这四份是公共研究室的当期宏观研判，定位＝**背景研判**：用来校准 regime 信心与风险预算（尤其 res2 政策面 / res4 地缘 / res5 跨市场联动的冲击信号，与 macro_news 互补，帮你分清「一次性外部冲击 vs 可持续基本面恶化」）。
+**操作性结论（regime / 主线 / 组合骨架）仍以上面 market_context / market_mainline / mainline_rotation 为准——res 研判不覆盖组合骨架**；但若 res2/res4 标出重大政策面 / 地缘风险，把它喂给你的风险预算与极端恐慌逆向闸门判断。
+
+${resShown.map(([label, body]) => part(label, body)).join('\n\n')}`
+    : ''
   return `\n\n【市场研究报告（系统预生成 · PIT · 全市场共享）】
 下面${n}份报告是系统预生成的当期市场判断与资讯，**是你今天 regime / 主线 / 组合骨架的权威结论，直接采用**：
 - **不要**自己再调 \`sector_search\`/\`sector_factor\`/\`market_temperature\` 去重跑主线识别或 regime 判断——那套流程系统已替你做完；
@@ -661,7 +741,7 @@ function marketReportsBlock(reports?: { context: string; mainline: string; rotat
 - **macro_news 是当期宏观 / 政策 / 事件资讯**：决策前必读，判断有没有重大政策面 / 事件面催化或冲击。**尤其遇到大跌：用它分清「一次性外部冲击（如关税 / 地缘黑天鹅，不可外推）」还是「可持续的基本面恶化」——一次性冲击扛住别恐慌转防守、更别把它写进长期记忆当永久教训；只有可持续恶化才真正降风险预算**；
 - 你的职责 = 基于这${n}份报告 + 你的 METHODOLOGY（仓位/风险闸门/配置区间/回撤纪律）做**目标仓位与下单**决策。
 
-${bodies}
+${bodies}${resSection}
 【市场研究报告 结束】`
 }
 
@@ -685,7 +765,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   // History window 放在 daily message 的最顶部——它已经包含自己的"【交易记忆窗口】"标头，
   // 直接拼到 rules block 之前即可。空串（Day 1 / 无 prior session）→ 跳过。
   const intraday = ctx.intradayMarketBlock && ctx.intradayMarketBlock.trim() ? ctx.intradayMarketBlock : ""
-  const history = ctx.historyWindow && ctx.historyWindow.trim() ? `${ctx.historyWindow.trim()}\n\n` : ''
+  const history = ctx.historyWindow && ctx.historyWindow.trim() ? ctx.historyWindow.trim() + "\n\n" : ""
   // Belief block 由 caller (run.ts) 先 await buildBeliefContext(...) 渲染成完整字符串塞进来；
   // 已自带 header / schema 要求 / 21d 校准反馈，本函数只前置两个换行做分隔即可。空/缺省 → 跳过。
   const beliefStr = ctx.beliefBlock && ctx.beliefBlock.trim() ? `\n\n${ctx.beliefBlock.trim()}` : ''

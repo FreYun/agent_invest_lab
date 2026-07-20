@@ -4,8 +4,8 @@ import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { shadowWorkspaceDir, strategiesDir, strategyRevisionsFile, fundDbFile } from '../paths.ts'
-import { loadStrategyLibrary } from '../strategy-library.ts'
+import { shadowWorkspaceDir, strategiesDir, strategyRevisionsFile, usersDir, userRevisionsFile, fundDbFile } from '../paths.ts'
+import { loadStrategyLibrary, stripTaskHeader, TASK_HEADER_SENTINEL, TASK_HEADER_DELIM } from '../strategy-library.ts'
 
 // 进程内 MCP 服务，承载两个工具让 bot 自己管理"投资策略文档"：
 //   - update_my_strategy(bot_id, strategy, reason): 完整替换 shadow METHODOLOGY.md，追加修订审计
@@ -40,6 +40,10 @@ export interface StrategyServerOptions {
   /** market_reports 所在的 SQLite 库路径。缺省 = fundDbFile(worldRoot)（<repo>/data/fund.db）。
    *  测试用临时库覆盖；生产由 run.ts 显式传真实 fund.db。 */
   fundDbPath?: string
+  /** 是否暴露 update_my_user / get_my_user（让 bot 自改 USER.md 风险偏好）。
+   *  默认 false —— 生产 bot101/102/103 的 run 不开，这两个工具对它们完全不可见。
+   *  仅给「按 USER.md 风险偏好建档」的测试/分身 run 打开（config.enableUserSelfEdit）。 */
+  enableUserSelfEdit?: boolean
   host?: string
   port?: number
 }
@@ -76,6 +80,34 @@ const SERVER_INSTRUCTIONS =
 
 function methodologyPathOf(worldRoot: string, runId: string, botId: string): string {
   return join(shadowWorkspaceDir(worldRoot, runId, botId), 'METHODOLOGY.md')
+}
+
+// 任务头 pin：run.ts 建 shadow 时写的 .methodology-header.md（pin 死 target_index / buyable_fund_codes）。
+// update_my_strategy 每次重写都重新锚上，防止 bot 自进化把标的代码丢了漂到错误指数。
+function pinnedHeaderPathOf(worldRoot: string, runId: string, botId: string): string {
+  return join(shadowWorkspaceDir(worldRoot, runId, botId), '.methodology-header.md')
+}
+
+// 解析权威任务头：优先读 pin 文件；pin 缺失（老 run）则退回从当前 METHODOLOGY.md 顶部抽取已有任务头。
+// 两者都没有就返回 null（best-effort，退回旧行为：直接写 bot 提交的正文）。
+function resolveTaskHeader(worldRoot: string, runId: string, botId: string, currentFull: string): string | null {
+  try {
+    const pin = readFileSync(pinnedHeaderPathOf(worldRoot, runId, botId), 'utf8')
+    if (pin.trim()) return pin.trimEnd() + '\n'
+  } catch { /* pin 不存在，退回抽取 */ }
+  const text = currentFull.replace(/^﻿/, '')
+  if (!text.trimStart().startsWith(TASK_HEADER_SENTINEL)) return null
+  const lines = text.split('\n')
+  let start = 0
+  while (start < lines.length && !lines[start].startsWith(TASK_HEADER_SENTINEL)) start++
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].trim() === TASK_HEADER_DELIM) return lines.slice(start, i + 1).join('\n') + '\n'
+  }
+  return null
+}
+
+function userPathOf(worldRoot: string, runId: string, botId: string): string {
+  return join(shadowWorkspaceDir(worldRoot, runId, botId), 'USER.md')
 }
 
 function strategyLibraryRootOf(worldRoot: string, runId: string, botId: string): string {
@@ -233,12 +265,13 @@ const TOOLS = [
   {
     name: 'get_market_report',
     description:
-      '读取全局共享的"市场研究报告"——由系统在每月初预生成、所有 bot 共享。三类报告：' +
+      '读取全局共享的"市场研究报告"——由系统预生成、所有 bot 共享。可读类型：' +
       'market_context(行情/regime/risk_state 敢不敢上仓) · market_mainline(主线板块+可投基金池) · ' +
-      'mainline_rotation(主线轮动组合骨架:regime开关/核心卫星/计数器/今日动作)。' +
-      '每日决策前先读这三份(report_type=all 一次取全)，再结合你自己的账户与人设做操作——' +
+      'mainline_rotation(主线轮动组合骨架:regime开关/核心卫星/计数器/今日动作) · ' +
+      'macro_news(每日宏观/国家大事资讯要点:货币/财政/会议/监管/国际/地缘/汇率/大宗，由 res7 资讯研究室预生成)。' +
+      '每日决策前先读 market_* 三份(report_type=all 一次取全)；想看宏观资讯面再单独读 macro_news。' +
       '不要自己从头重算主线/regime，那是这些报告已经做完的事。' +
-      '返回的是"当前世界日及之前"最近一期报告(PIT，绝不含未来信息)；月初生成、月内各日读到的是同一份。',
+      '返回的是"当前世界日及之前"最近一期报告(PIT，绝不含未来信息)。',
     inputSchema: {
       type: 'object',
       title: 'get_market_reportArguments',
@@ -248,7 +281,7 @@ const TOOLS = [
           type: 'string',
           title: 'Report Type',
           description:
-            "要读哪份：'market_context' | 'market_mainline' | 'mainline_rotation'，或 'all' 一次取全部三份。",
+            "要读哪份：'market_context' | 'market_mainline' | 'mainline_rotation' | 'macro_news'(每日宏观资讯)，或 'all' 一次取全部三份(不含 macro_news，资讯单独读)。",
         },
       },
       required: ['bot_id', 'report_type'],
@@ -294,6 +327,61 @@ const TOOLS = [
   },
 ] as const
 
+// 仅当 enableUserSelfEdit=true 时追加进 tools/list 的两个工具：让 bot 自己把分配到的
+// 风险偏好写进 USER.md（USER.md = 风险偏好真相源；下一交易日 system prompt 自动注入新版）。
+const USER_SELF_EDIT_TOOLS = [
+  {
+    name: 'update_my_user',
+    description:
+      '更新（完整替换）你的 USER.md —— 它是你的「用户需求 / 风险偏好」真相源（每天会被自动 splice 进 ' +
+      'system prompt 的 ## USER.md section）。当你被分配/告知一个新的风险偏好时，用它把风险偏好正式写进 USER.md。' +
+      '传入的 user_md 必须是完整 markdown（不是 diff），会覆盖旧版本；下一交易日的 system prompt 自动注入新版本。' +
+      'reason 一句话说清这次为什么改（写进审计日志 users/<bot>.revisions.jsonl）。',
+    inputSchema: {
+      type: 'object',
+      title: 'update_my_userArguments',
+      properties: {
+        bot_id: { type: 'string', title: 'Bot Id', description: '你的 bot id。world 用它确定写哪个 USER.md。' },
+        user_md: {
+          type: 'string',
+          title: 'User Md',
+          description:
+            '完整的新 USER.md markdown 文本（按 USER.md 原结构写：基础设定/收益目标/风险偏好/投资范围硬约束/工作准则）。' +
+            '会完整覆盖当前 USER.md —— 一定带上所有你想保留的内容，只把风险偏好相关段落改成新的。',
+        },
+        reason: { type: 'string', title: 'Reason', description: '一句话说明这次调整原因（只用于审计日志，不注入 prompt）。' },
+      },
+      required: ['bot_id', 'user_md', 'reason'],
+    },
+    outputSchema: {
+      type: 'object',
+      title: 'update_my_userOutput',
+      properties: { result: { type: 'string', title: 'Result' } },
+      required: ['result'],
+    },
+  },
+  {
+    name: 'get_my_user',
+    description:
+      '读取你当前的 USER.md（与每日 system prompt 注入的 ## USER.md section 一致）。' +
+      '想确认刚刚 update_my_user 的写入是否生效时可以调一次。',
+    inputSchema: {
+      type: 'object',
+      title: 'get_my_userArguments',
+      properties: {
+        bot_id: { type: 'string', title: 'Bot Id', description: '你的 bot id。' },
+      },
+      required: ['bot_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      title: 'get_my_userOutput',
+      properties: { result: { type: 'string', title: 'Result' } },
+      required: ['result'],
+    },
+  },
+] as const
+
 interface ToolResult { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 function ok(text: string): ToolResult { return { content: [{ type: 'text', text }] } }
 function err(text: string): ToolResult { return { content: [{ type: 'text', text }], isError: true } }
@@ -303,6 +391,16 @@ function err(text: string): ToolResult { return { content: [{ type: 'text', text
 // timeout）。SQL 经 stdin 传入（execFileSync 不经 shell；大段 content_md 走 stdin 不受 argv 长度限制）。
 const VALID_REPORT_TYPES = ['market_context', 'market_mainline', 'mainline_rotation'] as const
 type ReportType = (typeof VALID_REPORT_TYPES)[number]
+
+// 主线/rotation 的日度版 report_type（backfill-mainline-daily.ts 生成，skill 日度纪律确定性引擎）。
+// get_market_report 对非 reporter bot 按此表优先取日度、缺失回退月度；submit 端不受影响（仍只收月度三类）。
+const MAINLINE_DAILY_ALIAS: Record<string, string> = {
+  market_mainline: 'market_mainline_daily',
+  mainline_rotation: 'mainline_rotation_daily',
+}
+// res7 资讯研究室「每日宏观资讯要点」独立 report_type：可单独 get_market_report 读，
+// 但**不进 'all'**（保持现有三份注入/读取语义不变，零回归）。由 res7/backfill 写入。
+const NEWS_REPORT_TYPE = 'macro_news'
 
 const MARKET_REPORTS_DDL = `
 CREATE TABLE IF NOT EXISTS market_reports (
@@ -471,9 +569,13 @@ function sseEvent(payload: unknown): string {
 export async function createStrategyServer(opts: StrategyServerOptions): Promise<StrategyServerHandle> {
   const host = opts.host ?? '127.0.0.1'
   const { worldRoot, runId, getCurrentDate } = opts
+  const enableUserSelfEdit = opts.enableUserSelfEdit === true
   const dbPath = opts.fundDbPath ?? fundDbFile(worldRoot)
+  // tools/list 暴露的工具集：默认仅 TOOLS；开了 enableUserSelfEdit 才追加 update_my_user/get_my_user。
+  const visibleTools = enableUserSelfEdit ? [...TOOLS, ...USER_SELF_EDIT_TOOLS] : TOOLS
   // 提前建好目录（一次性，工具调用就不需要再 mkdir）。
   mkdirSync(strategiesDir(worldRoot, runId), { recursive: true })
+  if (enableUserSelfEdit) mkdirSync(usersDir(worldRoot, runId), { recursive: true })
   // market_reports 表幂等 ensure（fresh DB / 新环境也能直接跑 pre-pass）。fund.db 缺失时
   // 不致命——report 工具会在调用时报错，但 strategy/methodology 工具照常工作。
   try { ensureMarketReportsTable(dbPath) }
@@ -499,19 +601,61 @@ export async function createStrategyServer(opts: StrategyServerOptions): Promise
       if (!reason) return err('reason 必填——一句话说明为什么改这一版（用于审计日志）')
 
       let priorSize: number | null = null
-      try { priorSize = readFileSync(targetPath, 'utf8').length } catch { /* first write */ }
+      let currentFull = ''
+      try { currentFull = readFileSync(targetPath, 'utf8'); priorSize = currentFull.length } catch { /* first write */ }
 
-      const content = strategy.endsWith('\n') ? strategy : strategy + '\n'
+      // 任务头锚定：剥掉 bot 提交里可能带的旧任务头，再拼上权威 pin 头（target_index / buyable_fund_codes
+      // 不可被自进化改写）。pin 缺失的老 run 退回抽取当前文件已有头；都没有则退回旧行为（只写正文）。
+      const header = resolveTaskHeader(worldRoot, runId, botId, currentFull)
+      const body = stripTaskHeader(strategy).trimStart()
+      const content = header ? header + '\n' + (body.endsWith('\n') ? body : body + '\n')
+                             : (strategy.endsWith('\n') ? strategy : strategy + '\n')
       writeFileSync(targetPath, content)
 
-      // 审计日志：strategies/ 目录在 setup 时已 mkdir；这里直接 append。
-      const revEntry = { ts: getCurrentDate(), reason, new_size: strategy.length, prior_size: priorSize }
+      // 审计日志：strategies/ 目录在 setup 时已 mkdir；这里直接 append。new_size 记正文（bot 实际改的部分）。
+      const revEntry = { ts: getCurrentDate(), reason, new_size: body.length, prior_size: priorSize }
       appendFileSync(strategyRevisionsFile(worldRoot, runId, botId), JSON.stringify(revEntry) + '\n')
 
       return ok(
-        `METHODOLOGY.md 已更新（新版 ${strategy.length} chars`
-        + (priorSize === null ? '；首次写入' : `；上一版 ${priorSize} chars`)
+        `METHODOLOGY.md 已更新（正文 ${body.length} chars`
+        + (priorSize === null ? '；首次写入' : `；整档上一版 ${priorSize} chars`)
+        + (header ? '；顶部「当前回测任务」锚（target_index / buyable_fund_codes）已由系统重新锚定，你改不动它——取数与 belief 必须对准该 target_index' : '')
         + `）。理由已写入审计日志：${reason}\n下一交易日的 system prompt（## METHODOLOGY.md section）会注入这一新版本。`
+      )
+    }
+
+    if (name === 'update_my_user' || name === 'get_my_user') {
+      // 仅在本 run 开了 enableUserSelfEdit 才放行（生产 run 默认关，工具也不在 tools/list 里）。
+      if (!enableUserSelfEdit) return err(`${name} 未启用：本 run 未开 enableUserSelfEdit。`)
+      const userPath = userPathOf(worldRoot, runId, botId)
+
+      if (name === 'get_my_user') {
+        if (!existsSync(userPath)) {
+          return err(`找不到 ${botId} 的 USER.md——shadow workspace 可能没拷贝成功，请联系 world 维护者。`)
+        }
+        try { return ok(readFileSync(userPath, 'utf8')) }
+        catch (e) { return err(`读取 USER.md 失败：${e instanceof Error ? e.message : String(e)}`) }
+      }
+
+      // update_my_user
+      const userMd = typeof args.user_md === 'string' ? args.user_md : ''
+      const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+      if (!userMd.trim()) return err('user_md 必填（完整 USER.md markdown 文本，不是 diff）')
+      if (!reason) return err('reason 必填——一句话说明为什么改这一版（用于审计日志）')
+
+      let priorSize: number | null = null
+      try { priorSize = readFileSync(userPath, 'utf8').length } catch { /* first write */ }
+
+      const content = userMd.endsWith('\n') ? userMd : userMd + '\n'
+      writeFileSync(userPath, content)
+
+      const revEntry = { ts: getCurrentDate(), reason, new_size: userMd.length, prior_size: priorSize }
+      appendFileSync(userRevisionsFile(worldRoot, runId, botId), JSON.stringify(revEntry) + '\n')
+
+      return ok(
+        `USER.md 已更新（新版 ${userMd.length} chars`
+        + (priorSize === null ? '；首次写入' : `；上一版 ${priorSize} chars`)
+        + `）。理由已写入审计日志：${reason}\n下一交易日的 system prompt（## USER.md section）会注入这一新版本——本日决策请直接用你刚写入的风险偏好。`
       )
     }
 
@@ -563,24 +707,34 @@ export async function createStrategyServer(opts: StrategyServerOptions): Promise
 
     if (name === 'get_market_report') {
       const rt = typeof args.report_type === 'string' ? args.report_type.trim() : ''
-      if (!rt) return err("report_type 必填：'market_context' | 'market_mainline' | 'mainline_rotation' | 'all'")
-      const wanted: ReportType[] = rt === 'all'
+      if (!rt) return err("report_type 必填：'market_context' | 'market_mainline' | 'mainline_rotation' | 'macro_news' | 'all'")
+      const wanted: string[] = rt === 'all'
         ? [...VALID_REPORT_TYPES]
-        : (VALID_REPORT_TYPES.includes(rt as ReportType) ? [rt as ReportType] : [])
-      if (wanted.length === 0) return err(`report_type "${rt}" 非法：只能是 ${VALID_REPORT_TYPES.join(' / ')} 或 all`)
+        : ((VALID_REPORT_TYPES as readonly string[]).includes(rt) || rt === NEWS_REPORT_TYPE ? [rt] : [])
+      if (wanted.length === 0) return err(`report_type "${rt}" 非法：只能是 ${VALID_REPORT_TYPES.join(' / ')} / ${NEWS_REPORT_TYPE} 或 all`)
       const asOf = getCurrentDate()  // PIT 游标：bot 拿不到、改不了
       try {
         const parts: string[] = []
         for (const type of wanted) {
-          const sql = `SELECT as_of_date, content_md FROM market_reports `
-            + `WHERE report_type=${sqlStr(type)} AND scope='global' AND as_of_date<=${sqlStr(asOf)} `
-            + `ORDER BY as_of_date DESC LIMIT 1;`
-          const out = runSqlite(dbPath, sql).trim()
-          const rows = out ? (JSON.parse(out) as { as_of_date: string; content_md: string }[]) : []
-          if (rows.length === 0) {
+          // 2026-07-02（用户拍板「替换」）：非 reporter 的 bot 读主线/rotation 时优先给日度版
+          // （skill 日度纪律确定性引擎），日度缺失回退月度——与 run.ts 预读注入同口径。
+          // reporter-* 豁免：月度管线自身（如 reporter-rotation 读 market_mainline 生成月度
+          // rotation）必须继续消费月度真源，不能被日度结果污染。
+          const tryTypes = !botId.startsWith('reporter-') && MAINLINE_DAILY_ALIAS[type]
+            ? [MAINLINE_DAILY_ALIAS[type], type] : [type]
+          let hit: { as_of_date: string; content_md: string; used: string } | null = null
+          for (const tt of tryTypes) {
+            const sql = `SELECT as_of_date, content_md FROM market_reports `
+              + `WHERE report_type=${sqlStr(tt)} AND scope='global' AND as_of_date<=${sqlStr(asOf)} `
+              + `ORDER BY as_of_date DESC LIMIT 1;`
+            const out = runSqlite(dbPath, sql).trim()
+            const rows = out ? (JSON.parse(out) as { as_of_date: string; content_md: string }[]) : []
+            if (rows.length > 0) { hit = { ...rows[0], used: tt }; break }
+          }
+          if (!hit) {
             parts.push(`# [${type}] 暂无报告\n（截至当前世界日尚无该类报告——可能 pre-pass 未生成到此区间。请按各自方法论自行判断或保守处理。）`)
           } else {
-            parts.push(`<!-- report_type=${type} as_of=${rows[0].as_of_date} (PIT≤${asOf}) -->\n${rows[0].content_md}`)
+            parts.push(`<!-- report_type=${hit.used} as_of=${hit.as_of_date} (PIT≤${asOf}) -->\n${hit.content_md}`)
           }
         }
         return ok(parts.join('\n\n---\n\n'))
@@ -650,7 +804,7 @@ export async function createStrategyServer(opts: StrategyServerOptions): Promise
       })
     }
     if (method === 'ping') return rpcResult(id, {})
-    if (method === 'tools/list') return rpcResult(id, { tools: TOOLS })
+    if (method === 'tools/list') return rpcResult(id, { tools: visibleTools })
     if (method === 'tools/call') {
       const params = msg.params ?? {}
       const toolName = typeof params.name === 'string' ? params.name : ''
@@ -682,7 +836,7 @@ export async function createStrategyServer(opts: StrategyServerOptions): Promise
     // 健康检查（不参与 MCP 协议；dashboard / smoke test 可以用）。
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ status: 'ok', tools: TOOLS.map(t => t.name) }))
+      res.end(JSON.stringify({ status: 'ok', tools: visibleTools.map(t => t.name) }))
       return
     }
     // MCP 允许客户端在 streamable-http transport 上 GET /mcp 建立 SSE listener

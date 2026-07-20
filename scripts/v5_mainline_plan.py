@@ -21,9 +21,10 @@ from collections import Counter, OrderedDict
 from typing import Any
 
 
-SCOUT_DB = os.environ.get("SCOUT_DB", "/home/rooot/database/market.db")
-COARSE_THEMES = os.environ.get("COARSE_THEMES", "/home/rooot/.openclaw/scout/coarse_themes.json")
-SCOUT_DIR = os.environ.get("SCOUT_DIR", "/home/rooot/.openclaw/scout")
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SCOUT_DB = os.environ.get("SCOUT_DB", os.path.join(ROOT_DIR, "data", "market.db"))
+COARSE_THEMES = os.environ.get("COARSE_THEMES", os.path.join(ROOT_DIR, "market_pipeline", "openclaw", "scout", "coarse_themes.json"))
+SCOUT_DIR = os.environ.get("SCOUT_DIR", os.path.join(ROOT_DIR, "market_pipeline", "openclaw", "scout"))
 START_DATE = "20250101"
 
 K_ENTRY = 5
@@ -259,9 +260,11 @@ def build(asof: str, include_funds: bool = False) -> dict[str, Any]:
     if rg["name"].startswith("抱主线"):
         portfolio = v4_holdings
     elif rg["name"].startswith("防御"):
-        portfolio = [{"code": "510880", "name": "红利ETF", "role": "防御"}]
+        # 场外C载体（不买场内ETF）：012762=华泰柏瑞上证红利ETF联接C，即 510880 同标的联接C
+        portfolio = [{"code": "012762", "name": "上证红利ETF联接C", "role": "防御"}]
     elif rg["name"].startswith("无主线"):
-        portfolio = [{"code": "510300", "name": "沪深300ETF", "role": "宽基"}]
+        # 场外C载体：007339=易方达沪深300ETF联接C（规模最大，替代 510300）
+        portfolio = [{"code": "007339", "name": "沪深300ETF联接C", "role": "宽基"}]
     else:
         portfolio = []
     out = {

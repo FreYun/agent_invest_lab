@@ -58,7 +58,7 @@ backtest/
 | 场景 | 推荐方式 | 命令 / API |
 |---|---|---|
 | **跑 1-2 个因子的全套验证**（含 monte carlo + CI） | runner CLI | 写 `<run_dir>/config.json` + `<run_dir>/code/signal_engine.py`，`python -m backtest.runner <run_dir>` |
-| **批量 sweep 40-100 个因子变体** | 库 import + 自写 backtest | 只用 `from backtest.loaders.akshare_loader import AkshareLoader`，回测引擎自己写（更快、不起 subprocess） |
+| **批量 sweep 40-100 个因子变体** | 库 import + 自写 backtest | 只用 `from backtest.loaders.akshare_loader import DataLoader`，回测引擎自己写（更快、不起 subprocess） |
 | **挖完后给统计置信** | 库 import validation | `from backtest.validation import monte_carlo_test, bootstrap_sharpe_ci, walk_forward_analysis` |
 | **自然语言探索** | `vibe-trading -p "..."` 或 interactive | 一次性 idea 验证；不适合产线挖掘 |
 
@@ -97,9 +97,9 @@ backtest/
 ```python
 import sys
 sys.path.insert(0, "/home/ubuntu/rooot/.local/share/uv/tools/vibe-trading-ai/lib/python3.11/site-packages")
-from backtest.loaders.akshare_loader import AkshareLoader
+from backtest.loaders.akshare_loader import DataLoader
 
-loader = AkshareLoader()
+loader = DataLoader()
 data = loader.fetch(["510300.SH", "512100.SH"], "2017-01-01", "2026-05-26", interval="1D")
 # data: Dict[code, DataFrame]，columns = [open, high, low, close, volume]
 for code, df in data.items():
@@ -145,8 +145,8 @@ for d in ["2017-01-04", "2020-01-04", "2024-01-04", "2025-01-04", "2026-01-04"]:
 
 #### OHLCV：直接调 vibe-trading 的 loader
 ```python
-from backtest.loaders.akshare_loader import AkshareLoader
-loader = AkshareLoader()
+from backtest.loaders.akshare_loader import DataLoader
+loader = DataLoader()
 data = loader.fetch(["510300.SH", "512100.SH", "512480.SH", "588800.SH"],
                     "2016-01-01", "2026-05-26", interval="1D")
 for code, df in data.items():

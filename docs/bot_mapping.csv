@@ -1,0 +1,2 @@
+﻿bot_id,suggested_customer_no,order_run_id,portfolio_id,initial_capital,remark
+bot102,SIMACCT0001,dash-2026-06-15T02-56-57,SIMACCT0001_dash-2026-06-15T02-56-57,1000000,"样本组合；组合号由(bot_id,run_id)派生，待贵方确认"

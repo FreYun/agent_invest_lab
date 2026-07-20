@@ -74,7 +74,10 @@ make_intraday_config() {
   local tmp_dir="$1"
   local tmp_calendar="$2"
   local src_config="$3"
-  local tmp_config="$tmp_dir/$(basename "${src_config%.yaml}").intraday.yaml"
+  local src_dir src_base tmp_config
+  src_dir="$(dirname "$src_config")"
+  src_base="$(basename "${src_config%.yaml}")"
+  tmp_config="$src_dir/.${src_base}.intraday.$$.$RANDOM.yaml"
   node -e '
 const fs = require("fs");
 const src = process.argv[1], dst = process.argv[2], cal = process.argv[3];
@@ -120,6 +123,7 @@ if [[ "$REQUIRE_PREV_TRADING" == "1" ]] && ! prev_trade_date "$TRADE_DATE" >/dev
   exit 0
 fi
 INTRADAY_TMP_DIR=""
+INTRADAY_CONFIG_FILES=""
 DRIVER_CONFIG="$WORLD_DIR/config/world-multi-fund-backtest.yaml"
 PREPASS_CONFIG="config/world-market-reports.yaml"
 if [[ "$REQUIRE_TARGET_TRADING" == "1" ]] && ! is_trading_day "$TRADE_DATE"; then
@@ -129,10 +133,11 @@ if [[ "$REQUIRE_TARGET_TRADING" == "1" ]] && ! is_trading_day "$TRADE_DATE"; the
       exit 0
     fi
     INTRADAY_TMP_DIR="$(mktemp -d /tmp/oos-bot101-intraday-calendar.XXXXXX)"
-    trap '[[ -n "${INTRADAY_TMP_DIR:-}" ]] && rm -rf "$INTRADAY_TMP_DIR"' EXIT
+    trap '[[ -n "${INTRADAY_TMP_DIR:-}" ]] && rm -rf "$INTRADAY_TMP_DIR"; [[ -n "${INTRADAY_CONFIG_FILES:-}" ]] && rm -f $INTRADAY_CONFIG_FILES' EXIT
     INTRADAY_CALENDAR_PATH="$(make_intraday_calendar "$TRADE_DATE" "$INTRADAY_TMP_DIR")"
     DRIVER_CONFIG="$(make_intraday_config "$INTRADAY_TMP_DIR" "$INTRADAY_CALENDAR_PATH" "$WORLD_DIR/config/world-multi-fund-backtest.yaml")"
     PREPASS_CONFIG="$(make_intraday_config "$INTRADAY_TMP_DIR" "$INTRADAY_CALENDAR_PATH" "$WORLD_DIR/config/world-market-reports.yaml")"
+    INTRADAY_CONFIG_FILES="$DRIVER_CONFIG $PREPASS_CONFIG"
     echo "[$(date '+%F %T')] WARN: intraday target day $TRADE_DATE absent from close-data calendar; using temporary calendar $INTRADAY_CALENDAR_PATH"
   else
     echo "[$(date '+%F %T')] skip: target day $TRADE_DATE is not a trading day"
@@ -207,7 +212,7 @@ summary() {
 }
 
 status=failed
-trap '[[ -n "${INTRADAY_TMP_DIR:-}" ]] && rm -rf "$INTRADAY_TMP_DIR"; summary "$status"' EXIT
+trap '[[ -n "${INTRADAY_TMP_DIR:-}" ]] && rm -rf "$INTRADAY_TMP_DIR"; [[ -n "${INTRADAY_CONFIG_FILES:-}" ]] && rm -f $INTRADAY_CONFIG_FILES; summary "$status"' EXIT
 
 ensure_oos_tables
 

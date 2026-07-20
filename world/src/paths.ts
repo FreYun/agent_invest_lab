@@ -5,6 +5,9 @@ export const runStateFile = (w: string, runId: string) => join(runDir(w, runId),
 export const calendarFile = (w: string) => join(w, 'calendar.json')
 // 看板「隐藏记录」清单：{ hidden: [{botId, runId}] }。纯展示过滤，不动 DB。
 export const hiddenRecordsFile = (w: string) => join(w, 'hidden-records.json')
+// Run 评测看板「合格/不合格」手动标记：{ "<run_id>|<bot>": "pass"|"fail" }。
+// 全员共享、存服务器一份（替代旧的浏览器 localStorage）。纯展示判定，不动 DB。
+export const runVerdictsFile = (w: string) => join(w, 'run-verdicts.json')
 export const dayDir = (w: string, date: string) => join(w, 'days', date)
 export const quotesFile = (w: string, date: string) => join(dayDir(w, date), 'quotes.json')
 export const overviewFile = (w: string, date: string) => join(dayDir(w, date), 'overview.md')
@@ -37,6 +40,10 @@ export const piSessionsDir = (w: string, runId: string) => join(runDir(w, runId)
 // 只保留审计目录与文件。文件可能不存在（bot 一直没调过 update_my_strategy）—— reader 必须 best-effort。
 export const strategiesDir = (w: string, runId: string) => join(runDir(w, runId), 'strategies')
 export const strategyRevisionsFile = (w: string, runId: string, bot: string) => join(strategiesDir(w, runId), `${bot}.revisions.jsonl`)
+// update_my_user 的审计：bot 自改 USER.md（风险偏好真相源）的修订日志。bot 的"用户画像"=
+// shadow workspace 的 USER.md；这里只保留审计目录与文件，best-effort 读。
+export const usersDir = (w: string, runId: string) => join(runDir(w, runId), 'users')
+export const userRevisionsFile = (w: string, runId: string, bot: string) => join(usersDir(w, runId), `${bot}.revisions.jsonl`)
 // strategy-server 进程信息 runtime 描述符（dashboard 可读）。
 export const strategyServerRuntimeFile = (w: string, runId: string) => join(runDir(w, runId), 'strategy-server.json')
 

@@ -3,13 +3,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { createStrategyServer, type StrategyServerHandle } from '../src/strategy-server/server.ts'
-import { shadowWorkspaceDir, strategyRevisionsFile } from '../src/paths.ts'
+import { createStrategyServer, runSqlite, type StrategyServerHandle } from '../src/strategy-server/server.ts'
+import { shadowWorkspaceDir, strategyRevisionsFile, userRevisionsFile } from '../src/paths.ts'
 
 function seedMethodology(worldRoot: string, runId: string, botId: string, content: string): string {
   const dir = shadowWorkspaceDir(worldRoot, runId, botId)
   mkdirSync(dir, { recursive: true })
   const p = join(dir, 'METHODOLOGY.md')
+  writeFileSync(p, content)
+  return p
+}
+
+function seedUser(worldRoot: string, runId: string, botId: string, content: string): string {
+  const dir = shadowWorkspaceDir(worldRoot, runId, botId)
+  mkdirSync(dir, { recursive: true })
+  const p = join(dir, 'USER.md')
   writeFileSync(p, content)
   return p
 }
@@ -72,12 +80,12 @@ async function rpcSse(url: string, body: Rpc, sessionId?: string): Promise<{ sta
 // 每个 test 起一个独立的临时 worldRoot + strategy-server，通过 t.after() 确保
 // 即使 assertion fail 也会关 server / 清目录——否则未关的 HTTP server 会让
 // node:test 进程不退出，整个 suite 挂。
-async function freshServer(t: TestContext, opts: { day?: () => string } = {}): Promise<{ s: StrategyServerHandle; worldRoot: string; runId: string; fundDbPath: string }> {
+async function freshServer(t: TestContext, opts: { day?: () => string; enableUserSelfEdit?: boolean } = {}): Promise<{ s: StrategyServerHandle; worldRoot: string; runId: string; fundDbPath: string }> {
   const worldRoot = mkdtempSync(join(tmpdir(), 'strat-'))
   const runId = 'r1'
   // 临时 fund.db（market_reports 读写指向它，避免落到真实 <repo>/data/fund.db）。
   const fundDbPath = join(worldRoot, 'market_reports_test.db')
-  const s = await createStrategyServer({ worldRoot, runId, fundDbPath, getCurrentDate: opts.day ?? (() => '2024-03-15') })
+  const s = await createStrategyServer({ worldRoot, runId, fundDbPath, getCurrentDate: opts.day ?? (() => '2024-03-15'), enableUserSelfEdit: opts.enableUserSelfEdit })
   t.after(async () => {
     await s.close()
     rmSync(worldRoot, { recursive: true, force: true })
@@ -209,6 +217,73 @@ test('update_my_strategy writes shadow METHODOLOGY.md + revisions audit; get_my_
   const getResult = (get.body as { result: { content: Array<{ text: string }>; isError?: boolean } }).result
   assert.ok(!getResult.isError)
   assert.match(getResult.content[0].text, /核心信念：长期持有/)
+})
+
+// 回归：自进化(update_my_strategy)不许把顶部「当前回测任务」锚(target_index / buyable_fund_codes)弄丢。
+// 事故背景：robot bot 自改方法论时丢了 H30590.CSI 锚，漂到 000813.CSI(化工)，拿化工估值给机器人择时。
+function seedHeaderPin(worldRoot: string, runId: string, botId: string, targetIndex: string, codes: string): void {
+  const dir = shadowWorkspaceDir(worldRoot, runId, botId)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, '.methodology-header.md'), [
+    '# 当前回测任务', '',
+    `- bot_id: ${botId}`,
+    '- strategy_id: robot',
+    `- target_index: ${targetIndex}`,
+    `- buyable_fund_codes: ${codes}`,
+    '', '---', '',
+  ].join('\n'))
+}
+
+test('update_my_strategy 重写时重新锚定 target_index（bot 提交无头正文，pin 头被拼回）', async (t) => {
+  const { s, worldRoot, runId } = await freshServer(t)
+  const seedPath = seedMethodology(worldRoot, runId, 'bot18', '# 当前回测任务\n- target_index: H30590.CSI\n\n---\n\n# 旧正文\n')
+  seedHeaderPin(worldRoot, runId, 'bot18', 'H30590.CSI', '014881')
+
+  // bot 自改：只交正文、无任务头，并（错误地）在正文里提到 000813 化工
+  const strategy = '# 机器人方法论 v2\n估值极端预警。参考 000813 的估值消化。\n仓位 40% 底仓。'
+  const { status, body } = await rpc(s.url, {
+    jsonrpc: '2.0', id: 30, method: 'tools/call',
+    params: { name: 'update_my_strategy', arguments: { bot_id: 'bot18', strategy, reason: '简化框架' } },
+  })
+  assert.equal(status, 200)
+  const result = (body as { result: { content: Array<{ text: string }>; isError?: boolean } }).result
+  assert.ok(!result.isError)
+
+  const onDisk = readFileSync(seedPath, 'utf8')
+  // 权威锚被拼回：target_index 仍是 H30590.CSI，且出现在顶部任务头里
+  assert.match(onDisk, /# 当前回测任务/)
+  assert.match(onDisk, /- target_index: H30590\.CSI/)
+  assert.match(onDisk, /- buyable_fund_codes: 014881/)
+  // bot 的新正文保留
+  assert.match(onDisk, /机器人方法论 v2/)
+  assert.match(onDisk, /40% 底仓/)
+  // 顶部任务头这一行里不能出现 000813（正文里 bot 自己提到不管，但锚必须是 H30590）
+  const headerBlock = onDisk.split('---')[0]
+  assert.doesNotMatch(headerBlock, /target_index:.*000813/)
+})
+
+test('update_my_strategy 剥掉 bot 篡改的任务头，换回权威 pin 头', async (t) => {
+  const { s, worldRoot, runId } = await freshServer(t)
+  const seedPath = seedMethodology(worldRoot, runId, 'bot18', '# 当前回测任务\n- target_index: H30590.CSI\n\n---\n\n# 旧正文\n')
+  seedHeaderPin(worldRoot, runId, 'bot18', 'H30590.CSI', '014881')
+
+  // bot 提交时自带一个被篡改的任务头（把标的改成 000813 化工）+ 正文
+  const tampered = '# 当前回测任务\n- target_index: 000813.CSI\n- buyable_fund_codes: 020274\n\n---\n\n# 我的新正文\n改到化工去。'
+  await rpc(s.url, {
+    jsonrpc: '2.0', id: 31, method: 'tools/call',
+    params: { name: 'update_my_strategy', arguments: { bot_id: 'bot18', strategy: tampered, reason: '想换标的' } },
+  })
+
+  const onDisk = readFileSync(seedPath, 'utf8')
+  const headerBlock = onDisk.split('---')[0]
+  // 篡改头被剥掉、换回权威 H30590；化工代码不得进任务头
+  assert.match(headerBlock, /- target_index: H30590\.CSI/)
+  assert.doesNotMatch(headerBlock, /000813/)
+  assert.doesNotMatch(headerBlock, /020274/)
+  // 只保留一个任务头（没重复）
+  assert.equal(onDisk.match(/# 当前回测任务/g)?.length, 1)
+  // bot 正文仍在
+  assert.match(onDisk, /我的新正文/)
 })
 
 test('update_my_strategy second time replaces content and appends a second revision with prior_size', async (t) => {
@@ -438,6 +513,32 @@ test('get_market_report report_type=all returns all three, with placeholder for 
   assert.match(g.content[0].text, /\[mainline_rotation\] 暂无报告/)
 })
 
+test('get_market_report daily-alias: bot 优先拿日度主线/rotation、缺失回退月度、reporter 豁免只读月度', async (t) => {
+  const { s, fundDbPath } = await freshServer(t, { day: () => '2024-03-20' })
+  const esc = (v: string): string => `'${v.replace(/'/g, "''")}'`
+  const insert = (type: string, asOf: string, md: string): void => {
+    runSqlite(fundDbPath, `INSERT INTO market_reports (report_type, as_of_date, scope, content_md) VALUES (${esc(type)}, ${esc(asOf)}, 'global', ${esc(md)});`)
+  }
+  // 月度 rotation + 日度 rotation 都有 → bot 拿日度、reporter 拿月度
+  insert('mainline_rotation', '2024-03-15', '月度rotation正文')
+  insert('mainline_rotation_daily', '2024-03-19', '日度rotation正文')
+  // 主线只有月度 → bot 回退月度
+  insert('market_mainline', '2024-03-15', '月度主线正文')
+
+  const bot = toolResult(await callTool(s.url, 1, 'get_market_report', { bot_id: 'bot101', report_type: 'mainline_rotation' }))
+  assert.match(bot.content[0].text, /日度rotation正文/)
+  assert.match(bot.content[0].text, /report_type=mainline_rotation_daily as_of=2024-03-19/)
+  assert.doesNotMatch(bot.content[0].text, /月度rotation正文/)
+
+  const fallback = toolResult(await callTool(s.url, 2, 'get_market_report', { bot_id: 'bot101', report_type: 'market_mainline' }))
+  assert.match(fallback.content[0].text, /月度主线正文/)
+  assert.match(fallback.content[0].text, /report_type=market_mainline as_of=2024-03-15/)
+
+  const reporter = toolResult(await callTool(s.url, 3, 'get_market_report', { bot_id: 'reporter-rotation', report_type: 'mainline_rotation' }))
+  assert.match(reporter.content[0].text, /月度rotation正文/)
+  assert.doesNotMatch(reporter.content[0].text, /日度rotation正文/)
+})
+
 test('submit_market_report rejects non-reporter bot_id, bad report_type, bad json', async (t) => {
   const { s } = await freshServer(t)
   const notReporter = toolResult(await callTool(s.url, 1, 'submit_market_report', { bot_id: 'bot101', report_type: 'market_context', content_md: 'x' }))
@@ -458,4 +559,49 @@ test('get_market_report returns placeholder (not error) when no report exists ye
   const g = toolResult(await callTool(s.url, 1, 'get_market_report', { bot_id: 'bot101', report_type: 'market_context' }))
   assert.ok(!g.isError)
   assert.match(g.content[0].text, /暂无报告/)
+})
+
+// ── update_my_user / get_my_user（仅 enableUserSelfEdit=true 暴露）────────────────
+test('enableUserSelfEdit=false：tools/list 不含 update_my_user/get_my_user，调用被拒', async (t) => {
+  const { s } = await freshServer(t)  // 默认不开
+  const { body } = await rpc(s.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+  const names = ((body as { result: { tools: Array<{ name: string }> } }).result).tools.map(x => x.name)
+  assert.ok(!names.includes('update_my_user'), 'update_my_user 不应出现在默认 tools/list')
+  assert.ok(!names.includes('get_my_user'), 'get_my_user 不应出现在默认 tools/list')
+  // 即便强行调用也被拒（gate）
+  const r = toolResult(await callTool(s.url, 3, 'update_my_user', { bot_id: 'bot7', user_md: '# x', reason: 'y' }))
+  assert.ok(r.isError, 'update_my_user 在未开启时应报错')
+  assert.match(r.content[0].text, /未启用/)
+})
+
+test('enableUserSelfEdit=true：update_my_user 覆写 shadow USER.md + 审计；get_my_user 读回', async (t) => {
+  const { s, worldRoot, runId } = await freshServer(t, { enableUserSelfEdit: true })
+  const seedPath = seedUser(worldRoot, runId, 'bot101t', '# USER.md\n## 风险偏好\n占位\n')
+
+  // tools/list 现在应含两个新工具
+  const { body } = await rpc(s.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+  const names = ((body as { result: { tools: Array<{ name: string }> } }).result).tools.map(x => x.name).sort()
+  assert.ok(names.includes('update_my_user') && names.includes('get_my_user'))
+
+  const userMd = '# USER.md\n## 风险偏好\n低风险——最大回撤红线 5%，以保本为先。\n## 工作准则\n按 METHODOLOGY 走。'
+  const up = toolResult(await callTool(s.url, 3, 'update_my_user', { bot_id: 'bot101t', user_md: userMd, reason: '建档：分配到低风险偏好' }))
+  assert.ok(!up.isError, `update should succeed: ${JSON.stringify(up)}`)
+  assert.match(up.content[0].text, /USER\.md 已更新/)
+
+  // shadow USER.md 被覆写
+  const onDisk = readFileSync(seedPath, 'utf8')
+  assert.match(onDisk, /最大回撤红线 5%/)
+  assert.doesNotMatch(onDisk, /占位/)
+
+  // 审计日志落 users/<bot>.revisions.jsonl
+  const revPath = userRevisionsFile(worldRoot, runId, 'bot101t')
+  assert.ok(existsSync(revPath))
+  const rev = JSON.parse(readFileSync(revPath, 'utf8').trim().split('\n')[0])
+  assert.equal(rev.reason, '建档：分配到低风险偏好')
+  assert.equal(rev.new_size, userMd.length)
+
+  // get_my_user 读回
+  const got = toolResult(await callTool(s.url, 4, 'get_my_user', { bot_id: 'bot101t' }))
+  assert.ok(!got.isError)
+  assert.match(got.content[0].text, /最大回撤红线 5%/)
 })

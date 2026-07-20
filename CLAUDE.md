@@ -52,7 +52,7 @@ Bot 层 (bots/botN)                LLM agent，按 METHODOLOGY 逐日决策
 | `scripts/` | 数据脚本：`fund_md_to_db.py`（MD→DB 落库）、`fund-bootstrap.py`、`fund-fetch-fees.py`、`fund-backfill-nav.py`、`fund-pool-ingest.py`、`fund_capability_lib.py` |
 | `research/` | 因子挖掘与报告（13 个子目录 + `SOP_factor_mining.md`、`s1-s8_final_report_*.md`） |
 | `strategies/` | 择时因子研究（如 index-products 指数行业轮动） |
-| `data/` | `fund.db`（核心库）、`buyable/`（各轮可买基金列表）、`user/`（用户数据快照） |
+| `data/` | `fund.db`（核心库；订单表 `fund_bot_orders` 结构说明见 [docs/table-fund_bot_orders.md](docs/table-fund_bot_orders.md)）、`buyable/`（各轮可买基金列表）、`user/`（用户数据快照） |
 | `runtime/` `logs/` `tests/` `skills/` `docs/` | 运行时输出 / 日志 / 项目级测试 / 技能库 / 文档 |
 
 ## 3. 启动与运行

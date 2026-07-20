@@ -38,3 +38,17 @@ research/**/*.csv
 .venv
 # 运行时日志目录（*.log 之外的轮转/结构化产物也不入库）
 /logs/
+
+# 临时研发素材目录（demo 过程稿 / ppt 渲染 / 资产配置草稿，不入库）
+/temp/
+
+# 根目录调试输出与 demo 研发过程产物，不入库
+/seg.txt
+/daily_factor_values.csv
+/factor_definition.csv
+
+# 本地临时产物和敏感联调草稿，不入库
+/.write_test_xyz
+/runtime/res-reports-backfill-cache/
+/world/tmp_analyze*.py
+/docs/申赎*.py

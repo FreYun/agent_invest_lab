@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sync-fund-data-with-68.sh — 本机回测 fund.db 与 68 (172.31.41.68) 的「数据侧」表双向对齐
+# sync-fund-data-with-68.sh — 本机回测 fund.db 与 68 (172.31.41.1055) 的「数据侧」表双向对齐
 #
 # 背景:两台机各自跑回测但共享基金池/行情数据。68 的 agent_invest_lab/data/fund.db 盘前刷新
 #       fund_nav 到上一交易日;两边基金池各有独有部分,需要双向对齐。
@@ -22,7 +22,7 @@
 # 用法:手动跑 `bash scripts/sync-fund-data-with-68.sh`;cron 每天 06:50(68 盘前刷新后)。
 set -euo pipefail
 
-REMOTE=rooot@172.31.41.68
+REMOTE=rooot@172.31.41.1055
 REMOTE_DB=/home/rooot/agent_invest_lab/data/fund.db
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_DB="$HERE/data/fund.db"
