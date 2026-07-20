@@ -176,6 +176,40 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 @media (max-width:1180px){.index-block{grid-template-columns:1fr}}
 @media (max-width:980px){.cols{grid-template-columns:1fr}.idx-sidebar{position:static;max-height:none}}
 @media (max-width:1100px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* ---- 方法论弹窗 ---- */
+.mdl-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;align-items:flex-start;justify-content:center;overflow:auto;padding:24px}
+.mdl-backdrop.open{display:flex}
+.mdl-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);width:min(1100px,92vw);max-height:90vh;overflow:auto;padding:18px 20px;position:relative}
+.mdl-head{display:flex;align-items:baseline;gap:10px;margin-bottom:10px;padding-right:32px}
+.mdl-title{font-size:15px;font-weight:600}
+.mdl-sub{font-size:12px;color:var(--dim)}
+.mdl-close{position:absolute;top:12px;right:14px;cursor:pointer;font-size:18px;color:var(--dim);background:none;border:none;line-height:1}
+.mdl-close:hover{color:#fff}
+.mdl-sec{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
+.mdl-sec h3{margin:0 0 10px;font-size:13px;color:var(--accent2)}
+.mdl-close:hover{color:#fff}
+.cp-expand{cursor:pointer;background:none;border:1px solid var(--border);border-radius:6px;color:var(--dim);font-size:13px;padding:1px 7px;margin-left:8px}
+.cp-expand:hover{color:#fff;border-color:var(--accent2)}
+/* 进化时间线 */
+.mtl{list-style:none;margin:0;padding:0}
+.mtl li{position:relative;padding:0 0 14px 18px;border-left:2px solid rgba(255,255,255,.12)}
+.mtl li:last-child{border-left-color:transparent}
+.mtl li::before{content:'';position:absolute;left:-5px;top:2px;width:8px;height:8px;border-radius:50%;background:var(--accent2)}
+.mtl .mtl-hd{font-size:12px;color:var(--dim);margin-bottom:4px}
+.mtl .mtl-hd b{color:#fff}
+.mtl .mtl-reason{font-size:12px;line-height:1.6;white-space:pre-wrap}
+.mdl-full{white-space:pre-wrap;font-size:12px;line-height:1.6;max-height:340px;overflow:auto;background:rgba(0,0,0,.2);border-radius:6px;padding:10px}
+.mdl-details summary{cursor:pointer;font-size:13px;color:var(--accent2);margin-top:8px}
+.mdl-empty{color:var(--dim);font-size:12px}
+/* 反思面板（移植自 index.html，作用域收在弹窗内） */
+.rfl-tabs{display:flex;gap:6px;margin:8px 0}
+.rfl-tabs button{background:none;border:1px solid var(--border);border-radius:6px;color:var(--dim);font-size:12px;padding:2px 9px;cursor:pointer}
+.rfl-tabs button.active{color:#fff;border-color:var(--accent2)}
+.rfl-nav{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);margin:6px 0}
+.rfl-nav button{background:none;border:1px solid var(--border);border-radius:6px;color:var(--dim);cursor:pointer;padding:0 7px}
+.rfl-body{font-size:12px;line-height:1.7;white-space:pre-wrap;max-height:360px;overflow:auto}
+.rfl-body h2,.rfl-body h3{font-size:13px;margin:8px 0 4px}
+.rfl-body blockquote{border-left:2px solid var(--border);margin:4px 0;padding-left:8px;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -218,6 +252,7 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
   </div>
 </div>
 
+<div id="mdlModal" class="mdl-backdrop"><div class="mdl-card"><button class="mdl-close" title="关闭">✕</button><div class="mdl-body"></div></div></div>
 
 <script>
 const LS_KEY = 'run-eval-overrides-v1'   // 旧版浏览器本地标记；现仅用于首启时一次性迁移到服务器
@@ -900,6 +935,8 @@ function renderChartInto(panel, rec, bot, win){
 }
 // 绑定：① 窗口按钮点击→切窗重绘；② 图上 mousemove→吸附最近交易日、移动准星、更新浮层
 function wireChart(panel, rec, bot, geom){
+  const expandBtn = panel.querySelector('.cp-expand')
+  if (expandBtn) expandBtn.addEventListener('click', () => openMethodologyModal(rec, bot))
   const winBar = panel.querySelector('.cp-win')
   if (winBar) winBar.addEventListener('click', e => {
     const b = e.target.closest('button[data-win]'); if (!b || b.disabled || b.classList.contains('active')) return
@@ -1008,7 +1045,8 @@ function chartHead(rec, bot, bodyHtml){
       + `<span class="cp-pill ${pass?'pass':'fail'}">${pass?'✓ 合格':'✕ 不合格'}</span>`
       + `</div>`
   }
-  return `<div class="cp-head"><div class="cp-title">${esc(rec['bot'])} · ${esc(rec._ixName)}</div>`
+  const expandBtn = bot ? `<button class="cp-expand" data-expand title="展开：方法论进化 + 当日反思">⛶</button>` : ''
+  return `<div class="cp-head"><div class="cp-title">${esc(rec['bot'])} · ${esc(rec._ixName)}${expandBtn}</div>`
     + `<div class="cp-sub">${esc(rec['对标指数'])} · <span class="run-id">${esc(rec['run_id'])}</span></div>`
     + `<a class="world-link" href="${esc(worldUrl)}" target="_blank" rel="noopener" title="在 world 页面打开此 run（新标签）">在 /world 打开此 run →</a></div>`
     + pills + bodyHtml + (bot ? statsHtml(rec, bot) : '')
@@ -1068,6 +1106,37 @@ void (async () => {
   render()                 // 用评测表的 run + 服务器覆盖渲染（每个指数区块默认展示该组卡玛最高的合格 run 的净值图）
   void ingestHistory()     // 再异步纳入所有历史 run（指数由标的基金反查），完成后重渲染
 })()
+
+// ---- 方法论 + 反思 弹窗 ----
+function closeMethodologyModal(){
+  const m = document.getElementById('mdlModal')
+  m.classList.remove('open'); m.querySelector('.mdl-body').innerHTML = ''
+}
+function openMethodologyModal(rec, bot){
+  const m = document.getElementById('mdlModal')
+  const body = m.querySelector('.mdl-body')
+  const runId = rec['run_id'], botId = rec['bot']
+  body.innerHTML = `<div class="mdl-head"><div class="mdl-title">${esc(botId)} · ${esc(rec._ixName)}</div>`
+    + `<div class="mdl-sub">${esc(rec['对标指数'])} · ${esc(runId)}</div></div>`
+    + `<div class="mdl-chart"></div>`
+    + `<div class="mdl-sec" id="mdlMeth"><h3>📐 方法论进化</h3><div class="mdl-empty">加载中…</div></div>`
+    + `<div class="mdl-sec" id="mdlRfl"><h3>当日反思</h3><div class="mdl-empty">加载中…</div></div>`
+  // 放大净值图：复用现有 body 渲染（不接光标 wiring，静态展示即可；如需光标可后续接）
+  const { html } = renderChartBody(bot, bot && bot.series ? 'all' : 'all')
+  body.querySelector('.mdl-chart').innerHTML = html
+  m.classList.add('open')
+  // 懒加载方法论与反思（Task 4 / Task 5 填充）
+  void loadMethodologyInto(body.querySelector('#mdlMeth'), botId, runId)
+  mountReflection(body.querySelector('#mdlRfl'), bot)
+}
+// 关闭：✕ / 背景点击 / Esc
+document.getElementById('mdlModal').addEventListener('click', e => {
+  if (e.target.id === 'mdlModal' || e.target.classList.contains('mdl-close')) closeMethodologyModal()
+})
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMethodologyModal() })
+// 临时桩：Task 4 / Task 5 会替换
+function loadMethodologyInto(el){ el.innerHTML = '<div class="mdl-empty">（待实现）</div>' }
+function mountReflection(el){ el.innerHTML = '<div class="mdl-empty">（待实现）</div>' }
 </script>
 </body>
 </html>
