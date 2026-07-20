@@ -1133,8 +1133,40 @@ document.getElementById('mdlModal').addEventListener('click', e => {
   if (e.target.id === 'mdlModal' || e.target.classList.contains('mdl-close')) closeMethodologyModal()
 })
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMethodologyModal() })
-// 临时桩：Task 4 / Task 5 会替换
-function loadMethodologyInto(el){ el.innerHTML = '<div class="mdl-empty">（待实现）</div>' }
+// 纯函数：渲染方法论进化数据
+function renderMethodologyHtml(d){
+  const initHead = '初始版' + (d.strategyTitle ? ` · ${esc(d.strategyTitle)}` : '') + (d.strategyId ? `（${esc(d.strategyId)}）` : '')
+  let timeline = `<ul class="mtl"><li><div class="mtl-hd"><b>${initHead}</b></div>`
+    + `<div class="mtl-reason mdl-empty">agent 启动时被注入的方法论（全文见下）。</div></li>`
+  if (d.revised && d.revisions.length){
+    d.revisions.forEach((r, i) => {
+      const size = (r.prior_size != null && r.new_size != null) ? `正文 ${r.prior_size}→${r.new_size} 字` : ''
+      timeline += `<li><div class="mtl-hd"><b>${esc(r.ts || '—')}</b> · 第 ${i + 1} 次修订${size ? ' · ' + size : ''}</div>`
+        + `<div class="mtl-reason">${esc(r.reason || '（无理由）')}</div></li>`
+    })
+  } else {
+    timeline += `<li><div class="mtl-reason mdl-empty">本 run 未改动方法论。</div></li>`
+  }
+  timeline += `</ul>`
+  const initFull = d.initial != null
+    ? `<details class="mdl-details"><summary>初始方法论全文</summary><div class="mdl-full">${esc(d.initial)}</div></details>`
+    : `<div class="mdl-empty">初始方法论快照不可用（旧 run 或无冻结策略库）。</div>`
+  const latestFull = d.latest != null
+    ? `<details class="mdl-details"><summary>最新方法论全文${d.revised ? '' : '（与初始一致）'}</summary><div class="mdl-full">${esc(d.latest)}</div></details>`
+    : `<div class="mdl-empty">最新方法论不可用。</div>`
+  return `<h3>📐 方法论进化</h3>` + timeline + initFull + latestFull
+}
+// Task 4：懒加载方法论（三参 async）
+async function loadMethodologyInto(el, botId, runId){
+  try {
+    const r = await fetch(`/api/backtest/bot-methodology?bot_id=${encodeURIComponent(botId)}&run_id=${encodeURIComponent(runId)}`, { cache: 'no-store' })
+    if (!r.ok) throw new Error('http ' + r.status)
+    el.innerHTML = renderMethodologyHtml(await r.json())
+  } catch {
+    el.innerHTML = `<h3>📐 方法论进化</h3><div class="mdl-empty">方法论加载失败。</div>`
+  }
+}
+// Task 5：当日反思桩（待实现）
 function mountReflection(el){ el.innerHTML = '<div class="mdl-empty">（待实现）</div>' }
 </script>
 </body>
