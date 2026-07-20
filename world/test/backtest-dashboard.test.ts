@@ -441,3 +441,21 @@ test('loadMethodology: 缺 workspace/冻结库/修订 → 优雅降级', () => {
     assert.deepEqual(m.revisions, [])
   } finally { rmSync(worldRoot, { recursive: true, force: true }) }
 })
+
+test('GET /api/backtest/bot-methodology 返回结构 + 参数校验', async () => {
+  const { worldRoot } = seedMethodologyFixture()  // 复用 Task 1 的 fixture
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB, '--world-root', worldRoot], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /listening on http:\/\/([^\s]+)/)
+    const base = out.match(/listening on (http:\/\/[^\s]+)/)![1].replace(/\/$/, '')
+    const good = await (await fetch(`${base}/api/backtest/bot-methodology?bot_id=bot6&run_id=r1`)).json()
+    assert.equal(good.strategyId, 'liquor')
+    assert.equal(good.revisions.length, 2)
+    assert.ok(good.initial.includes('初始正文'))
+    const bad = await fetch(`${base}/api/backtest/bot-methodology?bot_id=..%2Fx&run_id=r1`)
+    assert.equal(bad.status, 400)
+  } finally {
+    proc.kill('SIGKILL')
+    rmSync(worldRoot, { recursive: true, force: true })
+  }
+})

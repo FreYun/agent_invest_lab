@@ -1503,6 +1503,19 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         sendJson(res, 200, loadReflection(worldRoot, runId, botId, tradeDate))
         return
       }
+      // 某 (bot, run) 的方法论三件套：初始（冻结库重建）/ 最新（workspace）/ 修订轨迹。
+      // 只读；ID 走白名单正则挡路径穿越；数据缺失由 loadMethodology 内部降级。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/bot-methodology') {
+        const botId = url.searchParams.get('bot_id') ?? ''
+        const runId = url.searchParams.get('run_id') ?? ''
+        const idRe = /^[A-Za-z0-9._-]+$/
+        if (!idRe.test(botId) || !idRe.test(runId)) {
+          sendJson(res, 400, { error: 'bot_id, run_id required and must be well-formed' })
+          return
+        }
+        sendJson(res, 200, loadMethodology(worldRoot, runId, botId))
+        return
+      }
       // bot 用户画像（USER.md）——优先读 run 快照 workspaces/<bot>/USER.md（与该次
       // 回测实际投喂 bot 的版本一致），缺失时回退仓库 bots/<bot>/USER.md 当前版。
       // ID 走白名单正则，挡掉 ../ 路径穿越；找不到文件返回空 content，前端兜底提示。
