@@ -7,7 +7,10 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { writeState, readState, type WorldState } from '../src/state.ts'
 import { pauseFile } from '../src/paths.ts'
-import { pickBenchmarkFund, allocateQuota, selectRepresentative, classifyBusinType, mergeUserTxns } from '../src/backtest-dashboard/server.ts'
+import { pickBenchmarkFund, allocateQuota, selectRepresentative, classifyBusinType, mergeUserTxns, loadRunVerdicts, saveRunVerdicts, loadMethodology } from '../src/backtest-dashboard/server.ts'
+import { writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
+import { runVerdictsFile } from '../src/paths.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DB = join(HERE, '../../data/fund.db')
@@ -323,4 +326,118 @@ test('mergeUserTxns: amount 为 null 当 0 处理', () => {
     { cycle_id: 'A', busin_type: '139', amount: 100, txn_date: '2025-03-20' },
   ])
   assert.deepEqual(out.get('A'), [{ date: '2025-03-20', side: 'buy', amount: 100, count: 2 }])
+})
+
+test('loadRunVerdicts/saveRunVerdicts: round-trip + 过滤非法 key/value + 损坏文件兜底', () => {
+  const w = mkdtempSync(join(tmpdir(), 'dash-verdicts-'))
+  try {
+    // 不存在 → {}
+    assert.deepEqual(loadRunVerdicts(w), {})
+    // 写两条 → 读回
+    saveRunVerdicts(w, { 'dash-2026-06-09T10-00-00|bot7': 'pass', 'dash-2026-06-10T10-00-00|bot8': 'fail' })
+    assert.deepEqual(loadRunVerdicts(w), { 'dash-2026-06-09T10-00-00|bot7': 'pass', 'dash-2026-06-10T10-00-00|bot8': 'fail' })
+    // 非法 key（无 `|` 分隔）/ 非法 value 在 load 时被过滤掉
+    writeFileSync(runVerdictsFile(w), JSON.stringify({ 'badkey': 'pass', 'r|b': 'maybe', 'ok-run|bot1': 'fail' }))
+    assert.deepEqual(loadRunVerdicts(w), { 'ok-run|bot1': 'fail' })
+    // 损坏 JSON → {}
+    writeFileSync(runVerdictsFile(w), '{ not json')
+    assert.deepEqual(loadRunVerdicts(w), {})
+  } finally {
+    rmSync(w, { recursive: true, force: true })
+  }
+})
+
+test('run-verdicts 端点：set / 删除 / bulk init 仅空时写 / replace 清空（临时 worldRoot 不污染生产）', async () => {
+  const worldRoot = mkdtempSync(join(tmpdir(), 'dash-verdicts-e2e-'))
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB, '--world-root', worldRoot], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
+    const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
+    const get = async () => (await (await fetch(`${base}/api/backtest/run-verdicts`)).json() as { verdicts: Record<string, string> }).verdicts
+    const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+    // 初始空
+    assert.deepEqual(await get(), {})
+
+    // set pass → 含该条
+    const setRes = await post('/api/backtest/run-verdicts/set', { key: 'dash-2026-06-09T10-00-00|bot7', verdict: 'pass' })
+    assert.equal(setRes.status, 200)
+    assert.deepEqual(await get(), { 'dash-2026-06-09T10-00-00|bot7': 'pass' })
+
+    // set 空 verdict → 删除该条，回空
+    await post('/api/backtest/run-verdicts/set', { key: 'dash-2026-06-09T10-00-00|bot7', verdict: '' })
+    assert.deepEqual(await get(), {})
+
+    // 非法 key → 400
+    assert.equal((await post('/api/backtest/run-verdicts/set', { key: 'nopipe', verdict: 'pass' })).status, 400)
+    // 非法 verdict → 400
+    assert.equal((await post('/api/backtest/run-verdicts/set', { key: 'r|b', verdict: 'maybe' })).status, 400)
+
+    // bulk init 两条（当前空）→ 写入
+    await post('/api/backtest/run-verdicts/bulk', { mode: 'init', verdicts: { 'rA|bot1': 'pass', 'rB|bot2': 'fail' } })
+    assert.deepEqual(await get(), { 'rA|bot1': 'pass', 'rB|bot2': 'fail' })
+
+    // 再 init 一条不同的（当前非空）→ 不动，仍是原两条
+    const reinit = await post('/api/backtest/run-verdicts/bulk', { mode: 'init', verdicts: { 'rC|bot3': 'pass' } })
+    assert.deepEqual((await reinit.json() as { migrated: number }).migrated, 0)
+    assert.deepEqual(await get(), { 'rA|bot1': 'pass', 'rB|bot2': 'fail' })
+
+    // replace {} → 清空
+    await post('/api/backtest/run-verdicts/bulk', { mode: 'replace', verdicts: {} })
+    assert.deepEqual(await get(), {})
+  } finally {
+    proc.kill('SIGTERM')
+    rmSync(worldRoot, { recursive: true, force: true })
+  }
+})
+
+function seedMethodologyFixture() {
+  const worldRoot = mkdtempSync(join(tmpdir(), 'dash-meth-'))
+  const runId = 'r1', botId = 'bot6'
+  const ws = join(worldRoot, 'runs', runId, 'workspaces', botId)
+  const lib = join(ws, 'strategies', 'index-products')
+  mkdirSync(lib, { recursive: true })
+  // 冻结策略库：manifest + 一个 methodology 文件
+  writeFileSync(join(lib, 'manifest.yaml'),
+    'version: 1\nstrategies:\n  liquor:\n    title: 中证酒指数投资框架\n    methodology: liquor.md\n    target_index: "399987.SZ"\n    default_buyable_fund_codes: ["012043"]\n')
+  writeFileSync(join(lib, 'liquor.md'), '# 中证酒指数投资框架\n\n初始正文。\n')
+  // 最新方法论（被 bot 改写过）
+  writeFileSync(join(ws, 'METHODOLOGY.md'), '# 当前回测任务\n- bot_id: bot6\n---\n改写后的正文。\n')
+  // 指派
+  writeFileSync(join(worldRoot, 'runs', runId, 'strategy-assignments.json'),
+    JSON.stringify({ run_id: runId, bots: { bot6: { strategy_id: 'liquor', strategy_title: '中证酒指数投资框架', target_index: '399987.SZ', buyable_fund_codes: ['012043'] } } }))
+  // 修订日志：两条
+  const stratDir = join(worldRoot, 'runs', runId, 'strategies')
+  mkdirSync(stratDir, { recursive: true })
+  writeFileSync(join(stratDir, 'bot6.revisions.jsonl'),
+    JSON.stringify({ ts: '2025-10-20', reason: '第一次改', new_size: 100, prior_size: 500 }) + '\n' +
+    JSON.stringify({ ts: '2025-10-27', reason: '第二次改', new_size: 120, prior_size: 100 }) + '\n')
+  return { worldRoot, runId, botId }
+}
+
+test('loadMethodology: 重建初始、读最新、解析修订', () => {
+  const { worldRoot, runId, botId } = seedMethodologyFixture()
+  try {
+    const m = loadMethodology(worldRoot, runId, botId)
+    assert.equal(m.strategyId, 'liquor')
+    assert.equal(m.strategyTitle, '中证酒指数投资框架')
+    assert.ok(m.initial && m.initial.includes('初始正文'), 'initial 应含冻结库正文')
+    assert.ok(m.initial && m.initial.includes('bot_id: bot6'), 'initial 应含重建的任务头')
+    assert.ok(m.latest && m.latest.includes('改写后的正文'), 'latest 读 workspace METHODOLOGY.md')
+    assert.equal(m.revised, true)
+    assert.equal(m.revisions.length, 2)
+    assert.deepEqual(m.revisions[0], { ts: '2025-10-20', reason: '第一次改', new_size: 100, prior_size: 500 })
+  } finally { rmSync(worldRoot, { recursive: true, force: true }) }
+})
+
+test('loadMethodology: 缺 workspace/冻结库/修订 → 优雅降级', () => {
+  const worldRoot = mkdtempSync(join(tmpdir(), 'dash-meth2-'))
+  try {
+    const m = loadMethodology(worldRoot, 'ghost', 'bot999')
+    assert.equal(m.initial, null)
+    assert.equal(m.latest, null)
+    assert.equal(m.strategyId, null)
+    assert.equal(m.revised, false)
+    assert.deepEqual(m.revisions, [])
+  } finally { rmSync(worldRoot, { recursive: true, force: true }) }
 })

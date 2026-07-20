@@ -3,20 +3,26 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import { botDayDir, hiddenRecordsFile, replyFile, runDir, sentFile, shadowWorkspaceDir, universeContaminationFile } from '../paths.ts'
+import { botDayDir, hiddenRecordsFile, replyFile, runDir, runVerdictsFile, sentFile, shadowWorkspaceDir, strategyRevisionsFile, universeContaminationFile } from '../paths.ts'
+import { loadStrategyLibrary, renderActiveMethodology } from '../strategy-library.ts'
 import { readRunModel, type RunModelInfo } from '../run-model.ts'
 import { listControllableRuns, type WorldState } from '../state.ts'
 import { requestPause, requestStop } from '../run-control.ts'
 import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
+import { createBot101ChatEngine, type Bot101ChatEngine, type ChatMessage } from './bot101-chat.ts'
+import { fetchIntradayBoards } from '../intraday-boards.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_DB = join(HERE, '../../../data/fund.db')
+const REPO_ROOT = resolve(HERE, '../../..')
 // 默认 worldRoot = <repo>/world/runtime；和 paths.ts 里其它 per-run helper 的约定一致。
 // 仅用来定位每 run 的 universe-contamination.json marker 文件，不影响 DB 查询。
 const DEFAULT_WORLD_ROOT = join(HERE, '../../runtime')
 const DEFAULT_HTML = join(HERE, 'index.html')
 const DEFAULT_MARKET_REPORTS_HTML = join(HERE, 'market-reports.html')
 const DEFAULT_OOS_BOT101_HTML = join(HERE, 'oos-bot101.html')
+const DEFAULT_RUNS_HTML = join(HERE, 'runs.html')
+const DEFAULT_AGENTS_HTML = join(HERE, 'agents.html')
 
 interface DailyRow {
   trade_date: string
@@ -278,6 +284,11 @@ function queryRows<T>(dbPath: string, sql: string): T[] {
   return getDb(dbPath).prepare(sql).all() as T[]
 }
 
+function latestFundNavDate(dbPath: string): string {
+  const row = queryRows<{ d: string | null }>(dbPath, 'SELECT MAX(nav_date) AS d FROM fund_nav')[0]
+  return row?.d ?? ''
+}
+
 function dedupeByDate<T extends { trade_date: string }>(rows: T[]): T[] {
   const seen = new Map<string, T>()
   for (const row of rows) seen.set(row.trade_date, row)
@@ -376,16 +387,20 @@ export function selectRepresentative<T>(sortedAsc: T[], quota: number): T[] {
 // 未建仓 bot 没有首买基金时,用沪深300(510300 沪深300ETF华泰柏瑞)作默认参照,
 // 这样任何 bot 都至少有一条参照曲线。
 const DEFAULT_BENCHMARK_FUND = '510300'
-// 三个多指数权益基金 bot 是做多基金投资策略，统一用规模最大的沪深300 ETF
+// 多指数权益基金 bot 做多基金投资策略，统一用规模最大的沪深300 ETF
 // (510300 沪深300ETF华泰柏瑞) 作为比较基准，而不是首笔买入标的。
-const LONG_EQUITY_FUND_BOTS = new Set(['bot101', 'bot102', 'bot103'])
+// bot101/102/103 及其测试分身/克隆（bot101t_k1 等）都算——口径与 message.ts botKindOf 的
+// multi-fund 一致：bot1+2位数字开头(可带后缀)。单基金 bot(bot1..bot20) 仍用首买标的。
+function isLongEquityFundBot(botId: string): boolean {
+  return /^bot1\d{2}(?:[^0-9].*)?$/.test(botId)
+}
 const OOS_RUN_ID_PREFIXES = ['oos-', 'live-']
 function isOosRunId(runId: string): boolean {
   return OOS_RUN_ID_PREFIXES.some(prefix => runId.startsWith(prefix))
 }
 
 export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[], botId = ''): string {
-  if (LONG_EQUITY_FUND_BOTS.has(botId)) return DEFAULT_BENCHMARK_FUND
+  if (isLongEquityFundBot(botId)) return DEFAULT_BENCHMARK_FUND
   const firstBuy = actions.find(a => a.side === 'buy')
   return firstBuy?.fund_code || holdings[0]?.fund_code || DEFAULT_BENCHMARK_FUND
 }
@@ -451,6 +466,93 @@ function saveHiddenRecords(worldRoot: string, list: HiddenRecord[]): void {
 }
 function loadHiddenSet(worldRoot: string): Set<string> {
   return new Set(loadHiddenRecords(worldRoot).map(r => hiddenKey(r.botId, r.runId)))
+}
+
+// ---- Run 评测看板「合格/不合格」手动标记：全员共享，存服务器一份 ----
+// run-verdicts.json = { "<run_id>|<bot>": "pass"|"fail" }。只记「偏离系统默认判定」的覆盖，
+// 与默认一致的不入文件（前端 setMark 与默认相同 → 删除该 key）。纯展示层，DB 一行不动。
+// 替代旧的浏览器 localStorage（per-browser、互不可见）——现在所有人读写同一份。
+export type RunVerdict = 'pass' | 'fail'
+/** key 合法性：run_id|bot，两段都是 ID 白名单字符、`|` 分隔。挡掉异常 key 写入文件。 */
+const VERDICT_KEY_RE = /^[A-Za-z0-9._-]+\|[A-Za-z0-9._-]+$/
+export function loadRunVerdicts(worldRoot: string): Record<string, RunVerdict> {
+  try {
+    const parsed = JSON.parse(readFileSync(runVerdictsFile(worldRoot), 'utf8')) as unknown
+    if (!isPlainObject(parsed)) return {}
+    const out: Record<string, RunVerdict> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      if (VERDICT_KEY_RE.test(k) && (v === 'pass' || v === 'fail')) out[k] = v
+    }
+    return out
+  } catch { return {} }  // 文件不存在/损坏 → 视作无覆盖
+}
+export function saveRunVerdicts(worldRoot: string, map: Record<string, RunVerdict>): void {
+  writeFileSync(runVerdictsFile(worldRoot), JSON.stringify(map, null, 2))
+}
+
+export interface MethodologyRevision { ts: string; reason: string; new_size: number | null; prior_size: number | null }
+export interface MethodologyPayload {
+  botId: string; runId: string
+  strategyId: string | null; strategyTitle: string | null
+  initial: string | null; latest: string | null
+  revised: boolean; revisions: MethodologyRevision[]
+}
+
+// 只读重建某 (bot, run) 的方法论三件套：初始（从 run 冻结策略库快照重建）、最新
+// （workspace METHODOLOGY.md）、进化轨迹（<bot>.revisions.jsonl）。任何缺失均降级为
+// null / 空数组，不抛错。
+export function loadMethodology(worldRoot: string, runId: string, botId: string): MethodologyPayload {
+  const ws = shadowWorkspaceDir(worldRoot, runId, botId)
+
+  let latest: string | null = null
+  const latestPath = join(ws, 'METHODOLOGY.md')
+  if (existsSync(latestPath)) { try { latest = readFileSync(latestPath, 'utf8') } catch { /* ignore */ } }
+
+  let strategyId: string | null = null
+  let strategyTitle: string | null = null
+  let buyableCodes: string[] = []
+  const assignPath = join(runDir(worldRoot, runId), 'strategy-assignments.json')
+  if (existsSync(assignPath)) {
+    try {
+      const a = JSON.parse(readFileSync(assignPath, 'utf8')) as { bots?: Record<string, Record<string, unknown>> }
+      const b = a.bots?.[botId]
+      if (b) {
+        if (typeof b.strategy_id === 'string') strategyId = b.strategy_id
+        if (typeof b.strategy_title === 'string') strategyTitle = b.strategy_title
+        if (Array.isArray(b.buyable_fund_codes)) buyableCodes = (b.buyable_fund_codes as unknown[]).filter((c): c is string => typeof c === 'string')
+      }
+    } catch { /* ignore malformed assignments */ }
+  }
+
+  let initial: string | null = null
+  const frozenRoot = join(ws, 'strategies', 'index-products')
+  if (strategyId && existsSync(join(frozenRoot, 'manifest.yaml'))) {
+    try {
+      const lib = loadStrategyLibrary(frozenRoot)
+      const strat = lib.strategies.get(strategyId)
+      if (strat) initial = renderActiveMethodology({ botId, strategy: strat, buyableFundCodes: buyableCodes })
+    } catch { /* frozen lib unreadable → leave initial null */ }
+  }
+
+  const revisions: MethodologyRevision[] = []
+  const revPath = strategyRevisionsFile(worldRoot, runId, botId)
+  if (existsSync(revPath)) {
+    for (const line of readFileSync(revPath, 'utf8').split('\n')) {
+      const s = line.trim()
+      if (!s) continue
+      try {
+        const o = JSON.parse(s) as Record<string, unknown>
+        revisions.push({
+          ts: typeof o.ts === 'string' ? o.ts : '',
+          reason: typeof o.reason === 'string' ? o.reason : '',
+          new_size: typeof o.new_size === 'number' ? o.new_size : null,
+          prior_size: typeof o.prior_size === 'number' ? o.prior_size : null,
+        })
+      } catch { /* skip bad line */ }
+    }
+  }
+
+  return { botId, runId, strategyId, strategyTitle, initial, latest, revised: revisions.length > 0, revisions }
 }
 
 async function listAllBotIds(dbPath: string): Promise<string[]> {
@@ -801,6 +903,94 @@ async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> 
   }
 }
 
+/** /api/backtest/all-runs：所有历史 run 的轻量汇总（runs.html 的 ingestHistory 用它补全 CSV
+ *  没有的 run）。只取列表视图字段，不拉持仓/操作明细。口径与 bot 卡片一致：
+ *  absReturnPct = 末日 cumulative_return_pct，maxDrawdownPct = 末日 max_drawdown_pct，
+ *  annReturnPct = 按交易日数做 252 年化。index/indexName 取自该 run 的 strategy-assignments.json，
+ *  fund 取末日市值最大的持仓基金（拿不到则空，前端回退按 index 归类）。 */
+async function loadAllRunsSummary(dbPath: string, worldRoot: string): Promise<{ runs: Array<Record<string, unknown>> }> {
+  const botIds = await listAllBotIds(dbPath)
+  const runs: Array<Record<string, unknown>> = []
+  for (const botId of botIds) {
+    const b = quoteSql(botId)
+    const refs = await listRunsForBot(dbPath, worldRoot, botId)
+    for (const ref of refs) {
+      const r = quoteSql(ref.runId)
+      // 末日累计收益 / 区间最大回撤 / 交易日数：一次查询取齐。
+      const agg = queryRows<{ days: number; cum: number | null; mdd: number | null }>(dbPath, `
+        SELECT (SELECT COUNT(DISTINCT trade_date) FROM fund_bot_daily_snapshots
+                 WHERE bot_id = ${b} AND run_id = ${r}) AS days,
+               (SELECT cumulative_return_pct FROM fund_bot_daily_snapshots
+                 WHERE bot_id = ${b} AND run_id = ${r} ORDER BY trade_date DESC LIMIT 1) AS cum,
+               (SELECT max_drawdown_pct FROM fund_bot_daily_snapshots
+                 WHERE bot_id = ${b} AND run_id = ${r} ORDER BY trade_date DESC LIMIT 1) AS mdd
+      `)[0]
+      const days = num(agg?.days)
+      const absReturnPct = agg?.cum == null ? null : num(agg.cum)
+      const maxDrawdownPct = agg?.mdd == null ? null : num(agg.mdd)
+      // 252 年化：(1 + cum/100)^(252/days) - 1。base<=0（亏损≥100%）或无收益/无天数 → null。
+      const base = absReturnPct == null ? null : 1 + absReturnPct / 100
+      const annReturnPct = base != null && base > 0 && days > 0
+        ? (Math.pow(base, 252 / days) - 1) * 100
+        : null
+      // 主力持仓基金：末日市值最大的一只。
+      const top = queryRows<{ fund_code: string }>(dbPath, `
+        SELECT fund_code FROM fund_bot_position_snapshots
+        WHERE bot_id = ${b} AND run_id = ${r}
+          AND trade_date = (SELECT MAX(trade_date) FROM fund_bot_position_snapshots
+                             WHERE bot_id = ${b} AND run_id = ${r})
+        ORDER BY market_value DESC, fund_code ASC LIMIT 1
+      `)[0]
+      const strat = readRunStrategies(worldRoot, ref.runId)?.[botId]
+      runs.push({
+        runId: ref.runId,
+        botId,
+        index: strat?.targetIndex ?? '',
+        indexName: strat?.title ?? '',
+        fund: top?.fund_code ?? '',
+        absReturnPct,
+        annReturnPct,
+        maxDrawdownPct,
+      })
+    }
+  }
+  return { runs }
+}
+
+// fund_bot_run_eval 列 -> runs.html 内嵌 CSV 的中文列名。前端按中文键消费，故接口按此映射回吐，
+// 把「解析内嵌 CSV」换成「fetch 本接口」即可，下游分组/默认判定逻辑一行不用动。
+const RUN_EVAL_COL_MAP: Array<[string, string]> = [
+  ['launch_time', '启动时间'], ['run_id', 'run_id'], ['bot', 'bot'],
+  ['strategy', '策略'], ['target_index', '对标指数'], ['buyable_fund', '可买基金'],
+  ['status', '状态'], ['window_start', '窗口起'], ['window_end', '窗口止'],
+  ['months', '回测月数'], ['progress', '进度'],
+  ['abs_return_pct', '绝对收益%'], ['ann_return_pct', '年化收益%'], ['max_drawdown_pct', '最大回撤%'],
+  ['passive_full_pct', '被动满仓%'], ['passive_ann_pct', '年化被动%'], ['excess_timing_pct', '超额_择时%'],
+  ['up_capture_pct', '上行捕获%'], ['down_protect_pct', '下行保护%'],
+  ['ops_buy', '操作_买'], ['ops_sell', '操作_卖'], ['ops_total', '操作合计'],
+  ['end_cash_pct', '末日现金%'],
+  ['evaluation', '评价'], ['retail_rating', '普通投资者评级'], ['review', '综合点评'], ['note', '备注'],
+]
+
+/** /api/backtest/run-evals：人工评测表（原 runs.html 内嵌 CSV，已迁入 fund_bot_run_eval）。
+ *  每行用 runs.html 的中文列名做 key，数值 NULL → ''，与旧 CSV 解析口径完全一致。
+ *  表不存在 → 返回空数组（前端降级为只剩 all-runs 历史 run）。 */
+async function loadRunEvals(dbPath: string): Promise<{ rows: Array<Record<string, string>> }> {
+  if (!(await tableExists(dbPath, 'fund_bot_run_eval'))) return { rows: [] }
+  const dbCols = RUN_EVAL_COL_MAP.map(([db]) => db)
+  const raw = queryRows<Record<string, unknown>>(dbPath,
+    `SELECT ${dbCols.join(', ')} FROM fund_bot_run_eval ORDER BY launch_time, run_id, bot`)
+  const rows = raw.map((r) => {
+    const o: Record<string, string> = {}
+    for (const [db, zh] of RUN_EVAL_COL_MAP) {
+      const v = r[db]
+      o[zh] = v == null ? '' : String(v)
+    }
+    return o
+  })
+  return { rows }
+}
+
 interface MarketReportRow {
   id: number
   report_type: string
@@ -819,6 +1009,31 @@ interface MarketReportDateRow {
 }
 
 const MARKET_REPORT_TYPES = ["market_context", "market_mainline", "mainline_rotation"] as const
+const OOS_BOTS = [
+  { botId: 'bot101', runId: 'oos-bot101-daily' },
+  { botId: 'bot102', runId: 'oos-bot102-daily' },
+  { botId: 'bot103', runId: 'oos-bot103-daily' },
+] as const
+const OOS_BOT_IDS = new Set<string>(OOS_BOTS.map(b => b.botId))
+const OOS_HISTORY_START = '2026-04-01'
+const OOS_BACKTEST_HISTORY_RUNS: Record<string, string> = {
+  bot101: 'dash-2026-06-23T08-47-44',
+  bot102: 'dash-2026-06-23T08-48-10',
+  bot103: 'dash-2026-06-15T06-30-57',
+}
+
+function defaultOosRunId(botId: string): string {
+  return OOS_BOTS.find(b => b.botId === botId)?.runId ?? `oos-${botId}-daily`
+}
+
+function oosBotDateWhereSql(): string {
+  return OOS_BOTS.map(b => `(live_run_id = ${quoteSql(b.runId)} AND bot_id = ${quoteSql(b.botId)})`).join(' OR ')
+}
+
+function finiteNumber(v: unknown): number | null {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
 
 function parseStructuredJson(raw: string | null): unknown {
   if (!raw || !raw.trim()) return null
@@ -827,19 +1042,26 @@ function parseStructuredJson(raw: string | null): unknown {
 }
 
 function loadMarketReports(dbPath: string, requestedDate = ""): Record<string, unknown> {
-  // 日期列表 = 市场报告日 ∪ OOS bot101 有快照的交易日。关键：OOS 净值/持仓/订单是
+  // 日期列表 = 「有日报的日子」∪ OOS bot101/102/103 有快照的交易日。关键：OOS 净值/持仓/订单是
   // 确定性的 bot 账户数据（不依赖 LLM），而 market_reports 是 LLM prepass 产物、可能某天
   // 生成失败缺失。若只用 market_reports 取日期，缺报告的那天就算 bot 账户数据齐全也不会
   // 出现在列表里 → OOS 区块被拖在上一个有报告的日子。合并后缺报告日仍可选中，报告卡走
   // 前端 empty 兜底，net_value 照常显示。report_count=0 的日子就是"有账户、无报告"。
+  //
+  // 但「有报告」只数 3 份日报（MARKET_REPORT_TYPES）——macro_news 是周/月度、且会**提前**
+  // 为未来日生成（如今天 06-26 当日报/账户都还没跑时，库里已有 06-26 的 macro_news）。若把
+  // macro_news 也算进"有报告"，这种「只有 macro_news、日报与账户都没跑」的日子就会冒成一个
+  // 数据没跑全的尾日。故此处按日报类型过滤把它挡掉；macro_news 仍会在已入列的选中日通过
+  // 下方"≤选中日取最近一期"的回填正常显示。满日计数也从 4 回到干净的 3（前端 "/3"）。
+  const dailyTypesSql = MARKET_REPORT_TYPES.map(t => quoteSql(t)).join(", ")
+  const oosWhere = oosBotDateWhereSql()
   const dates = queryRows<MarketReportDateRow>(dbPath,
     "SELECT as_of_date, SUM(report_count) AS report_count, MAX(generated_at) AS generated_at FROM (" +
     "  SELECT as_of_date, COUNT(*) AS report_count, MAX(generated_at) AS generated_at" +
-    "    FROM market_reports WHERE scope = " + quoteSql("global") + " GROUP BY as_of_date" +
+    "    FROM market_reports WHERE scope = " + quoteSql("global") + " AND report_type IN (" + dailyTypesSql + ") GROUP BY as_of_date" +
     "  UNION ALL" +
     "  SELECT trade_date AS as_of_date, 0 AS report_count, NULL AS generated_at" +
-    "    FROM oos_bot_daily_snapshots WHERE live_run_id = " + quoteSql("oos-bot101-daily") +
-    "      AND bot_id = " + quoteSql("bot101") + " GROUP BY trade_date" +
+    "    FROM oos_bot_daily_snapshots WHERE (" + oosWhere + ") AND trade_date <= (SELECT MAX(nav_date) FROM fund_nav) GROUP BY trade_date" +
     ") GROUP BY as_of_date ORDER BY as_of_date DESC")
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : ""
   const selectedDate = validDate || dates[0]?.as_of_date || ""
@@ -847,29 +1069,112 @@ function loadMarketReports(dbPath: string, requestedDate = ""): Record<string, u
   const reports: Record<string, unknown> = {}
   for (const type of MARKET_REPORT_TYPES) reports[type] = null
   for (const row of rows) reports[row.report_type] = { ...row, structured: parseStructuredJson(row.structured_json) }
-  return { selectedDate, dates, reportTypes: MARKET_REPORT_TYPES, reports }
+  // macro_news（res3 资讯研究室）是周度/月度、非每日 → 选中日若无，取 ≤选中日 的最近一期（PIT，与回测 bot get_market_report 看到的一致）
+  if (reports["macro_news"] == null && selectedDate) {
+    const newsRows = queryRows<MarketReportRow>(dbPath, "SELECT id, report_type, as_of_date, scope, content_md, structured_json, agent_run_id, generated_at FROM market_reports WHERE scope = " + quoteSql("global") + " AND report_type = " + quoteSql("macro_news") + " AND as_of_date <= " + quoteSql(selectedDate) + " ORDER BY as_of_date DESC LIMIT 1")
+    if (newsRows[0]) reports["macro_news"] = { ...newsRows[0], structured: parseStructuredJson(newsRows[0].structured_json) }
+  }
+  return { selectedDate, dates, reportTypes: [...MARKET_REPORT_TYPES, "macro_news"], reports }
+}
+
+/** 读某 report_type 在 as-of 当日及之前的最近一期（PIT，与 strategy-server.get_market_report 同口径）。
+ *  注入 bot101 对话引擎，让 chat 里的 bot 能现场查「当前/历史」市场主线等研报。 */
+function lookupMarketReportAsOf(dbPath: string, reportType: string, asOf: string): { as_of_date: string; content_md: string } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return null
+  const rows = queryRows<{ as_of_date: string; content_md: string }>(dbPath,
+    "SELECT as_of_date, content_md FROM market_reports WHERE report_type = " + quoteSql(reportType) +
+    " AND scope = 'global' AND as_of_date <= " + quoteSql(asOf) + " ORDER BY as_of_date DESC LIMIT 1")
+  return rows[0] ?? null
+}
+
+/** 解析 bot101 对话的数据时点：把请求日夹到「≤ 请求日、且确有完整每日决策的最近一个交易日」。
+ *  decisionDates 须按日期降序（= loadMarketReports().dates 的顺序）。
+ *  - reqDate 空 → 取最新决策日（dates[0]）；agents.html 固定发浏览器当天，而当日日报/账户常还没生成，
+ *    会被夹到上一交易日 → 会话一开就注入最新一份完整决策，而非当天那份空壳（市场主线缺失）。
+ *  - reqDate 早于所有决策日 → 原样返回（让上层取空，不前跳造成穿越）。 */
+export function resolveChatAsOf(decisionDates: string[], reqDate: string): string {
+  if (!reqDate) return decisionDates[0] ?? ''
+  if (decisionDates.includes(reqDate)) return reqDate
+  return decisionDates.find(d => d <= reqDate) ?? reqDate
 }
 
 
-function loadOosBot101(dbPath: string, runId = 'oos-bot101-daily', requestedDate = ''): Record<string, unknown> {
+function loadOosExtendedSeries(dbPath: string, botId: string, runId: string, liveSeries: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const historyRunId = OOS_BACKTEST_HISTORY_RUNS[botId]
+  const liveRows = liveSeries.filter(r => typeof r.trade_date === 'string' && finiteNumber(r.net_value) != null)
+  const firstLiveDate = typeof liveRows[0]?.trade_date === 'string' ? String(liveRows[0].trade_date) : ''
+  const historyRows = historyRunId ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT trade_date, total_value, net_value, daily_return_pct, cumulative_return_pct, ' +
+    'max_drawdown_pct, equity_weight, bond_weight, gold_weight, cash_weight ' +
+    'FROM fund_bot_daily_snapshots WHERE bot_id = ' + quoteSql(botId) +
+    ' AND run_id = ' + quoteSql(historyRunId) +
+    ' AND trade_date >= ' + quoteSql(OOS_HISTORY_START) +
+    (firstLiveDate ? ' AND trade_date < ' + quoteSql(firstLiveDate) : '') +
+    ' ORDER BY trade_date ASC') : []
+
+  const extended: Array<Record<string, unknown>> = []
+  const firstHistoryNav = finiteNumber(historyRows[0]?.net_value)
+  if (firstHistoryNav != null && firstHistoryNav > 0) {
+    for (const row of historyRows) {
+      const rawNav = finiteNumber(row.net_value)
+      if (rawNav == null) continue
+      const nav = rawNav / firstHistoryNav
+      extended.push({
+        ...row,
+        net_value: nav,
+        cumulative_return_pct: (nav - 1) * 100,
+        segment: 'backtest',
+        source_run_id: historyRunId,
+        raw_net_value: rawNav,
+      })
+    }
+  }
+
+  const firstLiveNav = finiteNumber(liveRows[0]?.net_value)
+  const lastHistoryNav = finiteNumber(extended[extended.length - 1]?.net_value)
+  const liveScale = firstLiveNav != null && firstLiveNav > 0 && lastHistoryNav != null && lastHistoryNav > 0 ? lastHistoryNav / firstLiveNav : 1
+  for (const row of liveRows) {
+    const rawNav = finiteNumber(row.net_value)
+    if (rawNav == null) continue
+    const nav = rawNav * liveScale
+    extended.push({
+      ...row,
+      net_value: nav,
+      cumulative_return_pct: (nav - 1) * 100,
+      segment: 'daily_oos',
+      source_run_id: runId,
+      raw_net_value: rawNav,
+    })
+  }
+
+  return extended.length ? extended : liveRows.map(row => ({ ...row, segment: 'daily_oos', source_run_id: runId, raw_net_value: row.net_value }))
+}
+
+
+function loadOosBot(dbPath: string, botId = 'bot101', runId = defaultOosRunId(botId), requestedDate = ''): Record<string, unknown> {
   const runIdSql = quoteSql(runId)
-  const botIdSql = quoteSql('bot101')
+  const botIdSql = quoteSql(botId)
   const dateRe = /^\d{4}-\d{2}-\d{2}$/
+  const navMaxDate = latestFundNavDate(dbPath)
+  const navMaxDateSql = navMaxDate ? quoteSql(navMaxDate) : quoteSql('0000-00-00')
   const dates = queryRows<{ trade_date: string }>(dbPath,
     'SELECT trade_date FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
     ' AND bot_id = ' + botIdSql + ' ORDER BY trade_date DESC').map(r => r.trade_date)
   const validDate = dateRe.test(requestedDate) ? requestedDate : ''
   const selectedDate = validDate || dates[0] || ''
+  const hasNavForSelectedDate = !!selectedDate && !!navMaxDate && selectedDate <= navMaxDate
   const dateSql = quoteSql(selectedDate)
   const series = queryRows<Record<string, unknown>>(dbPath,
     'SELECT trade_date, total_value, net_value, daily_return_pct, cumulative_return_pct, ' +
     'max_drawdown_pct, equity_weight, bond_weight, gold_weight, cash_weight ' +
     'FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
-    ' AND bot_id = ' + botIdSql + ' ORDER BY trade_date ASC')
-  const snapshot = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    ' AND bot_id = ' + botIdSql +
+    ' AND trade_date <= ' + navMaxDateSql +
+    ' ORDER BY trade_date ASC')
+  const snapshot = hasNavForSelectedDate ? queryRows<Record<string, unknown>>(dbPath,
     'SELECT * FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
     ' AND bot_id = ' + botIdSql + ' AND trade_date = ' + dateSql + ' LIMIT 1')[0] ?? null : null
-  const positions = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+  const positions = hasNavForSelectedDate ? queryRows<Record<string, unknown>>(dbPath,
     'SELECT p.*, COALESCE(i.fund_name, p.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
     'FROM oos_bot_position_snapshots p LEFT JOIN fund_info i ON i.fund_code = p.fund_code ' +
     'WHERE p.live_run_id = ' + runIdSql + ' AND p.bot_id = ' + botIdSql +
@@ -887,7 +1192,88 @@ function loadOosBot101(dbPath: string, runId = 'oos-bot101-daily', requestedDate
   const reports = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
     'SELECT report_type, as_of_date, generated_at, chars FROM oos_market_report_status ' +
     'WHERE live_run_id = ' + runIdSql + ' AND as_of_date = ' + dateSql + ' ORDER BY report_type ASC') : []
-  return { runId, botId: 'bot101', selectedDate, dates, series, snapshot, positions, orders, actions, reports }
+  // 全历史买卖动作（买卖点 marker 用，非选中日；按日期升序）
+  const actionsAll = queryRows<Record<string, unknown>>(dbPath,
+    'SELECT a.action_date, a.action_type, a.amount, a.fund_code, COALESCE(i.fund_name, a.fund_code) AS fund_name ' +
+    'FROM oos_bot_actions a LEFT JOIN fund_info i ON i.fund_code = a.fund_code ' +
+    'WHERE a.live_run_id = ' + runIdSql + ' AND a.bot_id = ' + botIdSql +
+    ' ORDER BY a.action_date ASC, a.source_action_id ASC')
+  // 全历史逐日持仓权重（总仓位堆叠子图用）→ { 日期: [{fund_code, fund_name, weight}] }
+  const posRows = queryRows<Record<string, unknown>>(dbPath,
+    'SELECT p.trade_date, p.fund_code, p.weight, COALESCE(i.fund_name, p.fund_code) AS fund_name ' +
+    'FROM oos_bot_position_snapshots p LEFT JOIN fund_info i ON i.fund_code = p.fund_code ' +
+    'WHERE p.live_run_id = ' + runIdSql + ' AND p.bot_id = ' + botIdSql +
+    ' AND p.trade_date <= ' + navMaxDateSql +
+    ' ORDER BY p.trade_date ASC, p.weight DESC')
+  const holdingsByDate: Record<string, Array<Record<string, unknown>>> = {}
+  for (const r of posRows) {
+    const d = String(r.trade_date)
+    if (!holdingsByDate[d]) holdingsByDate[d] = []
+    holdingsByDate[d].push({ fund_code: r.fund_code, fund_name: r.fund_name, weight: r.weight })
+  }
+  const extendedSeries = loadOosExtendedSeries(dbPath, botId, runId, series)
+  return { runId, botId, selectedDate, dates, navMaxDate, series, extendedSeries, historyStart: OOS_HISTORY_START, snapshot, positions, orders, actions, reports, actionsAll, holdingsByDate }
+}
+
+/** 把当前选中日的「三份研报 + macro_news + bot101 账户/持仓」压成一段紧凑 markdown，
+ *  注进 bot101 对话引擎的 system prompt，让它一上来就知道用户正盯着哪天、自己的账户长啥样。
+ *  研报正文按每份截断，控 token；真正要细节时 bot 自己再调工具拿。 */
+function formatBot101ChatContext(reportsPayload: Record<string, unknown>, oos: Record<string, unknown>): string {
+  const out: string[] = []
+  const date = String(reportsPayload.selectedDate ?? oos.selectedDate ?? '')
+  out.push(`选中日期：${date || '（无）'}`)
+
+  const reports = isPlainObject(reportsPayload.reports) ? reportsPayload.reports : {}
+  const REPORT_LABELS: Array<[string, string]> = [
+    ['market_context', '市场行情判断'], ['market_mainline', '市场主线'],
+    ['mainline_rotation', '主线 Rotation'], ['macro_news', '宏观资讯要点'],
+  ]
+  out.push('', '## 当日研报')
+  for (const [type, label] of REPORT_LABELS) {
+    const r = isPlainObject(reports[type]) ? reports[type] as Record<string, unknown> : null
+    if (!r) { out.push(`### ${label}：缺失`); continue }
+    const md = typeof r.content_md === 'string' ? r.content_md.trim() : ''
+    const asOf = typeof r.as_of_date === 'string' ? r.as_of_date : ''
+    out.push(`### ${label}${asOf && asOf !== date ? `（最近一期 ${asOf}）` : ''}`)
+    out.push(md ? (md.length > 1200 ? md.slice(0, 1200) + ' …（略）' : md) : '（无正文）')
+  }
+
+  const snap = isPlainObject(oos.snapshot) ? oos.snapshot as Record<string, unknown> : null
+  out.push('', '## bot101 当日账户（固定 OOS run）')
+  if (snap) {
+    const pct = (v: unknown) => v == null ? '--' : Number(v).toFixed(2) + '%'
+    const w = (v: unknown) => v == null ? '--' : (Number(v) * 100).toFixed(1) + '%'
+    out.push(`- 净值 ${snap.net_value ?? '--'} ｜ 总资产 ¥${snap.total_value ?? '--'} ｜ 累计收益 ${pct(snap.cumulative_return_pct)} ｜ 最大回撤 ${pct(snap.max_drawdown_pct)}`)
+    out.push(`- 权重：股 ${w(snap.equity_weight)} / 债 ${w(snap.bond_weight)} / 金 ${w(snap.gold_weight)} / 现金 ${w(snap.cash_weight)}`)
+  } else {
+    out.push('（该日无账户快照）')
+  }
+  const positions = Array.isArray(oos.positions) ? oos.positions as Array<Record<string, unknown>> : []
+  if (positions.length) {
+    out.push('当日持仓：')
+    for (const p of positions.slice(0, 20)) {
+      const wt = p.weight == null ? '--' : (Number(p.weight) * 100).toFixed(2) + '%'
+      out.push(`- ${p.fund_name ?? p.fund_code}（${p.fund_code}${p.theme ? ' · ' + p.theme : ''}）权重 ${wt}，持有 ${p.holding_days ?? 0} 天`)
+    }
+  } else {
+    out.push('当日无持仓（空仓）。')
+  }
+  // 当日决策的实际动作（买/卖）——「每日决策结果」最直接的一面，让 bot 一上来就知道自己当天做了什么。
+  const actions = Array.isArray(oos.actions) ? oos.actions as Array<Record<string, unknown>> : []
+  if (actions.length) {
+    out.push('当日决策动作（买/卖）：')
+    for (const a of actions.slice(0, 20)) {
+      const amt = a.amount == null || a.amount === '' ? '' : `，¥${a.amount}`
+      out.push(`- ${a.action_type ?? a.final_decision ?? '动作'} ${a.fund_name ?? a.fund_code ?? ''}${amt}`)
+    }
+  } else {
+    out.push('当日无买卖动作（维持持仓）。')
+  }
+  return out.join('\n')
+}
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x)
 }
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -984,6 +1370,12 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   const html = readFileSync(DEFAULT_HTML, 'utf8')
   const marketReportsHtml = readFileSync(DEFAULT_MARKET_REPORTS_HTML, 'utf8')
   const oosBot101Html = readFileSync(DEFAULT_OOS_BOT101_HTML, 'utf8')
+  // bot101 交互式对话引擎：懒连 MCP 上游，复用 bot 自己的 LLM 端点 + 只读工具集。
+  // 注入研报库直查函数 → chat 里的 bot101 多出本地 get_market_report（查当前/历史市场主线等）。
+  const chatEngine: Bot101ChatEngine = createBot101ChatEngine({
+    worldRoot,
+    loadMarketReportAsOf: (reportType, asOf) => lookupMarketReportAsOf(dbPath, reportType, asOf),
+  })
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${host}:${port}`}`)
@@ -999,6 +1391,15 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         sendHtml(res, oosBot101Html)
         return
       }
+      if (req.method === 'GET' && url.pathname === '/runs.html') {
+        sendHtml(res, readFileSync(DEFAULT_RUNS_HTML, 'utf8'))  // 按请求读盘，HTML 改动免重启
+        return
+      }
+      // 集成对话页（物理AI/链芯/市场报告 三栏同屏）。按请求读盘，HTML 改动免重启。
+      if (req.method === 'GET' && url.pathname === '/agents.html') {
+        sendHtml(res, readFileSync(DEFAULT_AGENTS_HTML, 'utf8'))
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/health') {
         sendJson(res, 200, { status: 'ok', dbPath })
         return
@@ -1007,12 +1408,74 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         sendJson(res, 200, await loadDataset(dbPath, worldRoot))
         return
       }
+      if (req.method === 'GET' && url.pathname === '/api/backtest/all-runs') {
+        sendJson(res, 200, await loadAllRunsSummary(dbPath, worldRoot))
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/api/market-reports') {
         sendJson(res, 200, loadMarketReports(dbPath, url.searchParams.get('date') ?? ''))
         return
       }
-      if (req.method === 'GET' && url.pathname === '/api/oos/bot101') {
-        sendJson(res, 200, loadOosBot101(dbPath, url.searchParams.get('run_id') ?? 'oos-bot101-daily', url.searchParams.get('date') ?? ''))
+      // 方案 B+：两张日度主线卡的「今日盘中实时板块快照」。只对今日返回 applicable=true，
+      // 历史日/取数失败均返回 applicable=false，前端据此决定是否渲染这一栏。
+      if (req.method === 'GET' && url.pathname === '/api/market-reports/intraday-boards') {
+        sendJson(res, 200, await fetchIntradayBoards({ repoRoot: REPO_ROOT, dbPath, date: url.searchParams.get('date') ?? '' }))
+        return
+      }
+      const oosMatch = url.pathname.match(/^\/api\/oos\/([A-Za-z0-9._-]+)$/)
+      if (req.method === 'GET' && oosMatch) {
+        const botId = oosMatch[1]
+        if (!OOS_BOT_IDS.has(botId)) { sendJson(res, 404, { error: 'unknown OOS bot' }); return }
+        sendJson(res, 200, loadOosBot(dbPath, botId, url.searchParams.get('run_id') ?? defaultOosRunId(botId), url.searchParams.get('date') ?? ''))
+        return
+      }
+      // 与 bot101 实时对话：真 agentic（bot 可现场调 MCP 只读工具拉 PIT 数据再回答）。
+      // 入参 { messages:[{role,content}], date }；date 决定数据时点（PIT 锁死该日及之前）。
+      if (req.method === 'POST' && url.pathname === '/api/bot101/chat') {
+        let body: Record<string, unknown>
+        try { body = await readJsonBody(req) }
+        catch (err) { sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) }); return }
+        const rawMsgs = Array.isArray(body.messages) ? body.messages : []
+        const messages: ChatMessage[] = rawMsgs
+          .filter((m): m is ChatMessage => isPlainObject(m) && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+          .map(m => ({ role: m.role, content: m.content }))
+        if (messages.length === 0) { sendJson(res, 400, { error: 'messages 不能为空' }); return }
+        // 数据时点：把前端请求日夹到「≤ 请求日、确有完整每日决策的最近一个交易日」。agents.html 固定发
+        // 浏览器当天，但当日日报/账户常还没生成 → 夹到上一交易日，保证会话一开就注入最新一份完整决策。
+        const reqDate = typeof body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : ''
+        const probe = loadMarketReports(dbPath, '')
+        const decisionDates = (Array.isArray(probe.dates) ? probe.dates as Array<{ as_of_date: string }> : []).map(d => d.as_of_date)
+        const asOf = resolveChatAsOf(decisionDates, reqDate)
+        const reportsPayload = asOf === String(probe.selectedDate ?? '') ? probe : loadMarketReports(dbPath, asOf)
+        const oos = loadOosBot(dbPath, 'bot101', 'oos-bot101-daily', asOf)
+        const pageContext = formatBot101ChatContext(reportsPayload, oos)
+
+        // 流式：body.stream=true → SSE，逐 token + 工具进度实时推；否则一次性 JSON。
+        if (body.stream === true) {
+          res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', 'connection': 'keep-alive', 'x-accel-buffering': 'no' })
+          const emit = (event: string, data: Record<string, unknown>): void => {
+            if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+          }
+          const ac = new AbortController()
+          req.on('close', () => ac.abort())
+          emit('meta', { asOfDate: asOf })
+          try {
+            const result = await chatEngine.runTurnStream({ messages, asOfDate: asOf, pageContext, signal: ac.signal }, emit)
+            emit('done', { asOfDate: asOf, ...result })
+          } catch (err) {
+            emit('error', { error: 'bot101 对话失败: ' + (err instanceof Error ? err.message : String(err)) })
+          } finally {
+            if (!res.writableEnded) res.end()
+          }
+          return
+        }
+
+        try {
+          const result = await chatEngine.runTurn({ messages, asOfDate: asOf, pageContext })
+          sendJson(res, 200, { asOfDate: asOf, ...result })
+        } catch (err) {
+          sendJson(res, 502, { error: 'bot101 对话失败: ' + (err instanceof Error ? err.message : String(err)) })
+        }
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/bot') {
@@ -1104,6 +1567,63 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         }
         saveHiddenRecords(worldRoot, list)
         sendJson(res, 200, { ok: true, hidden: list })
+        return
+      }
+      // Run 评测「合格/不合格」手动标记（全员共享，存 run-verdicts.json）。
+      // 只记偏离系统默认判定的覆盖；与默认一致的由前端传空 verdict 删除。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/run-verdicts') {
+        sendJson(res, 200, { verdicts: loadRunVerdicts(worldRoot) })
+        return
+      }
+      // Run 人工评测表（原 runs.html 内嵌 CSV，已迁入 fund_bot_run_eval；前端 fetch 此接口取代内嵌 CSV）。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/run-evals') {
+        sendJson(res, 200, await loadRunEvals(dbPath))
+        return
+      }
+      // 单条 set：{ key:"<run_id>|<bot>", verdict:"pass"|"fail"|"" }。
+      // verdict 为空/'default' → 删除该 key（回到系统默认判定）。
+      if (req.method === 'POST' && url.pathname === '/api/backtest/run-verdicts/set') {
+        let body: Record<string, unknown>
+        try { body = await readJsonBody(req) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }
+        const key = typeof body.key === 'string' ? body.key : ''
+        if (!VERDICT_KEY_RE.test(key)) { sendJson(res, 400, { ok: false, error: 'key required and must be "<run_id>|<bot>"' }); return }
+        const verdict = body.verdict
+        const map = loadRunVerdicts(worldRoot)
+        if (verdict === 'pass' || verdict === 'fail') {
+          map[key] = verdict
+        } else if (verdict === '' || verdict == null || verdict === 'default') {
+          delete map[key]
+        } else {
+          sendJson(res, 400, { ok: false, error: 'verdict must be "pass", "fail", or "" (clear)' })
+          return
+        }
+        saveRunVerdicts(worldRoot, map)
+        sendJson(res, 200, { ok: true, verdicts: map })
+        return
+      }
+      // 批量：{ verdicts:{…}, mode:"init"|"replace" }。
+      // init = 仅当服务器当前为空才整体写入（一次性迁移，幂等、不覆盖已有共享数据）；
+      // replace = 整体替换（{} 即清空，支撑前端「重置」按钮）。
+      if (req.method === 'POST' && url.pathname === '/api/backtest/run-verdicts/bulk') {
+        let body: Record<string, unknown>
+        try { body = await readJsonBody(req) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }
+        const mode = body.mode === 'replace' ? 'replace' : 'init'
+        const incoming = isPlainObject(body.verdicts) ? body.verdicts : {}
+        const clean: Record<string, RunVerdict> = {}
+        for (const [k, v] of Object.entries(incoming)) {
+          if (VERDICT_KEY_RE.test(k) && (v === 'pass' || v === 'fail')) clean[k] = v
+        }
+        const current = loadRunVerdicts(worldRoot)
+        if (mode === 'init') {
+          if (Object.keys(current).length > 0) { sendJson(res, 200, { ok: true, migrated: 0, verdicts: current }); return }
+          saveRunVerdicts(worldRoot, clean)
+          sendJson(res, 200, { ok: true, migrated: Object.keys(clean).length, verdicts: clean })
+          return
+        }
+        saveRunVerdicts(worldRoot, clean)
+        sendJson(res, 200, { ok: true, verdicts: clean })
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/benchmark') {
