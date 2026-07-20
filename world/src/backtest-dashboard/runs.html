@@ -1166,8 +1166,109 @@ async function loadMethodologyInto(el, botId, runId){
     el.innerHTML = `<h3>📐 方法论进化</h3><div class="mdl-empty">方法论加载失败。</div>`
   }
 }
-// Task 5：当日反思桩（待实现）
-function mountReflection(el){ el.innerHTML = '<div class="mdl-empty">（待实现）</div>' }
+// Task 5：移植自 index.html 的三个纯辅助函数（不改逻辑）
+// 极简 markdown 渲染：够展示反思笔记的 ###/##/> 引用/- 列表/**粗体**，不引第三方库。
+// 表格(| … |)会落到普通段落,可读即可。先按行识别前缀,再 esc 内容防 XSS。
+function mdLite(text){
+  if (!text) return ''
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  return text.split('\n').map(raw => {
+    const line = raw.replace(/\s+$/, '')
+    if (!line.trim()) return '<div class="rfl-sp"></div>'
+    if (line.startsWith('### ')) return `<div class="rfl-h3">${inline(line.slice(4))}</div>`
+    if (line.startsWith('## ')) return `<div class="rfl-h2">${inline(line.slice(3))}</div>`
+    if (line.startsWith('# ')) return `<div class="rfl-h2">${inline(line.slice(2))}</div>`
+    if (line.startsWith('> ')) return `<div class="rfl-quote">${inline(line.slice(2))}</div>`
+    const li = line.match(/^(\s*)- (.*)$/)
+    if (li) return `<div class="rfl-li" style="padding-left:${Math.floor(li[1].length / 2) * 12 + 12}px">• ${inline(li[2])}</div>`
+    return `<div class="rfl-p">${inline(line)}</div>`
+  }).join('')
+}
+// 交易记忆窗口只保留 4 维度压缩笔记：碰到第一个"原样保留/在此之后新增…（原样）"分隔标题就截断,
+// 后面那些逐日 tool_call 流水(todo_write/sector_market…)不展示。建仓首日整段就是原样、没有压缩笔记,
+// 此时(截断点≤标题行)回退展示原文,免得截成空白。
+function clipMemoryWindow(txt){
+  if (!txt) return txt
+  const lines = txt.split('\n')
+  const cut = lines.findIndex(l => /^###\s*(在此之后新增|最近).*原样/.test(l.trim()))
+  if (cut <= 1) return txt
+  return lines.slice(0, cut).join('\n').replace(/\s+$/, '') + '\n\n> （已折叠最近"原样"交易日的逐日明细，仅保留 4 维度压缩笔记）'
+}
+// 决策回复里 bot 常附一段 ```yaml ... ``` 的 belief 结构化输出(schema/horizons/evidence)——
+// 这是给 belief-context 打分用的,不是给人看的决策正文,在决策 tab 里剥掉。只删含 `belief:` 的代码块。
+function stripBeliefYaml(text){
+  if (!text) return text
+  return text
+    .replace(/```[a-zA-Z]*\s*\n([\s\S]*?)\n```/g, (m, inner) => /(^|\n)\s*belief:\s*$/m.test(inner) ? '' : m)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+// Task 5：当日反思面板（独立状态，不与净值图光标联动）
+const REFLECTION_TABS = [['memory', '交易记忆窗口'], ['decision', '当天决策']]
+function rflDatesOf(bot){ const d = bot && bot.reflectionDates; return (d && d.length) ? d : ((bot.series || []).map(p => p.trade_date)) }
+function rflLatestOf(bot){ const d = rflDatesOf(bot); return d.length ? d[d.length - 1] : bot.latestTradeDate }
+
+function mountReflection(container, bot){
+  const dates = rflDatesOf(bot)
+  const latest = rflLatestOf(bot)
+  const st = { tab: 'memory', date: latest, cache: new Map() }   // 独立状态
+  const key = d => `${bot.runId}|${bot.botId}|${d}`
+
+  function shell(){
+    const tabs = REFLECTION_TABS.map(([k, label]) => `<button data-rt="${k}"${st.tab === k ? ' class="active"' : ''}>${label}</button>`).join('')
+    container.innerHTML = `<h3>当日反思 · <span class="rfl-date">${esc(st.date || '--')}</span>${st.date === latest ? '（最新）' : ''}</h3>`
+      + `<div class="rfl-nav"><button data-rn="prev">‹</button>`
+      + `<input type="date" class="rfl-cal" value="${esc(st.date || '')}">`
+      + `<button data-rn="next">›</button><button data-rn="latest">最新</button></div>`
+      + `<div class="rfl-tabs">${tabs}</div><div class="rfl-body"><div class="mdl-empty">加载中…</div></div>`
+  }
+  function paint(){
+    const span = container.querySelector('.rfl-date'); if (span) span.textContent = st.date || '--'
+    const body = container.querySelector('.rfl-body')
+    const data = st.cache.get(key(st.date))
+    if (!data){ body.innerHTML = '<div class="mdl-empty">加载中…</div>'; return }
+    const raw = { memory: data.memoryWindow, decision: data.decision }[st.tab] || ''
+    const txt = st.tab === 'memory' ? clipMemoryWindow(raw) : stripBeliefYaml(raw)
+    const hint = { memory: '当日无交易记忆窗口（建仓首日或旧 run 未启用）', decision: '当日无决策回复记录' }[st.tab]
+    body.innerHTML = txt.trim() ? mdLite(txt) : `<div class="mdl-empty">${hint}</div>`
+  }
+  async function load(d){
+    if (!st.cache.has(key(d))){
+      try {
+        const r = await fetch(`/api/backtest/bot-reflection?bot_id=${encodeURIComponent(bot.botId)}&run_id=${encodeURIComponent(bot.runId)}&trade_date=${encodeURIComponent(d)}`, { cache: 'no-store' })
+        st.cache.set(key(d), r.ok ? await r.json() : { memoryWindow: '', decision: '' })
+      } catch { st.cache.set(key(d), { memoryWindow: '', decision: '' }) }
+    }
+    if (st.date === d) paint()
+  }
+  function go(d){                       // 选非决策日 → 跳到 ≥d 的下一个决策日
+    if (!dates.length){ st.date = d } else {
+      let t = dates.find(x => x >= d); if (!t) t = dates[dates.length - 1]; st.date = t
+    }
+    shell(); wire(); paint(); void load(st.date)
+  }
+  function step(dir){
+    if (!dates.length) return
+    let i = dates.indexOf(st.date); if (i < 0) i = dates.length - 1
+    i = Math.min(dates.length - 1, Math.max(0, i + dir)); st.date = dates[i]
+    shell(); wire(); paint(); void load(st.date)
+  }
+  function wire(){
+    container.querySelector('.rfl-tabs').addEventListener('click', e => {
+      const b = e.target.closest('button[data-rt]'); if (!b) return
+      st.tab = b.dataset.rt; shell(); wire(); paint()
+    })
+    container.querySelector('.rfl-nav').addEventListener('click', e => {
+      const b = e.target.closest('button[data-rn]'); if (!b) return
+      if (b.dataset.rn === 'prev') step(-1)
+      else if (b.dataset.rn === 'next') step(1)
+      else if (b.dataset.rn === 'latest'){ st.date = latest; shell(); wire(); paint(); void load(st.date) }
+    })
+    const cal = container.querySelector('.rfl-cal')
+    if (cal) cal.addEventListener('change', () => { if (cal.value) go(cal.value) })
+  }
+  shell(); wire(); paint(); void load(st.date)
+}
 </script>
 </body>
 </html>
