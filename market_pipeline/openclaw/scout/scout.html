@@ -682,6 +682,37 @@
 .mf-mn{font-size:11px;color:var(--mut,#888)}
 .mf-card-net{font-size:13px;margin:3px 0}
 .mf-sub{font-size:11px;line-height:1.5}
+/* 风格因子 tab */
+.sf-body{padding:12px 14px 16px}
+.sf-toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px;color:var(--mut);font-size:12px}
+.sf-windows{display:flex;gap:6px;align-items:center}
+.sf-wbtn{padding:3px 10px;background:var(--panel2);border:1px solid var(--bd);border-radius:5px;cursor:pointer;color:var(--mut);font-size:12px}
+.sf-wbtn:hover{background:#e2e6ec;color:var(--fg)}
+.sf-wbtn.on{background:var(--blue);border-color:var(--blue);color:#fff}
+.sf-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+.sf-card{border:1px solid var(--bd);background:var(--panel2);border-radius:8px;padding:10px 12px;min-width:0}
+.sf-card.off{opacity:.62;background:#f6f8fb}
+.sf-card-h{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px}
+.sf-card-name{font-weight:700;font-size:14px;color:var(--fg)}
+.sf-tag{font-size:10.5px;color:var(--mut);border:1px solid var(--bd);border-radius:5px;padding:1px 6px;background:var(--panel)}
+.sf-main{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15}
+.sf-sub{font-size:11.5px;color:var(--mut);line-height:1.55;margin-top:4px}
+.sf-notes{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+.sf-note{font-size:11.5px;color:var(--gold);background:rgba(207,138,23,.08);border:1px solid rgba(207,138,23,.22);border-radius:5px;padding:3px 7px}
+.sf-chart{padding:4px 0 10px}
+.sf-factor-block{border-top:1px solid var(--bd);padding-top:12px;margin-top:10px}
+.sf-factor-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;margin-bottom:8px}
+.sf-factor-head b{font-size:14px;color:var(--fg)}
+.sf-factor-head span{font-size:12px;color:var(--mut)}
+.sf-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.sf-side-h{font-size:12px;font-weight:700;color:var(--mut);margin:0 0 5px 2px}
+.sf-tbl{width:100%;border-collapse:collapse;font-size:12px;background:var(--panel)}
+.sf-tbl th,.sf-tbl td{padding:5px 7px;border-bottom:1px solid var(--bd);white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
+.sf-tbl th{background:var(--panel2);color:var(--mut);font-weight:600}
+.sf-tbl th:first-child,.sf-tbl td:first-child{text-align:left}
+.sf-tbl tbody tr:hover{background:var(--panel2)}
+.sf-code{color:var(--mut);font-size:10.5px;margin-left:4px}
+@media(max-width:1050px){.sf-cards,.sf-cols{grid-template-columns:1fr}}
 /* 大盘技术面 tab */
 .mt-views{display:flex;gap:8px;margin-bottom:10px;align-items:center}
 .mt-vbtn{padding:5px 14px;background:var(--panel2);border:1px solid var(--bd);border-radius:6px;cursor:pointer;font-size:13px;color:var(--mut)}
@@ -863,6 +894,7 @@
     <button class="navitem" data-tab="research">研究<br>观点</button>
     <button class="navitem" data-tab="since924">924<br>涨跌</button>
     <button class="navitem" data-tab="moneyflow">资金<br>流向</button>
+    <button class="navitem" data-tab="style-factors">风格<br>因子</button>
     <button class="navitem" data-tab="market-tech">大盘<br>技术面</button>
     <button class="navitem" data-tab="earnings">业绩<br>共振</button>
     <button class="navitem" data-tab="valuation">估值<br>做T</button>
@@ -1092,6 +1124,27 @@
           <div><div class="mf-col-h mf-in">净流入 Top 行业</div><div id="mf-inflow"></div></div>
           <div><div class="mf-col-h mf-out">净流出 Top 行业</div><div id="mf-outflow"></div></div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Tab: 风格因子 ===== -->
+  <section class="tabpane" data-tab="style-factors" hidden>
+    <div class="panel">
+      <div class="ph">风格因子观察 <small id="sf-meta">加载中…</small></div>
+      <div class="sf-body">
+        <div class="sf-toolbar">
+          <span id="sf-scope">全A · 申万一级行业内分位 · Top20% - Bottom20%</span>
+          <span class="sf-windows">
+            <span class="sf-wbtn" data-days="20">20日</span>
+            <span class="sf-wbtn on" data-days="60">60日</span>
+            <span class="sf-wbtn" data-days="120">120日</span>
+          </span>
+        </div>
+        <div id="sf-notes" class="sf-notes"></div>
+        <div id="sf-cards" class="sf-cards"><div class="empty">加载中…</div></div>
+        <div class="sf-chart" id="sf-chart"><div class="empty">加载中…</div></div>
+        <div id="sf-detail"></div>
       </div>
     </div>
   </section>
@@ -4053,7 +4106,7 @@ function renderMargin(data){
 
 // ===== Tab 切换（与 poll/render 解耦；localStorage 记忆上次 tab）=====
 const TAB_KEY = "scout.activeTab";
-const TAB_VALID = new Set(["decide","holding","radar","lof","margin","research","since924","moneyflow","market-tech","earnings","valuation"]);
+const TAB_VALID = new Set(["decide","holding","radar","lof","margin","research","since924","moneyflow","style-factors","market-tech","earnings","valuation"]);
 function switchTab(tab){
   if(!TAB_VALID.has(tab)) return;
   document.querySelectorAll(".tabpane").forEach(p =>
@@ -4066,6 +4119,7 @@ function switchTab(tab){
   if(tab === "research") loadResearch();
   if(tab === "since924") loadSince924();
   if(tab === "moneyflow") renderMoneyflow();
+  if(tab === "style-factors" && !_sfLoaded){ _sfLoaded = true; renderStyleFactors(); }
   if(tab === "market-tech" && !_mtLoaded){ _mtLoaded = true; renderMarketTech(); }
   if(tab === "earnings" && !_erLoaded){ _erLoaded = true; renderEarnings(); }
   if(tab === "valuation"){ // 懒加载: 首次点开才加载估值带页(iframe 复用 /valuation)
@@ -4081,6 +4135,7 @@ let _s924Sort = {key:"ret", desc:true};
 let _s924Mode = "adj";     // adj=复权含分红(默认) | price=纯价格不含分红(送转还原)
 
 // 大盘技术面 tab 状态(提前声明: initTabs 在加载时可能立即调用 renderMarketTech, 避免 TDZ)
+let _sfLoaded = false;     // 风格因子是否已首次加载(懒加载, 日度数据无需轮询)
 let _mtLoaded = false;     // ① res14 技术面是否已首次加载(懒加载, 日度数据无需轮询)
 let _mtIntradayLoaded = false;   // ② 日内是否已首次加载(懒加载, 切到该子视图才拉数据)
 let _mtMultidayLoaded = false;   // ③ 多日是否已首次加载(懒加载, 切到该子视图才拉数据)
@@ -4619,6 +4674,86 @@ async function renderMoneyflow(){
   document.getElementById('mf-inflow').innerHTML = (p.inflow_top||[]).map(mfCard).join('') || '<div class="empty">—</div>';
   document.getElementById('mf-outflow').innerHTML = (p.outflow_top||[]).map(mfCard).join('') || '<div class="empty">—</div>';
 }
+
+/* ===== 风格因子观察 tab ===== */
+let _sfDays = 60;
+function sfPct(v, d=2){ return v == null || Number.isNaN(Number(v)) ? '—' : (Number(v) >= 0 ? '+' : '') + Number(v).toFixed(d) + '%'; }
+function sfNum(v, d=1){ return v == null || Number.isNaN(Number(v)) ? '—' : Number(v).toFixed(d); }
+function sfStatusText(s){ return ({ok:'有效', insufficient:'数据不足', short_history:'短历史', empty:'无样本'}[s] || s || '—'); }
+function sfRetCls(v){ return v == null ? 'flat' : (v > 0 ? 'up' : (v < 0 ? 'dn' : 'flat')); }
+async function renderStyleFactors(days){
+  days = days || _sfDays;
+  _sfDays = days;
+  document.querySelectorAll('.sf-wbtn').forEach(b => b.classList.toggle('on', Number(b.dataset.days) === days));
+  const meta = document.getElementById('sf-meta');
+  const cards = document.getElementById('sf-cards');
+  const chart = document.getElementById('sf-chart');
+  const detail = document.getElementById('sf-detail');
+  let data;
+  try{
+    const r = await fetch('/api/style_factors?days=' + encodeURIComponent(days), {cache:'no-store'});
+    data = await r.json();
+    if(data && data.error) throw new Error(data.error);
+  }catch(e){
+    if(meta) meta.textContent = '加载失败';
+    if(cards) cards.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message || e) + '</div>';
+    if(chart) chart.innerHTML = '';
+    if(detail) detail.innerHTML = '';
+    return;
+  }
+  const fs = data.factors || [];
+  if(meta) meta.textContent = data.trade_date ? `${data.trade_date} · ${data.universe_n || 0}只 · ${data.neutralize || ''}` : '暂无数据';
+  const notes = document.getElementById('sf-notes');
+  if(notes) notes.innerHTML = (data.notes || []).map(n => `<span class="sf-note">${escapeHtml(n)}</span>`).join('');
+  if(cards) cards.innerHTML = fs.length ? fs.map(sfCardHtml).join('') : '<div class="empty">暂无因子数据</div>';
+  renderStyleFactorChart(chart, fs);
+  if(detail) detail.innerHTML = fs.map(sfDetailHtml).join('');
+}
+function sfCardHtml(f){
+  const off = f.status === 'insufficient' || f.status === 'empty';
+  const main = off ? '—' : sfPct(f.spread_1d);
+  return `<div class="sf-card${off?' off':''}">
+    <div class="sf-card-h"><span class="sf-card-name">${escapeHtml(f.name)}</span><span class="sf-tag">${escapeHtml(sfStatusText(f.status))}</span></div>
+    <div class="sf-main ${sfRetCls(f.spread_1d)}">${main}</div>
+    <div class="sf-sub">今日多空差 · 累计 ${sfPct(f.cum_ret)} · 分组 ${f.group_n || 0}/${f.sample_n || 0}</div>
+    <div class="sf-sub">${escapeHtml(f.desc || '')}</div>
+  </div>`;
+}
+function renderStyleFactorChart(el, factors){
+  if(!el) return;
+  const usable = (factors || []).filter(f => f.status !== 'insufficient' && f.status !== 'empty' && (f.series || []).length);
+  if(!usable.length){ el.innerHTML = '<div class="empty">暂无可绘制曲线</div>'; return; }
+  const dateSet = new Set();
+  usable.forEach(f => (f.series || []).forEach(p => dateSet.add(p.d)));
+  const xLabels = Array.from(dateSet).sort();
+  const seriesList = usable.map(f => {
+    const m = {}; (f.series || []).forEach(p => { m[p.d] = p.nav; });
+    return {key:f.key, label:f.name, color:f.color || '#888', values:xLabels.map(d => d in m ? m[d] : null)};
+  });
+  svgLineChart(el, seriesList, {xLabels, height:230, zeroLine:true, legend:true, hover:true,
+    idPrefix:'sfChart', xTickCount:8, yFormat:v => (v>=0?'+':'') + v.toFixed(2) + '%'});
+}
+function sfDetailHtml(f){
+  if(f.status === 'insufficient' || f.status === 'empty'){
+    return `<div class="sf-factor-block"><div class="sf-factor-head"><b>${escapeHtml(f.name)}</b><span>${escapeHtml(sfStatusText(f.status))}</span></div><div class="empty">暂无可比样本</div></div>`;
+  }
+  return `<div class="sf-factor-block">
+    <div class="sf-factor-head"><b>${escapeHtml(f.name)}</b><span>${escapeHtml(f.long_label)} vs ${escapeHtml(f.short_label)}</span></div>
+    <div class="sf-cols">
+      <div><div class="sf-side-h">${escapeHtml(f.long_label)}</div>${sfTableHtml(f.long_top || [])}</div>
+      <div><div class="sf-side-h">${escapeHtml(f.short_label)}</div>${sfTableHtml(f.short_top || [])}</div>
+    </div>
+  </div>`;
+}
+function sfTableHtml(rows){
+  if(!rows.length) return '<div class="empty">—</div>';
+  return `<table class="sf-tbl"><thead><tr><th>名称</th><th>分</th><th>今日</th><th>PE</th><th>PB</th></tr></thead><tbody>`
+    + rows.map(r => `<tr><td>${escapeHtml(r.name)}<span class="sf-code">${escapeHtml(r.code)}</span></td><td>${sfNum(r.score)}</td><td class="${sfRetCls(r.ret)}">${sfPct(r.ret)}</td><td>${sfNum(r.pe_ttm)}</td><td>${sfNum(r.pb)}</td></tr>`).join('')
+    + `</tbody></table>`;
+}
+(function initStyleFactorControls(){
+  document.querySelectorAll('.sf-wbtn').forEach(b => b.addEventListener('click', () => renderStyleFactors(Number(b.dataset.days))));
+})();
 
 /* ===== 大盘技术面 tab：① res14 三层表 + 简报（②日内/③多日为后续 task 占位） ===== */
 

@@ -146,6 +146,33 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .cp-mk-buy{fill:var(--gain);stroke:#1a0910;stroke-width:1}
 .cp-mk-sell{fill:var(--loss);stroke:#0a1711;stroke-width:1}
 .cp-mk-txt{font-size:9px;font-weight:700;fill:var(--text)}
+/* 时间窗口按钮 */
+.cp-win{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
+.cp-win button{background:rgba(255,255,255,.03);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:3px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.cp-win button:hover:not(:disabled){background:rgba(255,255,255,.08);color:var(--text)}
+.cp-win button.active{background:#122034;border-color:var(--accent);color:var(--accent)}
+.cp-win button:disabled{opacity:.35;cursor:default}
+/* 十字光标 + 浮层 */
+.cp-chart-wrap{position:relative}
+.cp-cursor-line{stroke:rgba(232,237,247,.55);stroke-width:1;stroke-dasharray:3 3;pointer-events:none}
+.cp-cursor-dot{stroke:var(--bg);stroke-width:1.5;pointer-events:none}
+.cp-cursor-bot{fill:var(--accent)}
+.cp-cursor-bench{fill:var(--accent2)}
+.cp-tooltip{position:absolute;z-index:5;pointer-events:none;background:rgba(9,13,26,.94);border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:11px;min-width:120px;box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.cp-tooltip .tt-date{font-family:ui-monospace,Menlo,monospace;color:var(--text);font-weight:700;margin-bottom:4px}
+.cp-tooltip .tt-row{display:flex;align-items:center;justify-content:space-between;gap:12px;line-height:1.7}
+.cp-tooltip .tt-k{display:inline-flex;align-items:center;gap:5px;color:var(--dim)}
+.cp-tooltip .tt-k i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.cp-tooltip .tt-v{font-variant-numeric:tabular-nums;color:var(--text);font-weight:600}
+.cp-tooltip .tt-total{margin-top:3px;padding-top:3px;border-top:1px solid rgba(255,255,255,.08)}
+.cp-tooltip .tt-sub .tt-k{font-size:10px}.cp-tooltip .tt-sub .tt-v{font-size:10px;font-weight:500}
+/* 总仓位堆叠子图 */
+.cp-pos-title{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:8px 0 3px}
+.cp-pos-chart{width:100%;height:auto;display:block;border-radius:6px}
+.cp-pos-legend{display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:var(--dim);margin-top:5px}
+.cp-pos-lg{display:inline-flex;align-items:center;gap:5px}
+.cp-pos-sw{display:inline-block;width:12px;height:8px;border-radius:2px}
+.cp-pos-cursor-line{stroke:rgba(232,237,247,.55);stroke-width:1;stroke-dasharray:3 3;pointer-events:none}
 @media (max-width:1180px){.index-block{grid-template-columns:1fr}}
 @media (max-width:980px){.cols{grid-template-columns:1fr}.idx-sidebar{position:static;max-height:none}}
 @media (max-width:1100px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -658,7 +685,7 @@ async function renderGroupChart(panel, grp, ix){
     if (panel.dataset.token !== token) return   // 期间又触发了 render
     if (bot && (bot.series || []).length >= 2){
       state.groupShown[ix] = rec._key; highlightBlockRow(panel, ix)
-      panel.innerHTML = chartHead(rec, bot, renderChartSvg(bot)); syncBlockHeights(); return
+      renderChartInto(panel, rec, bot); syncBlockHeights(); return
     }
   }
   state.groupShown[ix] = cands[0]._key; highlightBlockRow(panel, ix)
@@ -684,6 +711,68 @@ window.addEventListener('resize', syncBlockHeights)
 
 // ---- 右侧净值图：模仿 dashboard（净值线 + 基准线 + 买卖点），数据来自 /api/backtest/bot ----
 function fmtNav(v){ return v == null ? '--' : Number(v).toFixed(4) }
+// 仓位堆叠配色（与主看板 index.html 一致，同基金跨图同色）
+const STACK_PALETTE = ['#6cd0ea', '#c084fc', '#f59e0b', '#22c55e', '#ef4444', '#fb923c', '#a78bfa', '#14b8a6']
+function fundColor(fundCode){
+  let h = 0; const s = String(fundCode || '')
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return STACK_PALETTE[h % STACK_PALETTE.length]
+}
+// 把逐日持仓 {date:[{fund_code,fund_name,weight}]} 转成堆叠带（按最大权重降序，累加得 lower/upper）
+function buildStackBands(holdingsByDate, dates){
+  const meta = new Map()
+  for (const d of dates){
+    for (const h of holdingsByDate[d] || []){
+      const w = Number(h.weight || 0); const cur = meta.get(h.fund_code)
+      if (!cur) meta.set(h.fund_code, { fund_name: h.fund_name, maxWeight: w })
+      else if (w > cur.maxWeight) cur.maxWeight = w
+    }
+  }
+  const ordered = [...meta.entries()].sort((a, b) => b[1].maxWeight - a[1].maxWeight || a[0].localeCompare(b[0]))
+  const bands = ordered.map(([fund_code, m]) => ({ fund_code, fund_name: m.fund_name, lower: new Array(dates.length).fill(0), upper: new Array(dates.length).fill(0) }))
+  for (let i = 0; i < dates.length; i++){
+    const byCode = new Map(); for (const h of holdingsByDate[dates[i]] || []) byCode.set(h.fund_code, Number(h.weight || 0))
+    let cum = 0
+    for (const band of bands){ band.lower[i] = cum; cum += byCode.get(band.fund_code) || 0; band.upper[i] = cum }
+  }
+  return bands
+}
+// 「总仓位」堆叠面积子图。W/pad.l/pad.r 与 NAV 图一致 → x 精确对齐；xAxis 用窗口内并集日期。
+function renderPosChart(bot, xAxis){
+  const hbd = bot.holdingsByDate || {}
+  if (!xAxis.length || !Object.keys(hbd).length) return { html: '', hasPos: false }
+  const bands = buildStackBands(hbd, xAxis)
+  const totalUpper = bands.length ? bands[bands.length - 1].upper : []
+  if (!totalUpper.some(v => v > 1e-6)) return { html: '', hasPos: false }   // 全程空仓 → 不画
+  const W = 496, H = 64, pad = { l: 44, r: 12, t: 6, b: 14 }
+  const innerW = W - pad.l - pad.r, innerH = H - pad.t - pad.b
+  const xs = xAxis.map((_, i) => pad.l + (xAxis.length <= 1 ? innerW / 2 : innerW * (i / (xAxis.length - 1))))
+  const yFor = w => H - pad.b - innerH * Math.max(0, Math.min(1, w))
+  let bandsSvg
+  if (bands.length <= 1){
+    const upper = bands.length ? bands[0].upper : xAxis.map(() => 0)
+    const pts = xAxis.map((_, i) => `${xs[i].toFixed(1)} ${yFor(upper[i]).toFixed(1)}`).join(' L')
+    const area = `M${xs[0].toFixed(1)} ${yFor(0).toFixed(1)} L${pts} L${xs[xAxis.length - 1].toFixed(1)} ${yFor(0).toFixed(1)} Z`
+    bandsSvg = `<path d="${area}" fill="rgba(192,132,252,.18)"></path><path d="${area.replace(/ Z$/, '')}" fill="none" stroke="#c084fc" stroke-width="1.4"></path>`
+  } else {
+    bandsSvg = bands.map(b => {
+      const up = xAxis.map((_, i) => `${xs[i].toFixed(1)} ${yFor(b.upper[i]).toFixed(1)}`).join(' L')
+      const lo = xAxis.map((_, i) => `${xs[xAxis.length - 1 - i].toFixed(1)} ${yFor(b.lower[xAxis.length - 1 - i]).toFixed(1)}`).join(' L')
+      return `<path d="M${up} L${lo} Z" fill="${fundColor(b.fund_code)}" fill-opacity=".78"></path>`
+    }).join('')
+  }
+  const yTicks = [0, 0.5, 1].map(w => { const y = yFor(w)
+    return `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${W - pad.r}" y2="${y.toFixed(1)}" class="cp-grid"></line><text x="6" y="${(y + 3).toFixed(1)}" class="cp-axis">${(w * 100).toFixed(0)}%</text>` }).join('')
+  const topPath = `M${xs[0].toFixed(1)} ${yFor(totalUpper[0]).toFixed(1)} ` + xAxis.map((_, i) => `L${xs[i].toFixed(1)} ${yFor(totalUpper[i]).toFixed(1)}`).join(' ')
+  const legend = bands.length > 1
+    ? `<div class="cp-pos-legend">` + bands.map(b => `<span class="cp-pos-lg"><span class="cp-pos-sw" style="background:${fundColor(b.fund_code)}"></span>${esc(b.fund_code)} ${esc(b.fund_name || '')}</span>`).join('') + `</div>`
+    : ''
+  const svg = `<div class="cp-pos-title">总仓位</div><svg class="cp-pos-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`
+    + yTicks + bandsSvg
+    + `<path d="${topPath}" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="1"></path>`
+    + `<line class="cp-pos-cursor-line" y1="${pad.t}" y2="${H - pad.b}" style="display:none"></line></svg>` + legend
+  return { html: svg, hasPos: true }
+}
 function chartLine(points, dToI, axisLen, yMin, yMax, W, H, pad){
   const innerW = W - pad.l - pad.r, innerH = H - pad.t - pad.b, span = Math.max(yMax - yMin, 1e-4)
   const xs = [], ys = []
@@ -697,23 +786,60 @@ function chartLine(points, dToI, axisLen, yMin, yMax, W, H, pad){
   const area = xs.length ? `${d} L ${xs[xs.length - 1].toFixed(1)} ${H - pad.b} L ${xs[0].toFixed(1)} ${H - pad.b} Z` : ''
   return { d, area, xs, ys }
 }
-function renderChartSvg(bot){
+// 时间窗口预设：key → [标签, 天数]（all=全部）。天数按自然日往前推。
+const WIN_PRESETS = [['all', '全部', 0], ['1y', '近1年', 366], ['6m', '近半年', 183], ['3m', '近3月', 92], ['1m', '近1月', 31]]
+// 给定升序日期数组与窗口 key，返回裁剪起始日（含）；all 或数据不足时返回最早日。
+function windowCut(dates, win){
+  if (!dates.length) return null
+  if (win === 'all') return dates[0]
+  const preset = WIN_PRESETS.find(p => p[0] === win)
+  if (!preset || !preset[2]) return dates[0]
+  const end = new Date(dates[dates.length - 1] + 'T00:00:00Z')
+  end.setUTCDate(end.getUTCDate() - preset[2])
+  const cut = end.toISOString().slice(0, 10)
+  return cut < dates[0] ? dates[0] : cut
+}
+// 全序列日期跨度（自然日），用于禁用超出数据范围的窗口按钮
+function spanDays(dates){
+  if (dates.length < 2) return 0
+  return Math.round((new Date(dates[dates.length - 1] + 'T00:00:00') - new Date(dates[0] + 'T00:00:00')) / 86400000)
+}
+// 返回 { html, geom }。win 为窗口 key（默认 'all'）。geom 供十字光标使用。
+function renderChartBody(bot, win){
+  win = win || 'all'
   const W = 496, H = 300, pad = { l: 44, r: 12, t: 14, b: 30 }
-  const series = bot.series || []
-  if (series.length < 2) return '<div class="empty">该 run 无净值序列数据</div>'
-  const bench = bot.benchmark, bSeries = (bench && bench.series) || []
+  const fullSeries = bot.series || []
+  if (fullSeries.length < 2) return { html: '<div class="empty">该 run 无净值序列数据</div>', geom: null }
+  const bench = bot.benchmark, fullBSeries = (bench && bench.series) || []
+  // 用全序列日期算跨度决定按钮可用性；再按窗口裁剪 series/bench/actions
+  const fullDates = [...new Set([...fullSeries, ...fullBSeries].map(p => p.trade_date))].sort()
+  const totalSpan = spanDays(fullDates)
+  const wp = WIN_PRESETS.find(p => p[0] === win)
+  if (win !== 'all' && wp && wp[2] >= totalSpan) win = 'all'   // 记忆的窗口≥全程 → 归一到「全部」，避免禁用按钮却处于选中态
+  let cut = windowCut(fullDates, win)
+  let series = fullSeries.filter(p => p.trade_date >= cut)
+  if (series.length < 2){ series = fullSeries; cut = fullDates[0]; win = 'all' }  // 窗口太窄 → 回退全程
+  const bSeries = fullBSeries.filter(p => p.trade_date >= cut)
+  const actions = (bot.actions || []).filter(a => !a.action_date || a.action_date >= cut)
+  const winBtns = `<div class="cp-win">` + WIN_PRESETS.map(([k, label, days]) => {
+      const disabled = k !== 'all' && days >= totalSpan   // 窗口≥全程 → 与「全部」等价，禁用
+      return `<button data-win="${k}"${k === win ? ' class="active"' : ''}${disabled ? ' disabled' : ''}>${label}</button>`
+    }).join('') + `</div>`
   const dateSet = new Set(series.map(p => p.trade_date)); for (const p of bSeries) dateSet.add(p.trade_date)
   const xAxis = [...dateSet].sort(); const dToI = new Map(xAxis.map((d, i) => [d, i]))
-  const vals = [...series.map(p => Number(p.net_value || 1)), ...bSeries.map(p => Number(p.net_value || 1)), 1]
+  const vals = [...series.map(p => Number(p.net_value || 1)), ...bSeries.map(p => Number(p.net_value || 1))]
   const yMin = Math.min(...vals), yMax = Math.max(...vals)
   const botC = chartLine(series, dToI, xAxis.length, yMin, yMax, W, H, pad)
   const benchC = bSeries.length ? chartLine(bSeries, dToI, xAxis.length, yMin, yMax, W, H, pad) : null
+  // 光标几何：bot 各点 {date,x,y,nav}；基准按日期查 {x,y,nav}
+  const geom = { W, H, pad, pts: series.map((p, i) => ({ date: p.trade_date, x: botC.xs[i], y: botC.ys[i], nav: Number(p.net_value || 1) })), benchByDate: new Map() }
+  if (benchC) bSeries.forEach((p, i) => geom.benchByDate.set(p.trade_date, { x: benchC.xs[i], y: benchC.ys[i], nav: Number(p.net_value || 1) }))
   // 买卖点：同日同方向合并成一个标记，锚在 bot 当日净值点上
   const innerW = W - pad.l - pad.r
   const seriesIdxByDate = new Map(series.map((p, i) => [p.trade_date, i]))
   const firstAxisIdx = dToI.get(series[0].trade_date)
   const groups = new Map()
-  for (const a of (bot.actions || [])){
+  for (const a of actions){
     if (a.side !== 'buy' && a.side !== 'sell') continue
     const key = `${a.action_date}|${a.side}`; let g = groups.get(key)
     if (!g){
@@ -756,8 +882,67 @@ function renderChartSvg(bot){
     + xl.map(p => { const idx = dToI.get(p.trade_date); if (idx == null) return ''
         const x = pad.l + (xAxis.length <= 1 ? innerW / 2 : innerW * (idx / (xAxis.length - 1)))
         return `<text x="${x.toFixed(1)}" y="${H - 10}" text-anchor="middle" class="cp-axis">${esc(p.trade_date)}</text>` }).join('')
+    + `<g class="cp-cursor" style="display:none"><line class="cp-cursor-line" y1="${pad.t}" y2="${H - pad.b}"></line>`
+    + `<circle class="cp-cursor-dot cp-cursor-bench" r="4" style="display:none"></circle>`
+    + `<circle class="cp-cursor-dot cp-cursor-bot" r="4.5"></circle></g>`
     + `</svg>`
-  return legend + svg
+  const pos = renderPosChart(bot, xAxis)   // 总仓位堆叠子图（同一窗口 xAxis，x 与 NAV 图对齐）
+  const html = winBtns + legend + `<div class="cp-chart-wrap">` + svg + pos.html + `<div class="cp-tooltip" hidden></div></div>`
+  return { html, geom }
+}
+// 渲染某 panel 的图表头+图体，并绑定窗口按钮与十字光标。win 缺省用 panel 记忆的窗口。
+function renderChartInto(panel, rec, bot, win){
+  win = win || panel._win || 'all'
+  panel._chart = { rec, bot }; panel._win = win
+  const { html, geom } = renderChartBody(bot, win)
+  panel.innerHTML = chartHead(rec, bot, html)
+  wireChart(panel, rec, bot, geom)
+}
+// 绑定：① 窗口按钮点击→切窗重绘；② 图上 mousemove→吸附最近交易日、移动准星、更新浮层
+function wireChart(panel, rec, bot, geom){
+  const winBar = panel.querySelector('.cp-win')
+  if (winBar) winBar.addEventListener('click', e => {
+    const b = e.target.closest('button[data-win]'); if (!b || b.disabled || b.classList.contains('active')) return
+    renderChartInto(panel, rec, bot, b.dataset.win); syncBlockHeights()
+  })
+  const svg = panel.querySelector('.cp-chart'), wrap = panel.querySelector('.cp-chart-wrap')
+  if (!svg || !wrap || !geom || !geom.pts.length) return
+  const cursor = svg.querySelector('.cp-cursor'), tip = wrap.querySelector('.cp-tooltip')
+  const line = cursor.querySelector('.cp-cursor-line')
+  const botDot = cursor.querySelector('.cp-cursor-bot'), benchDot = cursor.querySelector('.cp-cursor-bench')
+  const posLine = wrap.querySelector('.cp-pos-cursor-line')   // 仓位子图同步竖线（可能无）
+  const hbd = bot.holdingsByDate || {}, hasPos = Object.keys(hbd).length > 0
+  const move = ev => {
+    const rect = svg.getBoundingClientRect(); if (!rect.width) return   // NAV 与仓位子图同宽同左边，用 NAV rect 映射即可
+    const vbX = ((ev.clientX - rect.left) / rect.width) * geom.W
+    let best = geom.pts[0], bd = Infinity
+    for (const p of geom.pts){ const d = Math.abs(p.x - vbX); if (d < bd){ bd = d; best = p } }
+    cursor.style.display = ''
+    line.setAttribute('x1', best.x.toFixed(1)); line.setAttribute('x2', best.x.toFixed(1))
+    botDot.setAttribute('cx', best.x.toFixed(1)); botDot.setAttribute('cy', best.y.toFixed(1))
+    const bp = geom.benchByDate.get(best.date)
+    if (bp){ benchDot.style.display = ''; benchDot.setAttribute('cx', best.x.toFixed(1)); benchDot.setAttribute('cy', bp.y.toFixed(1)) }
+    else benchDot.style.display = 'none'
+    if (posLine){ posLine.style.display = ''; posLine.setAttribute('x1', best.x.toFixed(1)); posLine.setAttribute('x2', best.x.toFixed(1)) }
+    let posHtml = ''
+    if (hasPos){
+      const day = hbd[best.date] || []
+      const totalPos = day.reduce((s, h) => s + (Number(h.weight) || 0), 0)
+      posHtml = `<div class="tt-row tt-total"><span class="tt-k"><i style="background:#c084fc"></i>总仓位</span><span class="tt-v">${(totalPos * 100).toFixed(1)}%</span></div>`
+        + [...day].sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0)).slice(0, 5)
+            .map(h => `<div class="tt-row tt-sub"><span class="tt-k"><i style="background:${fundColor(h.fund_code)}"></i>${esc(h.fund_code)}</span><span class="tt-v">${((Number(h.weight) || 0) * 100).toFixed(1)}%</span></div>`).join('')
+    }
+    tip.hidden = false
+    tip.innerHTML = `<div class="tt-date">${esc(best.date)}</div>`
+      + `<div class="tt-row"><span class="tt-k"><i style="background:var(--accent)"></i>净值</span><span class="tt-v">${best.nav.toFixed(4)}</span></div>`
+      + (bp ? `<div class="tt-row"><span class="tt-k"><i style="background:var(--accent2)"></i>基准</span><span class="tt-v">${bp.nav.toFixed(4)}</span></div>` : '')
+      + posHtml
+    const leftPx = (best.x / geom.W) * rect.width, tw = tip.offsetWidth
+    let tl = leftPx + 12; if (tl + tw > rect.width) tl = leftPx - tw - 12
+    tip.style.left = Math.max(2, tl) + 'px'; tip.style.top = '6px'
+  }
+  wrap.addEventListener('mousemove', move)
+  wrap.addEventListener('mouseleave', () => { cursor.style.display = 'none'; if (posLine) posLine.style.display = 'none'; tip.hidden = true })
 }
 // 从任意日度净值序列算风险调整指标：夏普（rf=0，年化×√252）+ 年化波动 + 年化收益 + 最大回撤 + 卡玛（带符号）
 function navStats(points){

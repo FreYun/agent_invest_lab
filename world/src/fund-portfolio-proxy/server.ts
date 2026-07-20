@@ -13,6 +13,8 @@ export interface FundPortfolioProxyOptions {
   upstreamUrl: string
   /** Constant run_id for the lifetime of this proxy (one pi-loop = one run). */
   runId: string
+  /** Current world trade date. When set, buy/sell order trade_date is hidden from bots and forced here. */
+  getTradeDate?: () => string
   host?: string
   port?: number
 }
@@ -23,7 +25,9 @@ export interface FundPortfolioProxyHandle {
   close(): Promise<void>
 }
 
-const INJECT_KEY = 'run_id'
+const RUN_ID_KEY = 'run_id'
+const TRADE_DATE_KEY = 'trade_date'
+const TRADE_DATE_TOOLS = new Set(['portfolio_place_buy_order', 'portfolio_place_sell_order'])
 
 interface JsonRpcMessage {
   jsonrpc?: string
@@ -38,24 +42,33 @@ function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x)
 }
 
-function stripFromToolSchema(tool: Record<string, unknown>): boolean {
+function stripFromToolSchema(tool: Record<string, unknown>, hideTradeDate: boolean): boolean {
   const schema = tool.inputSchema
   if (!isObject(schema)) return false
-  let had = false
+  let hadRunId = false
+  const name = typeof tool.name === 'string' ? tool.name : ''
+  const keysToStrip = [RUN_ID_KEY]
+  if (hideTradeDate && TRADE_DATE_TOOLS.has(name)) keysToStrip.push(TRADE_DATE_KEY)
   const props = schema.properties
-  if (isObject(props) && INJECT_KEY in props) {
-    delete props[INJECT_KEY]
-    had = true
+  if (isObject(props)) {
+    for (const k of keysToStrip) {
+      if (k in props) {
+        delete props[k]
+        if (k === RUN_ID_KEY) hadRunId = true
+      }
+    }
   }
   const required = schema.required
   if (Array.isArray(required)) {
-    const idx = required.indexOf(INJECT_KEY)
-    if (idx >= 0) {
-      required.splice(idx, 1)
-      had = true
+    for (const k of keysToStrip) {
+      const idx = required.indexOf(k)
+      if (idx >= 0) {
+        required.splice(idx, 1)
+        if (k === RUN_ID_KEY) hadRunId = true
+      }
     }
   }
-  return had
+  return hadRunId
 }
 
 function rewriteSseBody(body: string, mutate: (msg: JsonRpcMessage) => void): string {
@@ -162,7 +175,7 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ status: 'ok', upstream: opts.upstreamUrl, runId: opts.runId }))
+      res.end(JSON.stringify({ status: 'ok', upstream: opts.upstreamUrl, runId: opts.runId, tradeDate: opts.getTradeDate?.() ?? null }))
       return
     }
     if (req.method !== 'POST') {
@@ -181,7 +194,14 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
         const args = isObject(parsed.params.arguments) ? parsed.params.arguments : {}
         // Force-overwrite even if bot supplied a value — bot must not be able
         // to fake the run_id (which would break audit).
-        args[INJECT_KEY] = opts.runId
+        args[RUN_ID_KEY] = opts.runId
+        parsed.params.arguments = args
+      }
+      if (opts.getTradeDate && TRADE_DATE_TOOLS.has(name)) {
+        const args = isObject(parsed.params.arguments) ? parsed.params.arguments : {}
+        // Force world-date order placement. Bots cannot backdate to yesterday's NAV
+        // to work around missing same-day NAV; upstream accepts awaiting_nav instead.
+        args[TRADE_DATE_KEY] = opts.getTradeDate()
         parsed.params.arguments = args
       }
     }
@@ -261,7 +281,7 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
         let sawSchema = false
         for (const t of tools) {
           if (!isObject(t)) continue
-          const had = stripFromToolSchema(t)
+          const had = stripFromToolSchema(t, Boolean(opts.getTradeDate))
           const name = typeof t.name === 'string' ? t.name : ''
           if (name) {
             sawSchema = true

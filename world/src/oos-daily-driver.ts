@@ -9,6 +9,13 @@ function argVal(argv: string[], flag: string): string | undefined {
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined
 }
 
+function splitList(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(/[\s,]+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
 function latestTradingDay(calendarPath: string): string {
   const cal = loadCalendar(calendarPath)
   const today = process.env.TODAY ?? new Date().toISOString().slice(0, 10)
@@ -18,20 +25,31 @@ function latestTradingDay(calendarPath: string): string {
   throw new Error(`no trading day <= ${today} in ${calendarPath}`)
 }
 
-function pickRecord<T>(record: Record<string, T> | undefined, key: string): Record<string, T> | undefined {
-  if (!record || !(key in record)) return undefined
-  return { [key]: record[key] }
+function defaultRunIdFor(botIds: string[]): string {
+  if (botIds.length === 1 && /^bot\d+$/.test(botIds[0])) return `oos-${botIds[0]}-daily`
+  return process.env.OOS_BOT101_RUN_ID ?? 'oos-bot101-daily'
+}
+
+function pickRecords<T>(record: Record<string, T> | undefined, keys: string[]): Record<string, T> | undefined {
+  if (!record) return undefined
+  const out: Record<string, T> = {}
+  for (const key of keys) {
+    if (key in record) out[key] = record[key]
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 async function main(argv = process.argv.slice(2)): Promise<number> {
   if (argv.includes('-h') || argv.includes('--help')) {
-    process.stdout.write(
-      'oos-daily-driver: run bot101 for exactly one trading day without resetting the fund account\n' +
-      '  --date YYYY-MM-DD       default: latest trading day <= today in the config calendar\n' +
-      '  --run-id ID             default: OOS_BOT101_RUN_ID or oos-bot101-daily\n' +
-      '  --config PATH           default: config/world-multi-fund-backtest.yaml\n' +
-      '  --world-dir PATH        default: <cwd>/runtime\n',
-    )
+    process.stdout.write([
+      'oos-daily-driver: run one or more OOS bots for exactly one trading day without resetting fund accounts',
+      '  --date YYYY-MM-DD       default: latest trading day <= today in the config calendar',
+      '  --bot-id ID             bot to run; may repeat. default: OOS_BOTS or bot101',
+      '  --bots A,B              comma/space-separated bots; alternative to repeated --bot-id',
+      '  --run-id ID             default: oos-<bot>-daily for a single bot, else OOS_BOT101_RUN_ID/oos-bot101-daily',
+      '  --config PATH           default: config/world-multi-fund-backtest.yaml',
+      '  --world-dir PATH        default: <cwd>/runtime',
+    ].join('\n') + '\n')
     return 0
   }
 
@@ -40,27 +58,32 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   const date = argVal(argv, '--date') ?? process.env.TRADE_DATE ?? latestTradingDay(base.calendar)
   computeTradingDates(loadCalendar(base.calendar), date, date)
 
-  const runId = argVal(argv, '--run-id') ?? process.env.OOS_BOT101_RUN_ID ?? 'oos-bot101-daily'
+  const repeatedBotIds = argv.flatMap((arg, i) => arg === '--bot-id' && argv[i + 1] ? [argv[i + 1]] : [])
+  const botIds = [...new Set([...repeatedBotIds, ...splitList(argVal(argv, '--bots') ?? process.env.OOS_BOTS)])]
+  const bots = botIds.length ? botIds : ['bot101']
+  const runId = argVal(argv, '--run-id') ?? defaultRunIdFor(bots)
   const worldRoot = resolve(argVal(argv, '--world-dir') ?? join(process.cwd(), 'runtime'))
   const config: WorldConfig = {
     ...base,
-    bots: ['bot101'],
+    bots,
     replay: { from: date, to: date },
     concurrency: 1,
     fundInitReset: false,
     chatStepMode: 'trading_days',
     chatStepDays: 1,
     researchDayEvery: 0,
-    botAssignments: pickRecord(base.botAssignments, 'bot101'),
-    botModels: pickRecord(base.botModels, 'bot101'),
+    botAssignments: pickRecords(base.botAssignments, bots),
+    botModels: pickRecords(base.botModels, bots),
   }
 
-  process.stdout.write(`[oos-daily-driver] date=${date} run_id=${runId} world_root=${worldRoot} fund_init_reset=false\n`)
+  process.stdout.write(`[oos-daily-driver] date=${date} run_id=${runId} bots=${bots.join(',')} world_root=${worldRoot} fund_init_reset=false
+`)
   await runWorld({ worldRoot, config, runId })
   return 0
 }
 
 main().then(code => { process.exitCode = code }).catch(err => {
-  process.stderr.write(`[oos-daily-driver] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`)
+  process.stderr.write(`[oos-daily-driver] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}
+`)
   process.exitCode = 1
 })

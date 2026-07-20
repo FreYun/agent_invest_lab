@@ -586,8 +586,9 @@ def _migrate_run_id_columns(conn):
 def init_db():
     """创建数据库和所有表,并执行增量迁移。"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
     _migrate_paradigm_columns(conn)
@@ -602,9 +603,10 @@ def init_db():
 @contextmanager
 def get_conn():
     """获取数据库连接的上下文管理器"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     try:
         yield conn
         conn.commit()

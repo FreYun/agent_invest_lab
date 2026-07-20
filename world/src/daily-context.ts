@@ -31,6 +31,7 @@ export interface AccountSnapshot {
     initial_capital: number
     cash_available: number
     cash_in_transit: number
+    cash_receivable?: number
     market_value: number
     total_value: number
   }
@@ -254,26 +255,47 @@ async function fetchAccountSnapshot(opts: {
     const account = d.account as AccountSnapshot['account'] | undefined
     if (!account) return null
     const rawHoldings = Array.isArray(d.holdings) ? d.holdings as Record<string, unknown>[] : []
-    // portfolio_get_my_history hands back the raw holding row — fund_bot_holdings
-    // doesn't store weight, so compute it client-side off market_value / total.
-    const totalValue = Number(account.total_value ?? 0)
-    const holdings: HoldingRow[] = rawHoldings
-      .filter(h => h.status === 'active')
-      .map(h => {
-        const mv = Number(h.market_value ?? 0)
-        return {
-          fund_code: String(h.fund_code ?? ''),
-          fund_name: String(h.fund_name ?? ''),
-          shares: Number(h.shares ?? 0),
-          amount_invested: Number(h.amount_invested ?? 0),
-          latest_nav: Number(h.latest_nav ?? 0),
-          market_value: mv,
-          unrealized_pnl_pct: Number(h.unrealized_pnl_pct ?? 0),
-          weight: totalValue > 0 ? mv / totalValue : 0,
-          holding_days: Number(h.holding_days ?? 0),
-          entry_date: String(h.entry_date ?? ''),
-        }
+    // portfolio_get_my_history hands back raw fund_bot_holdings rows. Filter on
+    // shares * NAV, not raw market_value, because stale active rows can have
+    // near-zero shares with an old market_value that was never cleared.
+    const materialHoldings: HoldingRow[] = rawHoldings
+      .filter(h => {
+        if (h.status !== 'active') return false
+        const shares = Math.abs(Number(h.shares ?? 0))
+        const nav = Number(h.latest_nav ?? 0)
+        const mv = Math.abs(Number(h.market_value ?? 0))
+        const effectiveMv = nav > 0 ? shares * nav : mv
+        return shares > 1e-6 && effectiveMv >= 1
       })
+      .map(h => ({
+        fund_code: String(h.fund_code ?? ''),
+        fund_name: String(h.fund_name ?? ''),
+        shares: Number(h.shares ?? 0),
+        amount_invested: Number(h.amount_invested ?? 0),
+        latest_nav: Number(h.latest_nav ?? 0),
+        market_value: Number(h.market_value ?? 0),
+        unrealized_pnl_pct: Number(h.unrealized_pnl_pct ?? 0),
+        weight: 0,
+        holding_days: Number(h.holding_days ?? 0),
+        entry_date: String(h.entry_date ?? ''),
+      }))
+    const marketValue = materialHoldings.reduce((sum, h) => sum + h.market_value, 0)
+    const cashAvailable = Number(account.cash_available ?? 0)
+    const cashInTransit = Number(account.cash_in_transit ?? 0)
+    const cashReceivable = Number(account.cash_receivable ?? 0)
+    const accountForPrompt: AccountSnapshot['account'] = {
+      ...account,
+      cash_available: cashAvailable,
+      cash_in_transit: cashInTransit,
+      cash_receivable: cashReceivable,
+      market_value: marketValue,
+      total_value: cashAvailable + cashInTransit + cashReceivable + marketValue,
+    }
+    const totalValue = Number(accountForPrompt.total_value ?? 0)
+    const holdings: HoldingRow[] = materialHoldings.map(h => ({
+      ...h,
+      weight: totalValue > 0 ? h.market_value / totalValue : 0,
+    }))
     const rawOrders = Array.isArray(d.orders) ? d.orders as Record<string, unknown>[] : []
     const pendingOrders: PendingOrderRow[] = rawOrders
       .filter(o => o.status === 'pending')
@@ -285,7 +307,7 @@ async function fetchAccountSnapshot(opts: {
         order_amount: Number(o.order_amount ?? 0),
         reference_nav: Number(o.reference_nav ?? 0),
       }))
-    return { asOfDate: opts.asOfDate, account, holdings, pendingOrders }
+    return { asOfDate: opts.asOfDate, account: accountForPrompt, holdings, pendingOrders }
   } catch {
     return null
   }

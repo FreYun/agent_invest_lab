@@ -1587,6 +1587,30 @@ async def portfolio_place_buy_order(
         pricing_status = "priced" if nav is not None else "awaiting_nav"
         pricing_nav_date = trade_date if nav is not None else None
         priced_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nav is not None else None
+        existing = conn.execute(
+            "SELECT order_id, reference_nav, pricing_status FROM fund_bot_orders "
+            "WHERE bot_id=? AND order_run_id=? AND fund_code=? AND order_type='buy' "
+            "AND order_date=? AND status='pending' AND ABS(COALESCE(order_amount, 0) - ?) < 0.01 "
+            "ORDER BY order_id DESC LIMIT 1",
+            (bot_id, run_id, fund_code, trade_date, float(amount)),
+        ).fetchone()
+        if existing:
+            view = _bot_run_cash_view(conn, bot_id, run_id, trade_date)
+            return json.dumps({
+                "success": True,
+                "duplicate": True,
+                "order_id": existing["order_id"],
+                "bot_id": bot_id,
+                "fund_code": fund_code,
+                "trade_date": trade_date,
+                "reference_nav": _r(existing["reference_nav"], 6) if existing["reference_nav"] is not None else None,
+                "pricing_status": existing["pricing_status"] or pricing_status,
+                "amount": _r(amount),
+                "status": "pending",
+                "cash_after": _r(float(view["cash_available"])),
+                "cash_in_transit_after": _r(float(view["cash_in_transit"])),
+                "note": "相同 pending 买入单已存在，未重复新增订单",
+            }, ensure_ascii=False)
         view = _bot_run_cash_view(conn, bot_id, run_id, trade_date)
         cash = float(view["cash_available"])
         if amount > cash + 1e-6:
@@ -3800,6 +3824,11 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
     if not account:
         return {"success": False, "message": f"bot {bot_id} 无账户"}
     initial_capital = float(account["initial_capital"] or 0.0)
+    # Keep the raw current-state table aligned with replay before later code reads it
+    # for close_my_day / get_my_history prompt injection. Without this, fully sold
+    # rows can remain status=active with stale market_value after snapshot calc.
+    if run_id:
+        _replay_and_repair_fund_holdings(conn, bot_id, trade_date, run_id=run_id)
     state = _replay_fund_account_state(conn, bot_id, trade_date, run_id=run_id)
     cash = float(state["cash"] or 0.0)
     positions = state["positions"]

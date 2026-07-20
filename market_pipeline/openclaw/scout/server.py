@@ -2644,6 +2644,315 @@ def market_series_payload(conn, days=60):
             "indices": indices, "breadth": breadth}
 
 
+_STYLE_FACTOR_DEFS = {
+    "value": {
+        "name": "价值",
+        "long_label": "低估值组",
+        "short_label": "高估值组",
+        "desc": "PE/PB/PS 越低分越高; 多空收益=低估值组-高估值组",
+        "color": "#2f86d6",
+    },
+    "growth": {
+        "name": "成长/预期",
+        "long_label": "高成长预期组",
+        "short_label": "低成长预期组",
+        "desc": "使用一致预期利润改善; 数据不足时不启用, 不用高估值代理",
+        "color": "#cf8a17",
+    },
+    "momentum": {
+        "name": "动量",
+        "long_label": "强动量组",
+        "short_label": "弱动量组",
+        "desc": "近 20/60/120 日收益越强分越高; 短历史启动期降级为可用短动量",
+        "color": "#6f5ad6",
+    },
+}
+
+
+def _is_clean_stock(code: str, name: str | None = None) -> bool:
+    if not code or len(code) < 9:
+        return False
+    raw = code.split(".", 1)[0]
+    if raw.startswith(("8", "4", "9")) or code.endswith(".BJ"):
+        return False
+    nm = name or ""
+    return "ST" not in nm.upper() and "退" not in nm
+
+
+def _rank_scores(metric, *, high_good=True, group_map=None, min_group=20):
+    vals = [(k, v) for k, v in metric.items() if v is not None and v > 0]
+    if len(vals) < 30:
+        return {}
+    groups = defaultdict(list)
+    if group_map:
+        for k, v in vals:
+            groups[group_map.get(k) or "未分类"].append((k, v))
+    else:
+        groups["全市场"] = vals
+    out = {}
+    fallback = []
+    for _g, gvals in groups.items():
+        if len(gvals) < min_group:
+            fallback.extend(gvals)
+            continue
+        gvals.sort(key=lambda x: x[1])
+        den = max(1, len(gvals) - 1)
+        for i, (k, _v) in enumerate(gvals):
+            pct = i / den * 100.0
+            out[k] = pct if high_good else 100.0 - pct
+    if fallback and len(fallback) >= 30:
+        fallback.sort(key=lambda x: x[1])
+        den = max(1, len(fallback) - 1)
+        for i, (k, _v) in enumerate(fallback):
+            pct = i / den * 100.0
+            out[k] = pct if high_good else 100.0 - pct
+    return out
+
+
+def _avg(xs):
+    xs = [x for x in xs if x is not None]
+    return sum(xs) / len(xs) if xs else None
+
+
+def _score_from_components(components):
+    out = {}
+    keys = set()
+    for comp in components:
+        keys.update(comp.keys())
+    for k in keys:
+        v = _avg([comp.get(k) for comp in components])
+        if v is not None:
+            out[k] = v
+    return out
+
+
+def _style_factor_scores(date, idx, daily_by_date, basic_by_date, consensus_by_date, dates, kind, industry_map):
+    basic = basic_by_date.get(date) or {}
+    if kind == "value":
+        pe = {c: r.get("pe_ttm") for c, r in basic.items()}
+        pb = {c: r.get("pb") for c, r in basic.items()}
+        ps = {c: r.get("ps_ttm") for c, r in basic.items()}
+        comps = [_rank_scores(pe, high_good=False, group_map=industry_map),
+                 _rank_scores(pb, high_good=False, group_map=industry_map),
+                 _rank_scores(ps, high_good=False, group_map=industry_map)]
+        return _score_from_components(comps)
+
+    if kind == "growth":
+        curr_cons = consensus_by_date.get(date) or {}
+        base_idx = max(0, idx - 60)
+        base_cons = consensus_by_date.get(dates[base_idx]) or {}
+        g = {}
+        for code, curr in curr_cons.items():
+            prev = base_cons.get(code)
+            if curr is not None and prev is not None and prev > 0:
+                g[code] = (curr - prev) / abs(prev)
+        return _rank_scores(g, high_good=True, group_map=industry_map)
+
+    if kind == "momentum":
+        curr = daily_by_date.get(date) or {}
+        comps = []
+        for lb in (20, 60, 120):
+            base_idx = idx - lb
+            if base_idx < 0:
+                continue
+            base = daily_by_date.get(dates[base_idx]) or {}
+            ret = {}
+            for code, r in curr.items():
+                c0 = (base.get(code) or {}).get("close")
+                c1 = r.get("close")
+                if c0 and c1:
+                    ret[code] = c1 / c0 - 1.0
+            rs = _rank_scores(ret, high_good=True, group_map=industry_map)
+            if rs:
+                comps.append(rs)
+        if not comps and idx > 0:
+            base = daily_by_date.get(dates[0]) or {}
+            ret = {}
+            for code, r in curr.items():
+                c0 = (base.get(code) or {}).get("close")
+                c1 = r.get("close")
+                if c0 and c1 and date != dates[0]:
+                    ret[code] = c1 / c0 - 1.0
+            rs = _rank_scores(ret, high_good=True, group_map=industry_map)
+            if rs:
+                comps.append(rs)
+        return _score_from_components(comps)
+    return {}
+
+
+def _style_group(items, side, q=0.2):
+    if not items:
+        return []
+    items = sorted(items, key=lambda x: x["score"], reverse=(side == "long"))
+    k = max(20, int(len(items) * q))
+    return items[:min(k, len(items))]
+
+
+def _group_return(group):
+    vals = [x["ret"] for x in group if x.get("ret") is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _top_examples(group, limit=8):
+    rows = []
+    for x in group[:limit]:
+        rows.append({
+            "ts_code": x["code"],
+            "code": x["code"].split(".", 1)[0],
+            "name": x.get("name") or x["code"].split(".", 1)[0],
+            "score": round(x["score"], 1),
+            "ret": None if x.get("ret") is None else round(x["ret"], 2),
+            "pe_ttm": x.get("pe_ttm"),
+            "pb": x.get("pb"),
+            "ps_ttm": x.get("ps_ttm"),
+            "close": x.get("close"),
+        })
+    return rows
+
+
+def style_factors_payload(conn, days=120):
+    try:
+        days = int(days or 120)
+    except (TypeError, ValueError):
+        days = 120
+    days = max(2, min(days, 250))
+    extra = 65
+    dates = [r["trade_date"] for r in conn.execute(
+        "SELECT DISTINCT trade_date FROM daily ORDER BY trade_date DESC LIMIT ?",
+        (days + extra,)).fetchall()]
+    dates = sorted(dates)
+    if not dates:
+        return {"trade_date": None, "factors": [], "notes": ["daily 表暂无数据"]}
+
+    dph = ",".join("?" * len(dates))
+    name_map = {}
+    for r in conn.execute("SELECT code, ts_code, name FROM stock_names").fetchall():
+        if r["ts_code"]:
+            name_map[r["ts_code"]] = r["name"]
+        if r["code"]:
+            name_map[r["code"]] = r["name"]
+    industry_map = {r["ts_code"]: r["l1_name"] for r in conn.execute(
+        "SELECT ts_code, l1_name FROM sw_industry_member").fetchall()}
+    daily_by_date = defaultdict(dict)
+    for r in conn.execute(
+        f"SELECT trade_date, ts_code, close, pct_chg FROM daily "
+        f"WHERE trade_date IN ({dph})", dates):
+        nm = name_map.get(r["ts_code"]) or name_map.get(r["ts_code"].split(".", 1)[0])
+        if not _is_clean_stock(r["ts_code"], nm):
+            continue
+        daily_by_date[r["trade_date"]][r["ts_code"]] = {
+            "close": r["close"], "ret": r["pct_chg"], "name": nm}
+
+    basic_by_date = defaultdict(dict)
+    for r in conn.execute(
+        f"SELECT trade_date, ts_code, pe_ttm, pb, ps_ttm, total_mv, circ_mv, close "
+        f"FROM daily_basic WHERE trade_date IN ({dph})", dates):
+        nm = name_map.get(r["ts_code"]) or name_map.get(r["ts_code"].split(".", 1)[0])
+        if not _is_clean_stock(r["ts_code"], nm):
+            continue
+        basic_by_date[r["trade_date"]][r["ts_code"]] = {
+            "pe_ttm": r["pe_ttm"], "pb": r["pb"], "ps_ttm": r["ps_ttm"],
+            "total_mv": r["total_mv"], "circ_mv": r["circ_mv"], "close": r["close"]}
+
+    consensus_by_date = defaultdict(dict)
+    try:
+        for r in conn.execute(
+            f"SELECT trade_date, ts_code, profit_yi FROM consensus_profit_daily "
+            f"WHERE trade_date IN ({dph})", dates):
+            if r["profit_yi"] is not None:
+                consensus_by_date[r["trade_date"]][r["ts_code"]] = r["profit_yi"]
+    except sqlite3.OperationalError:
+        pass
+
+    latest = dates[-1]
+    visible_dates = dates[-days:]
+    score_cache = {}
+    date_pos = {d: i for i, d in enumerate(dates)}
+
+    def scores_for(d, kind):
+        key = (d, kind)
+        if key not in score_cache:
+            score_cache[key] = _style_factor_scores(
+                d, date_pos[d], daily_by_date, basic_by_date, consensus_by_date, dates, kind, industry_map)
+        return score_cache[key]
+
+    factors = []
+    for kind, meta in _STYLE_FACTOR_DEFS.items():
+        series, nav = [], 1.0
+        for i in range(1, len(dates)):
+            d = dates[i]
+            if d not in visible_dates:
+                continue
+            prev = dates[i - 1]
+            scores = scores_for(prev, kind)
+            curr = daily_by_date.get(d) or {}
+            basic = basic_by_date.get(prev) or {}
+            items = []
+            for code, score in scores.items():
+                r = curr.get(code)
+                if r is None or r.get("ret") is None:
+                    continue
+                br = basic.get(code) or {}
+                items.append({"code": code, "score": score, "ret": r["ret"], "name": r.get("name"),
+                              "pe_ttm": br.get("pe_ttm"), "pb": br.get("pb"),
+                              "ps_ttm": br.get("ps_ttm"), "close": r.get("close")})
+            lg = _style_group(items, "long")
+            sh = _style_group(items, "short")
+            lr, sr = _group_return(lg), _group_return(sh)
+            spread = None if lr is None or sr is None else lr - sr
+            if spread is not None:
+                nav *= 1.0 + spread / 100.0
+            series.append({"d": _fmt_d(d), "ret": spread,
+                           "long_ret": lr, "short_ret": sr,
+                           "nav": (nav - 1.0) * 100.0,
+                           "n": min(len(lg), len(sh))})
+
+        latest_scores = scores_for(latest, kind)
+        latest_daily = daily_by_date.get(latest) or {}
+        latest_basic = basic_by_date.get(latest) or {}
+        latest_items = []
+        for code, score in latest_scores.items():
+            r = latest_daily.get(code) or {}
+            br = latest_basic.get(code) or {}
+            if code not in latest_daily and code not in latest_basic:
+                continue
+            latest_items.append({"code": code, "score": score, "ret": r.get("ret"),
+                                 "name": r.get("name") or name_map.get(code),
+                                 "pe_ttm": br.get("pe_ttm"), "pb": br.get("pb"),
+                                 "ps_ttm": br.get("ps_ttm"), "close": r.get("close") or br.get("close")})
+        latest_long = _style_group(latest_items, "long")
+        latest_short = _style_group(latest_items, "short")
+        latest_lr, latest_sr = _group_return(latest_long), _group_return(latest_short)
+        spread_1d = None if latest_lr is None or latest_sr is None else latest_lr - latest_sr
+        valid_series = [x for x in series if x["ret"] is not None]
+        cum = valid_series[-1]["nav"] if valid_series else None
+        status = "ok" if latest_items else "empty"
+        if kind == "growth" and not latest_items:
+            status = "insufficient"
+        if kind == "momentum" and len(dates) < 20:
+            status = "short_history"
+        factors.append({
+            "key": kind, "name": meta["name"], "desc": meta["desc"],
+            "long_label": meta["long_label"], "short_label": meta["short_label"],
+            "color": meta["color"], "status": status,
+            "sample_n": len(latest_items), "group_n": min(len(latest_long), len(latest_short)),
+            "spread_1d": spread_1d, "cum_ret": cum,
+            "series": series, "long_top": _top_examples(latest_long),
+            "short_top": _top_examples(latest_short),
+        })
+
+    notes = []
+    if not any(consensus_by_date.values()):
+        notes.append("consensus_profit_daily 暂无可比样本: 成长因子暂不启用。")
+    if len(dates) < 20:
+        notes.append(f"当前日线仅 {len(dates)} 个交易日: 动量窗口会使用可用短历史, 长窗稳定性不足。")
+    return {"trade_date": _fmt_d(latest), "start_date": _fmt_d(visible_dates[0]),
+            "end_date": _fmt_d(visible_dates[-1]), "dates_n": len(visible_dates),
+            "universe_n": len(daily_by_date.get(latest) or {}),
+            "neutralize": "申万一级行业内分位",
+            "factors": factors, "notes": notes}
+
+
 # ---- 账号系统: 请求级鉴权与 admin 处理逻辑(纯函数, 便于单测) ----
 
 _VALID_ROLES = ("user", "admin")
@@ -3180,6 +3489,15 @@ class Handler(BaseHTTPRequestHandler):
             c = _conn()
             try:
                 payload = market_series_payload(c, days=days)
+            finally:
+                c.close()
+            self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        elif path == "/api/style_factors":
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            days = (qs.get("days") or [None])[0]
+            c = _conn()
+            try:
+                payload = style_factors_payload(c, days=days)
             finally:
                 c.close()
             self._send(200, json.dumps(payload, ensure_ascii=False).encode("utf-8"))

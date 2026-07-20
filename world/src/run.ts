@@ -586,7 +586,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // bot 的 mcporter.json 用 ${FUND_PORTFOLIO_PROXY_URL} 占位符引用。
   let fundPortfolioProxy: FundPortfolioProxyHandle | null = null
   if (config.fundMcpCli && config.fundPortfolioUpstreamUrl) {
-    fundPortfolioProxy = await createFundPortfolioProxy({ upstreamUrl: config.fundPortfolioUpstreamUrl, runId })
+    fundPortfolioProxy = await createFundPortfolioProxy({ upstreamUrl: config.fundPortfolioUpstreamUrl, runId, getTradeDate: getCurrentDate })
     writeFileSync(P.fundPortfolioProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: fundPortfolioProxy.port, url: fundPortfolioProxy.url, upstream: config.fundPortfolioUpstreamUrl, runId }, null, 2) + '\n')
     log(worldRoot, runId, `fund-portfolio proxy at ${fundPortfolioProxy.url} (upstream ${config.fundPortfolioUpstreamUrl}, run_id=${runId})`)
     templateVars.FUND_PORTFOLIO_PROXY_URL = fundPortfolioProxy.url

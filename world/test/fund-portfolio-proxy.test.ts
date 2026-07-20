@@ -67,8 +67,8 @@ async function startStubUpstream(): Promise<{
                 description: 'bot writer',
                 inputSchema: {
                   type: 'object',
-                  properties: { bot_id: { type: 'string' }, fund_code: { type: 'string' }, run_id: { type: 'string' } },
-                  required: ['bot_id', 'fund_code'],
+                  properties: { bot_id: { type: 'string' }, fund_code: { type: 'string' }, trade_date: { type: 'string' }, run_id: { type: 'string' } },
+                  required: ['bot_id', 'fund_code', 'trade_date'],
                 },
               },
               {
@@ -132,7 +132,7 @@ test('tools/list strips run_id from properties and required', async () => {
     const t2 = msg.result.tools.find(t => t.name === 'portfolio_place_buy_order')!
     const s2 = t2.inputSchema as { properties: Record<string, unknown>; required: string[] }
     assert.equal('run_id' in s2.properties, false)
-    assert.deepEqual(s2.required, ['bot_id', 'fund_code'])
+    assert.deepEqual(s2.required, ['bot_id', 'fund_code', 'trade_date'])
 
     const t3 = msg.result.tools.find(t => t.name === 'get_fund_pool')!
     const s3 = t3.inputSchema as { properties: Record<string, unknown>; required: string[] }
@@ -156,6 +156,28 @@ test('tools/call injects run_id for writer tools after tools/list seeded cache; 
     assert.deepEqual(up.calls[1], { name: 'portfolio_place_buy_order', arguments: { bot_id: 'bot7', fund_code: '000001', run_id: 'run-A' } })
     // 纯读工具不带 run_id —— schema 里没 run_id，proxy 不注入
     assert.deepEqual(up.calls[2], { name: 'get_fund_pool', arguments: { fund_type: 'equity' } })
+  } finally {
+    await proxy.close()
+    await up.close()
+  }
+})
+
+test('tools/list hides trade_date and tools/call force-overwrites it when getTradeDate is set', async () => {
+  const up = await startStubUpstream()
+  let currentDate = '2026-07-16'
+  const proxy = await createFundPortfolioProxy({ upstreamUrl: up.url, runId: 'run-D', getTradeDate: () => currentDate })
+  try {
+    const list = await postJson(proxy.url, { jsonrpc: '2.0', id: 0, method: 'tools/list' })
+    const msg = parseSseMessage(list.text) as { result: { tools: Array<Record<string, unknown>> } }
+    const buy = msg.result.tools.find(t => t.name === 'portfolio_place_buy_order')!
+    const schema = buy.inputSchema as { properties: Record<string, unknown>; required: string[] }
+    assert.equal('run_id' in schema.properties, false)
+    assert.equal('trade_date' in schema.properties, false)
+    assert.deepEqual(schema.required, ['bot_id', 'fund_code'])
+
+    currentDate = '2026-07-17'
+    await postJson(proxy.url, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'portfolio_place_buy_order', arguments: { bot_id: 'bot7', fund_code: '000001', trade_date: '2026-07-15' } } })
+    assert.deepEqual(up.calls[0].arguments, { bot_id: 'bot7', fund_code: '000001', run_id: 'run-D', trade_date: '2026-07-17' })
   } finally {
     await proxy.close()
     await up.close()

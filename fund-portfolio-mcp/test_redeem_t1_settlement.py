@@ -621,3 +621,67 @@ def test_intraday_sell_without_t_nav_freezes_then_prices_after_nav_arrives(reloa
     assert action["run_id"] == run_id
     assert abs(action["shares"] - 3000.0) < 1e-6
     assert abs(acc["cash"] - 3600.0) < 1e-3
+
+
+def test_close_my_day_repairs_stale_active_holding_rows(reload_server, tmp_db):
+    bot_id = "botGhost"
+    run_id = "run-ghost"
+    stale_fund = "000111"
+    live_fund = "000222"
+    s = reload_server
+    import db as db_mod
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_fund(conn, stale_fund, name="旧仓基金")
+        _seed_fund(conn, live_fund, name="现仓基金")
+        for fund in (stale_fund, live_fund):
+            _seed_nav(conn, fund, "2026-01-01", 1.0)
+            _seed_nav(conn, fund, "2026-01-02", 1.0)
+            _seed_nav(conn, fund, "2026-01-03", 1.0)
+        _seed_account(conn, bot_id, cash=700.0, initial=1000.0, run_id=run_id)
+        conn.execute(
+            "INSERT INTO fund_bot_holdings "
+            "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
+            " shares, pending_sell_shares, amount_invested, market_value, unrealized_pnl, "
+            " unrealized_pnl_pct, actual_weight, status, run_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1.0, 1.0, 0, 0, 0, 200, 0, 0, 0.2, ?, ?)",
+            (bot_id, stale_fund, "旧仓基金", "股票类", "satellite", "2026-01-01", "active", run_id),
+        )
+        conn.execute(
+            "INSERT INTO fund_bot_holdings "
+            "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
+            " shares, pending_sell_shares, amount_invested, market_value, unrealized_pnl, "
+            " unrealized_pnl_pct, actual_weight, status, run_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1.0, 1.0, 300, 0, 300, 300, 0, 0, 0.3, ?, ?)",
+            (bot_id, live_fund, "现仓基金", "股票类", "core", "2026-01-01", "active", run_id),
+        )
+        for fund, action_type, amount, shares, action_date in (
+            (stale_fund, "ADD", 200.0, 200.0, "2026-01-01"),
+            (live_fund, "ADD", 300.0, 300.0, "2026-01-01"),
+            (stale_fund, "REDUCE", 200.0, 200.0, "2026-01-02"),
+        ):
+            conn.execute(
+                "INSERT INTO fund_bot_actions "
+                "(bot_id, fund_code, action_type, nav_used, amount, shares, fee, reason, action_date, run_id) "
+                "VALUES (?, ?, ?, 1.0, ?, ?, 0, ?, ?, ?)",
+                (bot_id, fund, action_type, amount, shares, "seed", action_date, run_id),
+            )
+        conn.commit()
+
+    data = json.loads(asyncio.run(s.portfolio_close_my_day(
+        bot_id=bot_id, trade_date="2026-01-03", run_id=run_id,
+    )))
+    assert data["success"], data
+    active_codes = [h["fund_code"] for h in data["holdings"] if h["status"] == "active"]
+    assert active_codes == [live_fund]
+    assert abs(data["assets"]["cash_available"] - 700.0) < 1e-6
+    assert abs(data["assets"]["market_value"] - 300.0) < 1e-6
+    assert abs(data["assets"]["total_value"] - 1000.0) < 1e-6
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        stale = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND fund_code=? AND run_id=?", (bot_id, stale_fund, run_id))
+    assert stale["status"] == "closed"
+    assert abs(stale["shares"] or 0.0) < 1e-6
+    assert abs(stale["market_value"] or 0.0) < 1e-6
+    assert abs(stale["actual_weight"] or 0.0) < 1e-6
