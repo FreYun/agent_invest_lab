@@ -187,7 +187,6 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .mdl-close:hover{color:#fff}
 .mdl-sec{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.06)}
 .mdl-sec h3{margin:0 0 10px;font-size:13px;color:var(--accent2)}
-.mdl-close:hover{color:#fff}
 .cp-expand{cursor:pointer;background:none;border:1px solid var(--border);border-radius:6px;color:var(--dim);font-size:13px;padding:1px 7px;margin-left:8px}
 .cp-expand:hover{color:#fff;border-color:var(--accent2)}
 /* 进化时间线 */
@@ -1122,7 +1121,7 @@ function openMethodologyModal(rec, bot){
     + `<div class="mdl-sec" id="mdlMeth"><h3>📐 方法论进化</h3><div class="mdl-empty">加载中…</div></div>`
     + `<div class="mdl-sec" id="mdlRfl"><h3>当日反思</h3><div class="mdl-empty">加载中…</div></div>`
   // 放大净值图：复用现有 body 渲染（不接光标 wiring，静态展示即可；如需光标可后续接）
-  const { html } = renderChartBody(bot, bot && bot.series ? 'all' : 'all')
+  const { html } = renderChartBody(bot, 'all')
   body.querySelector('.mdl-chart').innerHTML = html
   m.classList.add('open')
   // 懒加载方法论与反思（Task 4 / Task 5 填充）
