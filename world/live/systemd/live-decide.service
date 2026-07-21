@@ -1,0 +1,7 @@
+[Unit]
+Description=Live intraday Phase 1 (decide) for qualified runs
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/rooot/agent_invest_lab/world
+ExecStart=/usr/bin/flock -n /tmp/live-decide.lock /usr/bin/python3.12 /home/rooot/agent_invest_lab/world/live/live_decide.py

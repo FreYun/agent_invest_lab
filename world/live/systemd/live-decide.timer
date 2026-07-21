@@ -1,0 +1,9 @@
+[Unit]
+Description=Trigger live decide at 14:00 on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri 14:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

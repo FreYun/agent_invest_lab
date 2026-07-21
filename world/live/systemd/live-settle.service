@@ -1,0 +1,7 @@
+[Unit]
+Description=Live intraday Phase 2 (settle+close) for qualified runs
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/rooot/agent_invest_lab/world
+ExecStart=/usr/bin/flock -n /tmp/live-settle.lock /usr/bin/python3.12 /home/rooot/agent_invest_lab/world/live/live_settle.py
