@@ -25,7 +25,8 @@ def discover_live_runs(runs_dir: str) -> list:
     out = []
     for f in glob.glob(os.path.join(runs_dir, "live-*", "state.json")):
         try:
-            s = json.load(open(f))
+            with open(f) as fh:
+                s = json.load(fh)
         except Exception:
             continue
         rid = os.path.basename(os.path.dirname(f))
@@ -37,7 +38,8 @@ def discover_live_runs(runs_dir: str) -> list:
 
 
 def ensure_calendar_has(cal_path: str, date: str) -> bool:
-    cal = json.load(open(cal_path))
+    with open(cal_path) as fh:
+        cal = json.load(fh)
     days = cal["trading_days"]
     if date in days:
         return False
@@ -45,7 +47,8 @@ def ensure_calendar_has(cal_path: str, date: str) -> bool:
         raise ValueError(f"{date} 非工作日，拒绝自动追加日历（节假日需人工维护）")
     days.append(date)
     days.sort()
-    json.dump(cal, open(cal_path, "w"), ensure_ascii=False, indent=2)
+    with open(cal_path, "w") as fh:
+        json.dump(cal, fh, ensure_ascii=False, indent=2)
     return True
 
 
