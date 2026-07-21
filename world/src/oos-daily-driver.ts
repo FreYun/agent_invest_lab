@@ -35,6 +35,7 @@ function defaultRunIdFor(botIds: string[]): string {
 export function phaseToFlags(phase: string | undefined): { skipClose: boolean; skipChat: boolean } {
   if (phase === 'decide') return { skipClose: true, skipChat: false }
   if (phase === 'settle') return { skipClose: false, skipChat: true }
+  if (phase !== undefined) throw new Error(`--phase 只能是 "decide" 或 "settle"，收到：${JSON.stringify(phase)}`)
   return { skipClose: false, skipChat: false }
 }
 
