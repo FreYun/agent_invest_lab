@@ -60,7 +60,7 @@ _REALTIME_TOOLS = [
 
 
 def seed_live_config(src_cfg_path, dst_cfg_path, dst_run_id):
-    import yaml  # world 已依赖 yaml（node），Python 侧用 pyyaml；若无则退化为文本追加
+    import yaml  # Python 侧依赖 pyyaml（已确认可用 6.0.1）
     with open(src_cfg_path) as f:
         cfg = yaml.safe_load(f)
     tools = cfg.get("simworld_tools", [])
@@ -91,7 +91,8 @@ def main():
     src_mem = os.path.join(WORLD, "runtime", "runs", args.source_run_id, "memory")
     dst_mem = os.path.join(WORLD, "runtime", "runs", dst, "memory")
     if os.path.isdir(src_mem):
-        os.makedirs(os.path.dirname(dst_mem), exist_ok=True)
+        # 先建 live run 目录（dst_mem 的父目录），copytree 再在其中创建 memory/
+        os.makedirs(os.path.join(WORLD, "runtime", "runs", dst), exist_ok=True)
         shutil.copytree(src_mem, dst_mem, dirs_exist_ok=True)
 
     # 2. 生成 live config
