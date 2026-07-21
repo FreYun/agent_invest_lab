@@ -112,6 +112,10 @@ export interface WorldConfig {
   // model.primary 片段 { provider, base_url, model, api_key_from_openclaw }。优先级最高：
   // 盖过 bots/<bot>/config/model.yaml 和全局 rlConfigBase。缺省时各 bot 用自带 model.yaml / 全局兜底。
   botModels?: Record<string, Record<string, unknown>>
+  /** Phase 1（decide）：跳过 close_my_day（当日收盘 NAV 尚未披露）。 */
+  skipClose?: boolean
+  /** Phase 2（settle）：不唤醒 bot，只跑系统侧 settle + close。 */
+  skipChat?: boolean
 }
 
 export interface BotAssignment {
@@ -172,17 +176,18 @@ function parseBotAssignments(raw: unknown, bots: string[]): Record<string, BotAs
   return Object.keys(out).length ? out : undefined
 }
 
-export function loadWorldConfig(path: string): WorldConfig {
-  const text = readFileSync(path, 'utf8')
-  const raw = (parseYaml(text) ?? {}) as Record<string, unknown>
-  const baseDir = dirname(resolve(path))
+/** 从 raw YAML 对象解析 WorldConfig（供测试直接调用，无需 yaml 文件）。
+ * baseDir 用于相对路径解析；测试时可省略（缺省当前工作目录）。
+ */
+export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string): WorldConfig {
+  const resolvedBaseDir = baseDir ?? process.cwd()
 
   const researchLoop = reqString(raw, 'research_loop')
   // 优先级：env RESEARCH_LOOP_RUST_BIN > world.yaml research_loop_rust_bin > 未设（走 ts）。
   // env 优先方便临时切换（`RESEARCH_LOOP_RUST_BIN=... world run --config ...`）而不动 yaml。
   const researchLoopRustBin = (process.env.RESEARCH_LOOP_RUST_BIN && process.env.RESEARCH_LOOP_RUST_BIN.trim())
     || (typeof raw.research_loop_rust_bin === 'string' && raw.research_loop_rust_bin.trim()
-      ? resolveMaybe(baseDir, raw.research_loop_rust_bin)
+      ? resolveMaybe(resolvedBaseDir, raw.research_loop_rust_bin)
       : undefined)
 
   // world.yaml lives at <world>/config/world.yaml. Defaults:
@@ -190,14 +195,14 @@ export function loadWorldConfig(path: string): WorldConfig {
   //   skills_root    → ../../skills       (i.e. <repo>/skills/, injected as extra_roots)
   //   openclaw_json  → ./openclaw.json    (i.e. <world>/config/openclaw.json, credentials)
   const botsRoot = typeof raw.bots_root === 'string' && raw.bots_root.trim()
-    ? resolveMaybe(baseDir, raw.bots_root)
-    : resolveMaybe(baseDir, '../../bots')
+    ? resolveMaybe(resolvedBaseDir, raw.bots_root)
+    : resolveMaybe(resolvedBaseDir, '../../bots')
   const skillsRoot = typeof raw.skills_root === 'string' && raw.skills_root.trim()
-    ? resolveMaybe(baseDir, raw.skills_root)
-    : resolveMaybe(baseDir, '../../skills')
+    ? resolveMaybe(resolvedBaseDir, raw.skills_root)
+    : resolveMaybe(resolvedBaseDir, '../../skills')
   const openclawJson = typeof raw.openclaw_json === 'string' && raw.openclaw_json.trim()
-    ? resolveMaybe(baseDir, raw.openclaw_json)
-    : resolveMaybe(baseDir, 'openclaw.json')
+    ? resolveMaybe(resolvedBaseDir, raw.openclaw_json)
+    : resolveMaybe(resolvedBaseDir, 'openclaw.json')
 
   const botsRaw = raw.bots
   if (!Array.isArray(botsRaw) || botsRaw.length === 0 || !botsRaw.every(b => typeof b === 'string' && b.trim())) {
@@ -206,7 +211,7 @@ export function loadWorldConfig(path: string): WorldConfig {
   const bots = botsRaw as string[]
 
   const strategyLibraryRoot = typeof raw.strategy_library_root === 'string' && raw.strategy_library_root.trim()
-    ? resolveMaybe(baseDir, raw.strategy_library_root)
+    ? resolveMaybe(resolvedBaseDir, raw.strategy_library_root)
     : undefined
   const botAssignments = parseBotAssignments(raw.bot_assignments, bots)
   // per-bot 模型覆盖（18888 modal 本次选择）：{ botId: { provider, base_url, model, api_key_from_openclaw } }。
@@ -226,8 +231,8 @@ export function loadWorldConfig(path: string): WorldConfig {
   if (from > to) throw new Error(`world config: replay.from (${from}) is after replay.to (${to})`)
 
   const calendar = typeof raw.calendar === 'string' && raw.calendar.trim()
-    ? resolveMaybe(baseDir, raw.calendar)
-    : resolveMaybe(baseDir, 'calendar.json')
+    ? resolveMaybe(resolvedBaseDir, raw.calendar)
+    : resolveMaybe(resolvedBaseDir, 'calendar.json')
   const concurrency = typeof raw.concurrency === 'number' && raw.concurrency >= 1 ? Math.floor(raw.concurrency) : 4
   const perBotTimeoutSeconds = typeof raw.per_bot_timeout_seconds === 'number' && raw.per_bot_timeout_seconds > 0 ? Math.floor(raw.per_bot_timeout_seconds) : 1200
   const researchDayEvery = typeof raw.research_day_every === 'number' && raw.research_day_every >= 0 ? Math.floor(raw.research_day_every) : 0
@@ -243,8 +248,8 @@ export function loadWorldConfig(path: string): WorldConfig {
   const chatMonthlyNth = typeof raw.chat_monthly_nth === 'number' && Number.isFinite(raw.chat_monthly_nth) && Math.trunc(raw.chat_monthly_nth) !== 0 ? Math.trunc(raw.chat_monthly_nth) : undefined
   const reporterMode = raw.reporter_mode === true
   const rlConfigBase = typeof raw.rl_config_base === 'string' && raw.rl_config_base.trim()
-    ? resolveMaybe(baseDir, raw.rl_config_base)
-    : resolveMaybe(baseDir, '../config/trading-rl-config.base.json')
+    ? resolveMaybe(resolvedBaseDir, raw.rl_config_base)
+    : resolveMaybe(resolvedBaseDir, '../config/trading-rl-config.base.json')
   const rlOpenclawDir = typeof raw.rl_openclaw_dir === 'string' && raw.rl_openclaw_dir.trim() ? raw.rl_openclaw_dir : undefined
   const shadowInclude = Array.isArray(raw.shadow_include) && raw.shadow_include.every(x => typeof x === 'string')
     ? (raw.shadow_include as string[])
@@ -266,11 +271,11 @@ export function loadWorldConfig(path: string): WorldConfig {
       throw new Error(`world config: openclaw_json not found (required for openclaw-pi loop): ${openclawJson}`)
     }
     openclawRoot = typeof raw.openclaw_root === 'string' && raw.openclaw_root.trim()
-      ? resolveMaybe(baseDir, raw.openclaw_root)
+      ? resolveMaybe(resolvedBaseDir, raw.openclaw_root)
       // 缺省走 repo 根的 .openclaw 符号链接（baseDir=<world>/config → ../../.openclaw），不硬编码旧 HOME。
-      : resolveMaybe(baseDir, '../../.openclaw/openclaw')
+      : resolveMaybe(resolvedBaseDir, '../../.openclaw/openclaw')
     piServerEntry = typeof raw.pi_server_entry === 'string' && raw.pi_server_entry.trim()
-      ? resolveMaybe(baseDir, raw.pi_server_entry)
+      ? resolveMaybe(resolvedBaseDir, raw.pi_server_entry)
       : join(openclawRoot, 'src/agents/agent_invest_pi_stdio_server.ts')
     if (!existsSync(piServerEntry)) {
       throw new Error(`world config: pi_server_entry not found: ${piServerEntry}`)
@@ -332,7 +337,7 @@ export function loadWorldConfig(path: string): WorldConfig {
     : 'http://127.0.0.1:28172/mcp'
 
   const fundMcpCli = typeof raw.fund_mcp_cli === 'string' && raw.fund_mcp_cli.trim()
-    ? resolveMaybe(baseDir, raw.fund_mcp_cli)
+    ? resolveMaybe(resolvedBaseDir, raw.fund_mcp_cli)
     : undefined
   const fundInitialCapital = typeof raw.fund_initial_capital === 'number' && raw.fund_initial_capital > 0
     ? raw.fund_initial_capital
@@ -366,5 +371,15 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
   }
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
+  const skipClose = typeof raw.skip_close === 'boolean' ? raw.skip_close : undefined
+  const skipChat = typeof raw.skip_chat === 'boolean' ? raw.skip_chat : undefined
+
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
+}
+
+export function loadWorldConfig(path: string): WorldConfig {
+  const text = readFileSync(path, 'utf8')
+  const raw = (parseYaml(text) ?? {}) as Record<string, unknown>
+  const baseDir = dirname(resolve(path))
+  return parseWorldConfig(raw, baseDir)
 }

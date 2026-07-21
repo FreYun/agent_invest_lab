@@ -1042,7 +1042,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // settle + close 仍按日推进，simulated_datetime 同样每天更新——只是 bot 不被叫起。cursor 0 永远
       // 是 chat day（与 isFirstDay 对齐）。
       const chatDayOpts = { weekday: config.chatWeekday, monthlyNth: config.chatMonthlyNth }
-      const isChatDay = isChatDayAt(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
+      const isChatDay = config.skipChat ? false : isChatDayAt(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
       // 距上次决策已过几个交易日 + 上次决策日，用于周期感知 prompt（让低频 bot 知道这是周/月度再平衡，
       // 下方数据块覆盖的是整段区间而非单日）。首日/日度 = 1，不渲染周期块。
       const prevChatCursor = previousChatCursor(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
@@ -1240,7 +1240,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // 系统侧 close：每个 bot（不论 chat 状态如何）跑一次 close_my_day 落收盘快照。
       // bot 在 BOT_ONLY 端口看不到 close_my_day，只能 world 触发；这是"每天收盘核算"的硬契约。
       // snapshot 文本写到 <botDayDir>/close_my_day.json，方便后续审阅。
-      if (config.fundMcpCli) {
+      if (config.fundMcpCli && !config.skipClose) {
         for (const { botId } of setupRes.bots) {
           try {
             const r = await runFundCli(config.fundMcpCli, 'close_my_day', ['--bot-id', botId, '--trade-date', date, '--run-id', runId], { timeoutMs: 30_000 })

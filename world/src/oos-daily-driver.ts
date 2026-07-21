@@ -1,6 +1,8 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import { resolve, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { loadWorldConfig, type WorldConfig } from './config.ts'
+
 import { loadCalendar, computeTradingDates } from './calendar.ts'
 import { runWorld } from './run.ts'
 
@@ -30,6 +32,12 @@ function defaultRunIdFor(botIds: string[]): string {
   return process.env.OOS_BOT101_RUN_ID ?? 'oos-bot101-daily'
 }
 
+export function phaseToFlags(phase: string | undefined): { skipClose: boolean; skipChat: boolean } {
+  if (phase === 'decide') return { skipClose: true, skipChat: false }
+  if (phase === 'settle') return { skipClose: false, skipChat: true }
+  return { skipClose: false, skipChat: false }
+}
+
 function pickRecords<T>(record: Record<string, T> | undefined, keys: string[]): Record<string, T> | undefined {
   if (!record) return undefined
   const out: Record<string, T> = {}
@@ -49,6 +57,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       '  --run-id ID             default: oos-<bot>-daily for a single bot, else OOS_BOT101_RUN_ID/oos-bot101-daily',
       '  --config PATH           default: config/world-multi-fund-backtest.yaml',
       '  --world-dir PATH        default: <cwd>/runtime',
+      '  --phase decide|settle   live 两阶段：decide=盘中决策跳过收盘核算；settle=盘后纯系统结算',
     ].join('\n') + '\n')
     return 0
   }
@@ -63,6 +72,8 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   const bots = botIds.length ? botIds : ['bot101']
   const runId = argVal(argv, '--run-id') ?? defaultRunIdFor(bots)
   const worldRoot = resolve(argVal(argv, '--world-dir') ?? join(process.cwd(), 'runtime'))
+  const phase = argVal(argv, '--phase')
+  const { skipClose, skipChat } = phaseToFlags(phase)
   const config: WorldConfig = {
     ...base,
     bots,
@@ -74,6 +85,8 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     researchDayEvery: 0,
     botAssignments: pickRecords(base.botAssignments, bots),
     botModels: pickRecords(base.botModels, bots),
+    skipClose,
+    skipChat,
   }
 
   process.stdout.write(`[oos-daily-driver] date=${date} run_id=${runId} bots=${bots.join(',')} world_root=${worldRoot} fund_init_reset=false
@@ -82,8 +95,11 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
   return 0
 }
 
-main().then(code => { process.exitCode = code }).catch(err => {
-  process.stderr.write(`[oos-daily-driver] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}
+const isEntry = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
+if (isEntry) {
+  main().then(code => { process.exitCode = code }).catch(err => {
+    process.stderr.write(`[oos-daily-driver] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}
 `)
-  process.exitCode = 1
-})
+    process.exitCode = 1
+  })
+}
