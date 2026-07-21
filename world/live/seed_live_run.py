@@ -3,7 +3,7 @@
 
 不复制 fund_bot_accounts（PK=bot_id 的缓存，不可信）；不改任何表结构。
 """
-import json, os, sqlite3, shutil, sys, argparse
+import json, os, sqlite3, shutil, sys, argparse, datetime
 sys.path.insert(0, os.path.dirname(__file__))
 import live_common as lc
 
@@ -73,6 +73,23 @@ def seed_live_config(src_cfg_path, dst_cfg_path, dst_run_id):
         yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
 
 
+def write_state_stub(dst_state_path, dst_run_id, bot, src_run_id):
+    """写一个最小 state.json 存根，让 discover_live_runs 在首次 decide 之前就能发现该 live run。
+
+    引擎首次跑 oos-daily-driver --phase decide 时，runWorld.setup 会用真实字段整份覆盖它
+    （见 world/src/run.ts 的 writeState(initial)），所以这里只需 bots 单元素即可被发现。
+    """
+    os.makedirs(os.path.dirname(dst_state_path), exist_ok=True)
+    with open(dst_state_path, "w") as f:
+        json.dump({
+            "run_id": dst_run_id,
+            "status": "seeded",
+            "bots": [bot],
+            "source_run_id": src_run_id,
+            "seeded_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }, f, ensure_ascii=False, indent=2)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source-run-id", required=True)
@@ -106,6 +123,9 @@ def main():
         conn.commit()
     finally:
         conn.close()
+
+    # 4. 写 state.json 存根（发现标记；首次 decide 由引擎整份覆盖）
+    write_state_stub(dst_state, dst, args.bot_id, args.source_run_id)
 
     print(f"[seed] {dst} 完成：{counts}  config={dst_cfg}")
 

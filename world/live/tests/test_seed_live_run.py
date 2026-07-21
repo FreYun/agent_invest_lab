@@ -1,5 +1,6 @@
-import sqlite3, os, sys
+import sqlite3, os, sys, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import live_common as lc
 import seed_live_run as seed
 
 
@@ -53,3 +54,18 @@ def test_clone_run_rows_rekeys(tmp_path):
     assert o == (dst, None, "pending")
     # 源行不动
     assert conn.execute("SELECT COUNT(*) FROM fund_bot_actions WHERE run_id=?", (src,)).fetchone()[0] == 1
+
+
+def test_state_stub_makes_run_discoverable(tmp_path):
+    """seed 写的 state.json 存根能让 discover_live_runs 在首次 decide 前就发现该 live run。"""
+    dst = "live-bot18-20260720T150439"
+    runs_dir = tmp_path / "runs"
+    state = runs_dir / dst / "state.json"
+    seed.write_state_stub(str(state), dst, "bot18", "dash-2026-07-20T15-04-39")
+
+    payload = json.loads(state.read_text())
+    assert payload["bots"] == ["bot18"]
+    assert payload["run_id"] == dst
+    assert payload["status"] == "seeded"
+    # discover_live_runs 只凭 state.json 即可发现（无需先跑引擎）
+    assert lc.discover_live_runs(str(runs_dir)) == [(dst, "bot18")]
