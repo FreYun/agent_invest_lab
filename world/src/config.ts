@@ -36,6 +36,14 @@ export interface WorldConfig {
   // 触发条件：(cursor + 1) % researchDayEvery === 0，即第 N / 2N / 3N 个交易日。
   researchDayEvery: number
   researchDayTimeoutSeconds: number
+  // 每隔 N 个「决策日」（bot 实际被唤起的 chat 日，非交易日）标记一次「深度研究日」：
+  // 第 N / 2N / 3N … 个决策日的 daily message 注入【深度研究日】块，允许 bot 调 start_research
+  // （前提：rl_config_base 的 deny 里已放开研究工具）。0 = 关闭（默认，历史行为）。
+  // 与 researchDayEvery（只加预算、按交易日计数）互相独立。可选（老配置/测试 fixture 不带 = 关闭）。
+  deepResearchEvery?: number
+  // 深度研究日的 per-bot chat 超时（外层 kill）。要覆盖引擎内研究预算（rl config limits.max_time_minutes）
+  // + 常规决策时间。缺省 = max(researchDayTimeoutSeconds, 2400)。
+  deepResearchTimeoutSeconds?: number
   // bot chat 频率（交易日步长）。1 = 每个交易日都唤起 bot（默认）。N > 1 = 每 N 个交易日唤起
   // 一次 bot chat（cursor 0, N, 2N, …），中间天系统侧 settle_pending_orders + close_my_day 仍
   // 按日推进，simulated_datetime 和 currentDateRef 同样每天更新——只是 bot 不被叫起。用于
@@ -224,6 +232,8 @@ export function loadWorldConfig(path: string): WorldConfig {
   const perBotTimeoutSeconds = typeof raw.per_bot_timeout_seconds === 'number' && raw.per_bot_timeout_seconds > 0 ? Math.floor(raw.per_bot_timeout_seconds) : 1200
   const researchDayEvery = typeof raw.research_day_every === 'number' && raw.research_day_every >= 0 ? Math.floor(raw.research_day_every) : 0
   const researchDayTimeoutSeconds = typeof raw.research_day_timeout_seconds === 'number' && raw.research_day_timeout_seconds > 0 ? Math.floor(raw.research_day_timeout_seconds) : Math.max(perBotTimeoutSeconds, 300)
+  const deepResearchEvery = typeof raw.deep_research_every === 'number' && raw.deep_research_every >= 0 ? Math.floor(raw.deep_research_every) : 0
+  const deepResearchTimeoutSeconds = typeof raw.deep_research_timeout_seconds === 'number' && raw.deep_research_timeout_seconds > 0 ? Math.floor(raw.deep_research_timeout_seconds) : Math.max(researchDayTimeoutSeconds, 2400)
   const chatStepDays = typeof raw.chat_step_days === 'number' && raw.chat_step_days >= 1 ? Math.floor(raw.chat_step_days) : 1
   const rawStepMode = typeof raw.chat_step_mode === 'string' ? raw.chat_step_mode.trim() : ''
   const chatStepMode: 'trading_days' | 'weekly' | 'monthly' = rawStepMode === 'weekly' || rawStepMode === 'monthly' ? rawStepMode : 'trading_days'
@@ -356,5 +366,5 @@ export function loadWorldConfig(path: string): WorldConfig {
     }
   }
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels }
 }

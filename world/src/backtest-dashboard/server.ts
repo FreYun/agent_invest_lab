@@ -991,6 +991,59 @@ async function loadRunEvals(dbPath: string): Promise<{ rows: Array<Record<string
   return { rows }
 }
 
+// 侧栏「末日决策」标识数据：每个 (run, bot) 在其最后一个交易日当天有没有买卖动作，
+// 及方向（加仓 add / 减仓 reduce / 清仓 clear）。末日在持有观望的 (run,bot) 不返回。
+// 末日 D = fund_bot_daily_snapshots 里该 (run,bot) 的 MAX(trade_date)；只取 action_date=D
+// 的动作。清仓靠 D 当天快照「现金占比≥99.5%」判定：equity/bond/gold_weight 三列多数 run
+// 未落库(全为0)不可用，故改用 cash_weight（为空时退化 cash/total_value）。实测清仓 run
+// 末日 cash_weight=1.0 同日已反映；减仓 run 现金占比 0.2~0.67 仍持仓，据此与清仓区分。
+async function loadLatestDecisions(dbPath: string): Promise<{ decisions: Record<string, 'add' | 'reduce' | 'clear'> }> {
+  if (!(await tableExists(dbPath, 'fund_bot_daily_snapshots')) || !(await tableExists(dbPath, 'fund_bot_actions'))) {
+    return { decisions: {} }
+  }
+  const rows = queryRows<{
+    run_id: string; bot_id: string;
+    cash_weight: number | null; cash: number | null; total_value: number | null;
+    n_add: number; n_reduce: number; add_amt: number | null; reduce_amt: number | null;
+  }>(dbPath, `
+    WITH last_day AS (
+      SELECT run_id, bot_id, MAX(trade_date) AS d
+      FROM fund_bot_daily_snapshots GROUP BY run_id, bot_id
+    ),
+    last_acts AS (
+      SELECT a.run_id, a.bot_id,
+             SUM(CASE WHEN a.action_type = 'ADD'    THEN 1 ELSE 0 END) AS n_add,
+             SUM(CASE WHEN a.action_type = 'REDUCE' THEN 1 ELSE 0 END) AS n_reduce,
+             SUM(CASE WHEN a.action_type = 'ADD'    THEN COALESCE(a.amount, 0) ELSE 0 END) AS add_amt,
+             SUM(CASE WHEN a.action_type = 'REDUCE' THEN COALESCE(a.amount, 0) ELSE 0 END) AS reduce_amt
+      FROM fund_bot_actions a
+      JOIN last_day l ON l.run_id = a.run_id AND l.bot_id = a.bot_id AND a.action_date = l.d
+      GROUP BY a.run_id, a.bot_id
+    )
+    SELECT la.run_id, la.bot_id,
+           s.cash_weight, s.cash, s.total_value,
+           la.n_add, la.n_reduce, la.add_amt, la.reduce_amt
+    FROM last_acts la
+    JOIN last_day l ON l.run_id = la.run_id AND l.bot_id = la.bot_id
+    JOIN fund_bot_daily_snapshots s
+      ON s.run_id = la.run_id AND s.bot_id = la.bot_id AND s.trade_date = l.d
+  `)
+  const decisions: Record<string, 'add' | 'reduce' | 'clear'> = {}
+  for (const r of rows) {
+    const hasAdd = num(r.n_add) > 0, hasReduce = num(r.n_reduce) > 0
+    if (!hasAdd && !hasReduce) continue
+    // 末日几乎全现金 → 清仓；否则纯减仓算减仓。cash_weight 优先，缺失退化 cash/total_value。
+    const cashRatio = r.cash_weight != null ? num(r.cash_weight)
+      : (num(r.total_value) > 0 ? num(r.cash) / num(r.total_value) : 0)
+    let kind: 'add' | 'reduce' | 'clear'
+    if (hasReduce && !hasAdd && cashRatio >= 0.995) kind = 'clear'
+    else if (num(r.add_amt) - num(r.reduce_amt) >= 0 && hasAdd) kind = 'add'
+    else kind = 'reduce'
+    decisions[`${r.run_id}|${r.bot_id}`] = kind
+  }
+  return { decisions }
+}
+
 interface MarketReportRow {
   id: number
   report_type: string
@@ -1162,8 +1215,14 @@ function loadOosBot(dbPath: string, botId = 'bot101', runId = defaultOosRunId(bo
     ' AND bot_id = ' + botIdSql + ' ORDER BY trade_date DESC').map(r => r.trade_date)
   const validDate = dateRe.test(requestedDate) ? requestedDate : ''
   const selectedDate = validDate || dates[0] || ''
-  const hasNavForSelectedDate = !!selectedDate && !!navMaxDate && selectedDate <= navMaxDate
   const dateSql = quoteSql(selectedDate)
+  const accountDateCap = selectedDate && navMaxDate ? (selectedDate <= navMaxDate ? selectedDate : navMaxDate) : (selectedDate || navMaxDate)
+  const accountDate = accountDateCap ? queryRows<{ trade_date: string }>(dbPath,
+    'SELECT trade_date FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
+    ' AND bot_id = ' + botIdSql +
+    ' AND trade_date <= ' + quoteSql(accountDateCap) +
+    ' ORDER BY trade_date DESC LIMIT 1')[0]?.trade_date ?? '' : ''
+  const accountDateSql = quoteSql(accountDate)
   const series = queryRows<Record<string, unknown>>(dbPath,
     'SELECT trade_date, total_value, net_value, daily_return_pct, cumulative_return_pct, ' +
     'max_drawdown_pct, equity_weight, bond_weight, gold_weight, cash_weight ' +
@@ -1171,14 +1230,14 @@ function loadOosBot(dbPath: string, botId = 'bot101', runId = defaultOosRunId(bo
     ' AND bot_id = ' + botIdSql +
     ' AND trade_date <= ' + navMaxDateSql +
     ' ORDER BY trade_date ASC')
-  const snapshot = hasNavForSelectedDate ? queryRows<Record<string, unknown>>(dbPath,
+  const snapshot = accountDate ? queryRows<Record<string, unknown>>(dbPath,
     'SELECT * FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
-    ' AND bot_id = ' + botIdSql + ' AND trade_date = ' + dateSql + ' LIMIT 1')[0] ?? null : null
-  const positions = hasNavForSelectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    ' AND bot_id = ' + botIdSql + ' AND trade_date = ' + accountDateSql + ' LIMIT 1')[0] ?? null : null
+  const positions = accountDate ? queryRows<Record<string, unknown>>(dbPath,
     'SELECT p.*, COALESCE(i.fund_name, p.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
     'FROM oos_bot_position_snapshots p LEFT JOIN fund_info i ON i.fund_code = p.fund_code ' +
     'WHERE p.live_run_id = ' + runIdSql + ' AND p.bot_id = ' + botIdSql +
-    ' AND p.trade_date = ' + dateSql + ' ORDER BY p.weight DESC, p.fund_code ASC') : []
+    ' AND p.trade_date = ' + accountDateSql + ' ORDER BY p.weight DESC, p.fund_code ASC') : []
   const orders = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
     'SELECT o.*, COALESCE(i.fund_name, o.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
     'FROM oos_bot_orders o LEFT JOIN fund_info i ON i.fund_code = o.fund_code ' +
@@ -1212,7 +1271,7 @@ function loadOosBot(dbPath: string, botId = 'bot101', runId = defaultOosRunId(bo
     holdingsByDate[d].push({ fund_code: r.fund_code, fund_name: r.fund_name, weight: r.weight })
   }
   const extendedSeries = loadOosExtendedSeries(dbPath, botId, runId, series)
-  return { runId, botId, selectedDate, dates, navMaxDate, series, extendedSeries, historyStart: OOS_HISTORY_START, snapshot, positions, orders, actions, reports, actionsAll, holdingsByDate }
+  return { runId, botId, selectedDate, accountDate, dates, navMaxDate, series, extendedSeries, historyStart: OOS_HISTORY_START, snapshot, positions, orders, actions, reports, actionsAll, holdingsByDate }
 }
 
 /** 把当前选中日的「三份研报 + macro_news + bot101 账户/持仓」压成一段紧凑 markdown，
@@ -1591,6 +1650,12 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       // Run 人工评测表（原 runs.html 内嵌 CSV，已迁入 fund_bot_run_eval；前端 fetch 此接口取代内嵌 CSV）。
       if (req.method === 'GET' && url.pathname === '/api/backtest/run-evals') {
         sendJson(res, 200, await loadRunEvals(dbPath))
+        return
+      }
+      // 侧栏「末日决策」标识：每个 (run,bot) 末日当天动作方向（add/reduce/clear），
+      // 前端据此在指数目录项上打三色标（仅合格 run 计入，聚合在前端做）。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/latest-decisions') {
+        sendJson(res, 200, await loadLatestDecisions(dbPath))
         return
       }
       // 单条 set：{ key:"<run_id>|<bot>", verdict:"pass"|"fail"|"" }。

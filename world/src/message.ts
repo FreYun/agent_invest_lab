@@ -59,6 +59,13 @@ export interface DailyMessageContext {
   // buildBeliefContext 一并取出（同一次扫盘，不二次 IO）。用于「belief ↔ 仓位 言行一致」核对块：
   // bot 上次说看多却空仓 / 说看空却重仓 = 言行不一，每天硬拦。null/缺省（无历史 belief）→ 不核对。
   latestBelief?: { tPlus5: number | null; tPlus20: number | null } | null
+  // 深度研究实验（deep_research_every > 0 的 run）：
+  // - deepResearchEnabled：run 级开关。research-loop 的工具集是进程级静态的——rl_config_base 放开
+  //   deny 后 start_research 等工具**每天**都挂在工具列表里，只能靠 message 措辞门控使用时机。
+  //   开了 → fullRules/briefRules 的"研究模式全部禁用"措辞换成"仅限【深度研究日】"。
+  // - deepResearchDay：本决策日是否深度研究日（第 N/2N/3N 个决策日）→ 注入【深度研究日】块。
+  deepResearchEnabled?: boolean
+  deepResearchDay?: boolean
 }
 
 export function weekdayOf(isoDate: string): string {
@@ -85,7 +92,7 @@ export function botKindOf(botId: string): BotKind {
 
 // Prompt 不再注入静态 overview——行情走 simworld-data MCP 实时查；不再区分研究日 vs 交易日
 // （budget 在 run.ts 单独管），统一让 bot 自己决定要不要展开。
-function fullRules(date: string, weekday: string, botId: string, tradingDaysTotal: number | undefined): string {
+function fullRules(date: string, weekday: string, botId: string, tradingDaysTotal: number | undefined, deepResearchEnabled?: boolean): string {
   // 周期块：只在 Day 1 注入，让 bot 按窗口长度规划策略；不写终止日期，仅给"今天 + N 天"。
   // Bot 仍能从 today's date + N 推出终止日，但不直接告知，减少训练记忆的 hindsight 触发面。
   return `当前世界日期：${date}（${weekday}）。
@@ -98,7 +105,9 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
 
 【决策框架】请参考你的 **AGENTS.md**（已注入到 system prompt 的 \`## AGENTS.md\` section）——这是你的角色定位、决策风格和操作边界的总纲；再参考 **METHODOLOGY.md**（\`## METHODOLOGY.md\` section）——这是本轮 assignment 绑定的 active 产品策略，定义当前产品看什么信号、按什么规则下单。
 
-【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。注意：mem0_search / mem0_add / list_skills / load_skill 是裸名工具，**不带 mcp__ 前缀**（\`mcp__simworld_data__mem0_search\` 这种名字不存在，调了必报错）。文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。
+【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。注意：mem0_search / mem0_add / list_skills / load_skill 是裸名工具，**不带 mcp__ 前缀**（\`mcp__simworld_data__mem0_search\` 这种名字不存在，调了必报错）。${deepResearchEnabled
+    ? '文件读写、web_fetch、bash、子代理（spawn_skill_agent）全部禁用——调用会被直接拒。研究模式工具（start_research 等）虽在工具列表里，但**只允许在明确标注【深度研究日】的决策日使用**，其余日子调用属于违规。'
+    : '文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。'}
 
 【skill 体系】list_skills 看本 bot 装了哪些可加载的研究/判断框架，load_skill <name>（参数名 \`skill_id\`，传 skill 目录名）把 skill 内容直接载入当前对话当思考脚手架。**如果你的 METHODOLOGY 顶部标了「技能驱动」判断管线，每个决策日必须先按它列的顺序 load_skill 把那几个 skill 读进来照做，再做判断和下单——没 load 就凭印象决策 = 没按流程。** 不确定本 bot 装了哪些就先 list_skills 确认。
 
@@ -109,11 +118,11 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
 【研究 / 新基金 / 行业暴露 / 资金流 / 宏观 / 研报 / 商品 / 债券】这些没预取，按需直接调对应的 simworld-data 工具——它们都已在工具列表里。`
 }
 
-function briefRules(date: string, weekday: string, botId: string): string {
+function briefRules(date: string, weekday: string, botId: string, deepResearchEnabled?: boolean): string {
   return `当前世界日期：${date}（${weekday}）。
 牢记：你的终极目标是追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
 你的 bot_id = **${botId}**——所有 portfolio_* / mcp__strategy_mcp__update_my_strategy 工具的 \`bot_id\` 参数都按字面量传 \`"${botId}"\`（proxy 不会自动注入，传 "me" / "self" / 空串都会被服务端按字符串匹配判成"无账户"）。
-可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。
+可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。${deepResearchEnabled ? '研究模式工具（start_research 等）只允许在明确标注【深度研究日】的决策日使用——今天若没有该标注，禁止调用。' : ''}
 
 今天的节奏（按顺序）：
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
@@ -745,6 +754,19 @@ ${bodies}${resSection}
 【市场研究报告 结束】`
 }
 
+// 深度研究日块：run.ts 判定「第 N/2N/3N 个决策日」后置 true。放在 message 尾部（recency 高），
+// 是 bot 当天允许调 start_research 的唯一授权信号——非深研日 message 里不会出现这个标注。
+function deepResearchBlock(isDeepResearchDay: boolean | undefined): string {
+  if (!isDeepResearchDay) return ''
+  return `
+
+【深度研究日】今天是深度研究日——本决策日**必须调用一次 \`start_research\` 完成深度研究，这不是可选项**。深研窗口每隔多个决策日才有一次，今天跳过 = 本周期的深研机会作废，回复里没有深度研究结论 = 本日流程未完成：
+- **只研究一个命题**：从近期决策里挑最有价值的一个问题（主线持续性 / 某指数的趋势与资金结构 / 方法论某条规则是否有效），一次讲透，不摊开多个泛泛话题。
+- **数据边界与日常一致**：研究内仍然只有 simworld（PIT）与组合工具，不假设任何实时外部数据。
+- **结论必须落地**：研究结束后把「结论 → 对后续操作的具体影响」写进当日复盘，并 mem0_add 落库，供后续决策日直接引用。
+- **研究不得挤掉当日决策**：先做研究、让结论直接服务今天的仓位决策；若研究耗时逼近预算，先回来完成今天的决策与下单再收尾——漏掉调仓比研究写得不完美严重得多。`
+}
+
 export function renderDailyMessage(ctx: DailyMessageContext): string {
   const weekday = weekdayOf(ctx.date)
   // bot 类型决定"判断管线块"怎么注入（单基金 vs 多基金 分开处理）：
@@ -769,10 +791,11 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   // Belief block 由 caller (run.ts) 先 await buildBeliefContext(...) 渲染成完整字符串塞进来；
   // 已自带 header / schema 要求 / 21d 校准反馈，本函数只前置两个换行做分隔即可。空/缺省 → 跳过。
   const beliefStr = ctx.beliefBlock && ctx.beliefBlock.trim() ? `\n\n${ctx.beliefBlock.trim()}` : ''
+  const deepResearch = deepResearchBlock(ctx.deepResearchDay)
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal)}${buyable}${pipelineBlock}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -785,5 +808,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId)}${buyable}${pipelineBlock}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${coherence}${review}\n`
 }

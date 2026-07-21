@@ -45,7 +45,7 @@
 
 ### 4.1 一次性派生（seeding，每个合格 run 跑一次）
 
-- **DB 克隆**（重键到新 run_id）：`fund_bot_accounts`（现金/在途 `cash_in_transit`/应收 `cash_receivable`）、`fund_bot_holdings`、`fund_bot_holding_lots`（未平仓 lots）、未结算的 `fund_bot_orders`；并在派生日写一条基线 `fund_bot_daily_snapshots` / `fund_bot_position_snapshots` 作为净值起点。
+- **DB 复制 per-run 交易历史（重键到新 run_id，让系统重算，不动 schema）**：核心是复制种子 run 自己的**逐笔行为流** `fund_bot_actions`（BUY/SELL 历史）+ `fund_bot_holdings` / `fund_bot_holding_lots`（未平仓 lots）+ 未结算的 `fund_bot_orders`，全部按新 live run_id 落一份；系统读现金时**不信任** `fund_bot_accounts` 那行缓存（PK=bot_id，跨 run 会被覆盖），而是用 `_replay_fund_account_state(run_id=...)` 按本 run 的 actions+pending 重算 → 现金天然按 run_id 隔离，**无需改主键、无需搬运公用现金、无需 40+ 个 DB 文件**。再在派生日写一条基线 `fund_bot_daily_snapshots` / `fund_bot_position_snapshots`（run 键控）作为净值起点。
 - **FS 克隆**：`runs/<源>/memory/store.jsonl` 与 pi agent 会话/人格状态 → 新 live run 目录。
 - **配置**：为 live run 生成 `config/world-live-<runId>.yaml`（源自合格 run 的 tmp 配置，改注入日期策略、解开实时工具白名单）。
 - **幂等**：live run 已存在则跳过，绝不覆盖。

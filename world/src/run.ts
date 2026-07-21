@@ -874,6 +874,20 @@ export function isResearchDay(cursor: number, researchDayEvery: number): boolean
   return researchDayEvery > 0 && ((cursor + 1) % researchDayEvery === 0)
 }
 
+/** cursor 是 run 内第几个决策日（1-based）。确定性推导（扫 [0..cursor] 数 chat day），
+ *  不用运行时计数器——resume（fromCursor>0）时序数不漂移。372 天 × O(n) 可忽略。 */
+export function chatDayOrdinal(cursor: number, dates: string[], mode: 'trading_days' | 'weekly' | 'monthly', chatStepDays: number, opts?: ChatDayOpts): number {
+  let n = 0
+  for (let c = 0; c <= cursor; c++) { if (isChatDayAt(c, dates, mode, chatStepDays, opts)) n++ }
+  return n
+}
+
+/** 第 N / 2N / 3N … 个决策日（ordinal 1-based）为深度研究日；deepResearchEvery=0 关闭。
+ *  按「决策日序数」而非交易日计——weekly run 里 every=4 ≈ 每 4 周一次深研。 */
+export function isDeepResearchDay(ordinal: number, deepResearchEvery: number): boolean {
+  return deepResearchEvery > 0 && ordinal % deepResearchEvery === 0
+}
+
 /** ISO 周锚：返回该日期所在自然周的周一（YYYY-MM-DD）。同一周的任意一天得到同一字符串。 */
 export function isoWeekKey(isoDate: string): string {
   const d = new Date(isoDate + 'T00:00:00Z')
@@ -952,6 +966,8 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   const days: DaySummary[] = []
   const perBotTimeoutMs = config.perBotTimeoutSeconds * 1000
   const researchDayTimeoutMs = config.researchDayTimeoutSeconds * 1000
+  const deepResearchEvery = config.deepResearchEvery ?? 0
+  const deepResearchTimeoutMs = (config.deepResearchTimeoutSeconds ?? Math.max(config.researchDayTimeoutSeconds, 2400)) * 1000
   // dead = bot server 进程已经退出，无可挽救 → 加入 brokenBots，剩余日子直接 writeSkippedDeadBot
   // 跳过。timeout 不进这个集合：当天记 timeout，但下一天循环顶部会 restartBot 重启该 bot 的
   // server（kill 老的、spawn 新的），这样后续日子能恢复正常 chat。重启的必要性：research-loop-ts
@@ -1062,11 +1078,15 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // 周/月度决策日本身就是一次重再平衡（覆盖整段区间），等同研究日，给更宽预算——无需再单独配
       // research_day_every 去命中它们。
       const useExtendedBudget = isFirstDay || isResearch || periodTradingDays > 1
-      const timeoutMs = useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs
+      // 深度研究日（第 N/2N/3N 个决策日）：给最宽预算（覆盖引擎内研究 budget + 常规决策），
+      // 并让 message.ts 注入【深度研究日】授权块。deepResearchEvery=0 时恒 false（历史行为）。
+      const chatOrdinal = chatDayOrdinal(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
+      const isDeepResearch = isDeepResearchDay(chatOrdinal, deepResearchEvery)
+      const timeoutMs = isDeepResearch ? deepResearchTimeoutMs : (useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs)
       const stepTag = config.chatStepMode === 'weekly' ? `[weekly@dow${config.chatWeekday ?? 1}]`
         : config.chatStepMode === 'monthly' ? `[monthly#${config.chatMonthlyNth ?? 1}]`
         : (config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : '')
-      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
+      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', isDeepResearch ? `[deep-research#${chatOrdinal}]` : '', periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
       log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
@@ -1185,6 +1205,10 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           periodInfo,
           // 仅 Day 1 fullRules 用到——message.ts 自己门控；这里无脑传即可，Day N 会丢弃。
           tradingDaysTotal: setupRes.tradingDates.length,
+          // 深度研究实验：enabled = run 级（措辞从"研究模式禁用"换成"仅限深研日"）；
+          // deepResearchDay = 本决策日注入【深度研究日】授权块。every=0 时两者恒 false/undefined。
+          deepResearchEnabled: deepResearchEvery > 0,
+          deepResearchDay: isDeepResearch,
         })
         if (brokenBots.has(b.botId)) return writeSkippedDeadBot(worldRoot, runId, date, message, b)
         return chatOneBot(worldRoot, runId, date, message, timeoutMs, b)

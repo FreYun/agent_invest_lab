@@ -1,0 +1,7 @@
+{
+  "name": "市场环境",
+  "icon": "📊",
+  "slot": "portfolio",
+  "desc": "每日权益行情判断:宏观四维+股债金价格验证+反向证据+持续性,输出五类行情(复苏/宽松/通缩/通胀/震荡)或Stress态+置信度,供指数基金巡检与METHODOLOGY定仓位",
+  "subType": "research"
+}

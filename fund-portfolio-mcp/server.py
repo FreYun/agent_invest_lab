@@ -1022,7 +1022,7 @@ async def get_fund_pool(fund_type: str = "", top_n: int = 500) -> str:
 
 
 @mcp.tool()
-async def get_fund_detail(fund_code: str) -> str:
+async def get_fund_detail(fund_code: str, as_of: str | None = None) -> str:
     """获取单只基金详情。多基金 bot 做"主线→候选基金"映射、组合配置、池内选品都用这个。
 
     返回的关键字段：
@@ -1043,17 +1043,25 @@ async def get_fund_detail(fund_code: str) -> str:
     池内选品建议：同主题下，优先按 sharpe_ratio 高 / 跟踪误差小（fund_performance.return_pct
     与跟踪指数对比）/ 规模合理（5亿~100亿）筛选。
     """
+    # as_of: PIT 截止日（YYYY-MM-DD）。回测 world 的 fund-portfolio-proxy 会对每次调用
+    # 强制注入当前世界日期——否则回测 bot 在 2025 年会看到库里"今天"的净值/业绩排名
+    # （未来函数）。参数缺省 = 不裁剪，线上日常 bot 行为不变。
+    pit = " AND nav_date <= ?" if as_of else ""
+    pit_asof = " AND as_of_date <= ?" if as_of else ""
+    pit_args = (as_of,) if as_of else ()
     with get_conn() as conn:
         info = conn.execute("SELECT * FROM fund_info WHERE fund_code = ?", (fund_code,)).fetchone()
         if not info:
             return json.dumps({"success": False, "message": f"基金 {fund_code} 不存在"}, ensure_ascii=False)
 
         result = dict(info)
+        if as_of:
+            result["pit_as_of"] = as_of
 
         nav_row = conn.execute(
             "SELECT nav_date, nav, acc_nav, daily_return_pct FROM fund_nav "
-            "WHERE fund_code = ? ORDER BY nav_date DESC LIMIT 1",
-            (fund_code,)
+            "WHERE fund_code = ?" + pit + " ORDER BY nav_date DESC LIMIT 1",
+            (fund_code, *pit_args)
         ).fetchone()
         if nav_row:
             result["latest_nav"] = dict(nav_row)
@@ -1061,30 +1069,30 @@ async def get_fund_detail(fund_code: str) -> str:
         perf_rows = conn.execute(
             "SELECT period, return_pct, rank_pct, rank_text, max_drawdown_pct, "
             "volatility_pct, sharpe_ratio, calmar_ratio, as_of_date "
-            "FROM fund_performance WHERE fund_code = ? "
-            "ORDER BY as_of_date DESC, period",
-            (fund_code,)
+            "FROM fund_performance WHERE fund_code = ?" + pit_asof +
+            " ORDER BY as_of_date DESC, period",
+            (fund_code, *pit_args)
         ).fetchall()
         if perf_rows:
             latest_date = perf_rows[0]["as_of_date"]
             result["performance"] = [dict(r) for r in perf_rows if r["as_of_date"] == latest_date]
 
         style_row = conn.execute(
-            "SELECT * FROM fund_style WHERE fund_code = ? ORDER BY as_of_date DESC LIMIT 1",
-            (fund_code,)
+            "SELECT * FROM fund_style WHERE fund_code = ?" + pit_asof + " ORDER BY as_of_date DESC LIMIT 1",
+            (fund_code, *pit_args)
         ).fetchone()
         if style_row:
             result["style"] = dict(style_row)
 
         industry_rows = conn.execute(
             "SELECT industry, weight_pct FROM fund_industry "
-            "WHERE fund_code = ? ORDER BY as_of_date DESC, weight_pct DESC",
-            (fund_code,)
+            "WHERE fund_code = ?" + pit_asof + " ORDER BY as_of_date DESC, weight_pct DESC",
+            (fund_code, *pit_args)
         ).fetchall()
         if industry_rows:
             latest_date_ind = conn.execute(
-                "SELECT MAX(as_of_date) as d FROM fund_industry WHERE fund_code = ?",
-                (fund_code,)
+                "SELECT MAX(as_of_date) as d FROM fund_industry WHERE fund_code = ?" + pit_asof,
+                (fund_code, *pit_args)
             ).fetchone()["d"]
             result["industry"] = [dict(r) for r in conn.execute(
                 "SELECT industry, weight_pct FROM fund_industry "
@@ -1092,14 +1100,19 @@ async def get_fund_detail(fund_code: str) -> str:
                 (fund_code, latest_date_ind)
             ).fetchall()]
 
-        top_stocks = conn.execute(
-            "SELECT stock_rank, stock_code, stock_name, weight_pct, as_of_date "
-            "FROM fund_top_stocks WHERE fund_code = ? "
-            "ORDER BY as_of_date DESC, stock_rank LIMIT 10",
-            (fund_code,)
-        ).fetchall()
-        if top_stocks:
-            result["top_stocks"] = [dict(r) for r in top_stocks]
+        top_stocks_latest = conn.execute(
+            "SELECT MAX(as_of_date) as d FROM fund_top_stocks WHERE fund_code = ?" + pit_asof,
+            (fund_code, *pit_args)
+        ).fetchone()["d"]
+        if top_stocks_latest:
+            top_stocks = conn.execute(
+                "SELECT stock_rank, stock_code, stock_name, weight_pct, as_of_date "
+                "FROM fund_top_stocks WHERE fund_code = ? AND as_of_date = ? "
+                "ORDER BY stock_rank LIMIT 10",
+                (fund_code, top_stocks_latest)
+            ).fetchall()
+            if top_stocks:
+                result["top_stocks"] = [dict(r) for r in top_stocks]
 
         return json.dumps({"success": True, "data": result}, ensure_ascii=False)
 

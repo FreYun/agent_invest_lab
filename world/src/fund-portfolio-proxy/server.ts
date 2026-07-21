@@ -28,6 +28,11 @@ export interface FundPortfolioProxyHandle {
 const RUN_ID_KEY = 'run_id'
 const TRADE_DATE_KEY = 'trade_date'
 const TRADE_DATE_TOOLS = new Set(['portfolio_place_buy_order', 'portfolio_place_sell_order'])
+// PIT clamp: these read tools accept an `as_of` cutoff upstream. Force it to the
+// world date so backtest bots can't see future NAV / performance ranks (get_fund_detail
+// used to return DB-latest unconditionally — real leak observed in dash-2026-06-15 run).
+const AS_OF_KEY = 'as_of'
+const AS_OF_TOOLS = new Set(['get_fund_detail'])
 
 interface JsonRpcMessage {
   jsonrpc?: string
@@ -49,6 +54,7 @@ function stripFromToolSchema(tool: Record<string, unknown>, hideTradeDate: boole
   const name = typeof tool.name === 'string' ? tool.name : ''
   const keysToStrip = [RUN_ID_KEY]
   if (hideTradeDate && TRADE_DATE_TOOLS.has(name)) keysToStrip.push(TRADE_DATE_KEY)
+  if (hideTradeDate && AS_OF_TOOLS.has(name)) keysToStrip.push(AS_OF_KEY)
   const props = schema.properties
   if (isObject(props)) {
     for (const k of keysToStrip) {
@@ -202,6 +208,12 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
         // Force world-date order placement. Bots cannot backdate to yesterday's NAV
         // to work around missing same-day NAV; upstream accepts awaiting_nav instead.
         args[TRADE_DATE_KEY] = opts.getTradeDate()
+        parsed.params.arguments = args
+      }
+      if (opts.getTradeDate && AS_OF_TOOLS.has(name)) {
+        const args = isObject(parsed.params.arguments) ? parsed.params.arguments : {}
+        // Force-overwrite: bots must not be able to widen the PIT window themselves.
+        args[AS_OF_KEY] = opts.getTradeDate()
         parsed.params.arguments = args
       }
     }

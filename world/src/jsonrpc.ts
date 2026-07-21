@@ -26,6 +26,9 @@ export class JsonRpcStdioClient {
     const rl = createInterface({ input: stdout })
     rl.on('line', (line) => this.handleLine(line))
     stdout.on('close', () => this.failAll(new Error('stdout closed')))
+    // bot server 先死时往它的 stdin 写会异步冒 EPIPE；没有 error 监听 node 直接整进程崩
+    // （真实事故：2026-07-20 bot105g pause 拆除时 world 进程被 EPIPE 掀翻）。挂监听走 failAll。
+    stdin.on('error', (err: Error) => this.failAll(new Error('stdin write failed: ' + err.message)))
   }
 
   private handleLine(line: string): void {
@@ -90,7 +93,11 @@ export class JsonRpcStdioClient {
       // JSON.stringify 会把孤立代理原样输出为 \uXXXX，rust 的 serde_json 严格解析器对此抛
       // "unexpected end of hex escape" -32700，整条 chat 直接黑洞掉。一律先扫一遍替换为 �。
       const payload = JSON.stringify({ id, method, params }).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�') + '\n'
-      this.stdin.write(payload)
+      try { this.stdin.write(payload) } catch (err) {
+        this.pending.delete(id)
+        if (timer) clearTimeout(timer)
+        reject(err instanceof Error ? err : new Error(String(err)))
+      }
     })
   }
 

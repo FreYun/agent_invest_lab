@@ -64,6 +64,21 @@ export class BotServer {
     // 单 listener 通道：内部计 tool.call 数，再转发给 opts.onNotification（run.ts log 路径）。
     client.onNotification(n => {
       if (n.method === 'tool.call') bs._toolCallCount++
+      // chat 模式 start_research 的审批桥：engine 发 research_approval 后 oneshot 阻塞等待
+      // research_approval_answer，等不到就永久挂起。回测 world 没有交互前端，直接自动批准
+      // （topic/initial_phase/initial_hypothesis 原样回传，engine 侧只认这个 schema）。
+      if (n.method === 'research_approval') {
+        const p = n.params
+        client.request('research_approval_answer', {
+          id: p.id,
+          action: 'approve',
+          topic: p.topic,
+          initial_phase: p.initial_phase,
+          initial_hypothesis: p.initial_hypothesis,
+        }, { timeoutMs: 10_000 })
+          .then(r => opts.onLog?.(`[${botId}] research_approval auto-approved (id=${String(p.id)}, topic=${String(p.topic ?? '').slice(0, 80)}) → ${JSON.stringify(r)}`))
+          .catch(err => opts.onLog?.(`[${botId}] research_approval_answer failed: ${err instanceof Error ? err.message : String(err)}`))
+      }
       opts.onNotification?.(n.method, n.params)
     })
     try {
