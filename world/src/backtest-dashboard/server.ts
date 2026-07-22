@@ -1139,6 +1139,38 @@ export function computeStitchedMetrics(extended: Array<Record<string, unknown>>)
   return { absReturnPct, annReturnPct, maxDrawdownPct, days }
 }
 
+export function isLiveRunId(runId: string): boolean {
+  return runId.startsWith('live-')
+}
+
+/** 读单个 live run 的 state.json → { botId=bots[0], sourceRunId=source_run_id }；缺字段返回 null。 */
+export function readLiveRunLink(worldRoot: string, liveRunId: string): { botId: string; sourceRunId: string } | null {
+  const path = join(worldRoot, 'runs', liveRunId, 'state.json')
+  if (!existsSync(path)) return null
+  try {
+    const st = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    const bots = Array.isArray(st.bots) ? st.bots : []
+    const botId = typeof bots[0] === 'string' ? bots[0] : ''
+    const sourceRunId = typeof st.source_run_id === 'string' ? st.source_run_id : ''
+    if (!botId || !sourceRunId) return null
+    return { botId, sourceRunId }
+  } catch { return null }
+}
+
+/** 遍历 <worldRoot>/runs 下 live- 前缀目录，返回全部有效 live run 的 {liveRunId, botId, sourceRunId}。 */
+export function listLiveRuns(worldRoot: string): Array<{ liveRunId: string; botId: string; sourceRunId: string }> {
+  const runsDir = join(worldRoot, 'runs')
+  let names: string[]
+  try { names = readdirSync(runsDir) } catch { return [] }
+  const out: Array<{ liveRunId: string; botId: string; sourceRunId: string }> = []
+  for (const name of names) {
+    if (!isLiveRunId(name)) continue
+    const link = readLiveRunLink(worldRoot, name)
+    if (link) out.push({ liveRunId: name, ...link })
+  }
+  return out
+}
+
 function parseStructuredJson(raw: string | null): unknown {
   if (!raw || !raw.trim()) return null
   try { return JSON.parse(raw) }
