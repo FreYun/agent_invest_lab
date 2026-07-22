@@ -1601,7 +1601,7 @@ simworld_tools:
 strategy_library_root: ../../strategies/index-products
 bot_assignments:
   bot105d:
-    strategy_id: multi_equity_high
+    strategy_id: multi_equity_high_v2
     buyable_fund_codes: *ref_0
 chat_step_mode: weekly
 chat_step_days: 1

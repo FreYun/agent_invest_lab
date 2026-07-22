@@ -164,6 +164,12 @@ strategies:
     target_index: "buyable-pool"
     default_buyable_fund_codes: ["000051", "000962", "001592", "161907", "001550", "001552", "001617", "004854", "005223", "012543"]
 
+  multi_equity_high_v2:
+    title: 多指数权益基金投资框架（高风险偏好·深研纠偏版）
+    methodology: multi-equity-high-v2.md
+    target_index: "buyable-pool"
+    default_buyable_fund_codes: ["000051", "000962", "001592", "161907", "001550", "001552", "001617", "004854", "005223", "012543"]
+
   multi_equity_medium:
     title: 多指数权益基金投资框架（中风险偏好）
     methodology: multi-equity-medium.md

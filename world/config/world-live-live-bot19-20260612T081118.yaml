@@ -1,0 +1,101 @@
+research_loop: /home/rooot/.openclaw/research-loop/ts
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
+bots:
+- bot19
+replay:
+  from: 2025-01-01
+  to: 2026-06-16
+calendar: ../runtime/calendar.json
+concurrency: 1
+per_bot_timeout_seconds: 600
+research_day_every: 5
+research_day_timeout_seconds: 600
+simworld_upstream_url: http://127.0.0.1:18078/mcp
+fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
+buyable_fund_codes:
+- '014130'
+simworld_tools:
+- name: fund_top_holdings
+  description: 基金前十大重仓股。
+- name: fund_nav
+  description: 基金净值历史（可以取更长历史的净值信息）。
+- name: fund_invest_position
+  description: 基金详细持仓：股票（A 股 + QDII）+ 债券（含债项评级）。
+- name: market_index_quote
+  description: 指数行情。当前只有 market='cn' 真接入，hk/us 上游未实现。
+- name: market_index_val
+  description: A股指数估值：返回 PE_TTM + 历史百分位的单点快照。
+- name: market_index_gzxjb
+  description: A股指数股债性价比：股票相对债券的风险溢价。
+- name: market_temperature
+  description: A股市场温度：市场情绪/风险综合温度计。
+- name: sector_search
+  description: 板块检索（行业/主题）：按名称模糊找板块代码 BKxxxxxx。
+- name: sector_market
+  description: 板块行情：日收益率 + 估值(PE/PB) + 主力净流入。
+- name: sector_factor
+  description: 板块因子分：动量 + 风险分 + 机会分。
+- name: sector_constituents
+  description: 板块成分股：取板块 <= T 最新一期全部成分股（代码+名称）。
+- name: sector_index_match
+  description: 指数↔板块匹配：板块映射到可交易指数/ETF，或指数拆到主题板块。
+- name: sector_factor_detail
+  description: 板块子因子明细 / 拥挤度细分：把风险分拆成两个构成因子。
+- name: option_vix
+  description: 期权多品种波动率：VIX / GVIX / GVSpread + 成交量金额。
+- name: option_gvspread_signal
+  description: 期权 GV-Spread 交易信号：做波动率/拥挤度择时。
+- name: stock_profile
+  description: 股票画像：基础信息、申万行业、中信行业（按 T 时分类）。
+- name: stock_market
+  description: 股票行情：行情/市值/估值/股息率。
+- name: stock_capital_flow
+  description: 股票资金流向：资金流 + 北向持股 + 超大单。
+- name: stock_ownership
+  description: 股权结构：股东 + 股本结构 + 股权分配。
+- name: stock_financial_quality
+  description: 财务质量：盈利能力/收益质量/营运/资本结构 等 8 张表。
+- name: stock_alpha
+  description: Alpha 因子：一致预期 + Barra 暴露/归因。
+- name: stock_events
+  description: 股票事件：停复牌（suspendtime）+ SUE（15:00 约定）。
+- name: macro_data
+  description: 宏观数据。
+- name: macro_nowcasting_snapshot
+  description: 信澳宏观 Nowcasting 快照。
+- name: macro_50etf_vix
+  description: 50ETF VIX，在中国市场高vix不只代表恐慌，市场情绪亢奋也可能会有高vix值。
+- name: macro_indicator_search
+  description: EDB 指标检索（name/ename LIKE + 国家/大类/重要度过滤）。
+- name: macro_indicator_value
+  description: EDB 指标取值。
+- name: bond_yield_curve
+  description: 国债收益率曲线。
+- name: commodity_market
+  description: 商品行情。
+- name: research_search
+  description: 新闻 / 研报搜索。
+- name: research_view
+  description: 研究观点。
+- name: quant_factor
+  description: 研究部离线挖出的单指数择时因子读数（PIT 在线计算）。返回每个因子建议仓位 ∈ [0, 1]，按标的前缀命名（如 zz1000_*）。
+- name: health_check
+  description: 检查 SimWorld Data API 是否可用。
+- name: market_realtime_quote
+  description: 盘中实时行情：当前时点现价截面（quote/order_book/capital_flow/valuation 多维）。
+- name: ttjj_research_search
+  description: research 检索：已入库研究成果。
+strategy_library_root: ../../strategies/index-products
+bot_assignments:
+  bot19:
+    strategy_id: cloud
+    buyable_fund_codes:
+    - '014130'
+chat_step_mode: weekly
+chat_weekday: 1
+bot_models:
+  bot19:
+    provider: openai_compatible
+    base_url: https://dd-ai-api.eastmoney.com/v1
+    model: qwen3.5-plus
+    api_key_from_openclaw: zai-coding-plan
