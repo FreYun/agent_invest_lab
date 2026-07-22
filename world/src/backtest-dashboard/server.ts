@@ -869,6 +869,30 @@ async function loadBotForRun(dbPath: string, worldRoot: string, botId: string, r
   }
 }
 
+/** live run 的 bot 详情：委托源 dash run 拿基底（基准/持仓/买卖点/series），把 series 换成
+ *  「源 dash + live」拼接序列（带 segment）。live 段的买卖点/持仓叠加留待后续，不影响连续曲线展示。 */
+async function loadLiveBotForRun(dbPath: string, worldRoot: string, liveRunId: string): Promise<Record<string, unknown> | null> {
+  const link = readLiveRunLink(worldRoot, liveRunId)
+  if (!link) return null
+  const { botId, sourceRunId } = link
+  const sourceRuns = await listRunsForBot(dbPath, worldRoot, botId)   // dash 源 run 未被 live 过滤排除
+  const base = await loadBotForRun(dbPath, worldRoot, botId, sourceRunId, sourceRuns)
+  if (!base) return null
+  const historyRows = Array.isArray(base.series) ? base.series as Array<Record<string, unknown>> : []
+  const liveRows = queryRows<Record<string, unknown>>(dbPath,
+    'SELECT trade_date, total_value, net_value, daily_return_pct, cumulative_return_pct, ' +
+    'max_drawdown_pct, equity_weight, bond_weight, gold_weight, cash_weight ' +
+    'FROM fund_bot_daily_snapshots WHERE bot_id = ' + quoteSql(botId) +
+    ' AND run_id = ' + quoteSql(liveRunId) + ' ORDER BY trade_date ASC')
+  const series = stitchSeriesRows(historyRows, liveRows)
+  return {
+    ...base,
+    runId: liveRunId,
+    series,
+    availableRuns: [{ runId: liveRunId, latestDate: liveRows.length ? String(liveRows[liveRows.length - 1].trade_date) : (base.latestTradeDate ?? '') }],
+  }
+}
+
 async function loadDataset(dbPath: string, worldRoot: string): Promise<Dataset> {
   const botIds = await listAllBotIds(dbPath)
   const bots: BotDatasetSummary[] = []
@@ -1635,6 +1659,12 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         const botId = url.searchParams.get('bot_id') ?? ''
         const runId = url.searchParams.get('run_id') ?? ''
         if (!botId || !runId) { sendJson(res, 400, { error: 'bot_id and run_id required' }); return }
+        if (isLiveRunId(runId)) {
+          const liveBot = await loadLiveBotForRun(dbPath, worldRoot, runId)
+          if (!liveBot) { sendJson(res, 404, { error: 'live run not found' }); return }
+          sendJson(res, 200, liveBot)
+          return
+        }
         const runs = await listRunsForBot(dbPath, worldRoot, botId)
         if (!runs.some(r => r.runId === runId)) { sendJson(res, 404, { error: 'bot or run not found' }); return }
         const bot = await loadBotForRun(dbPath, worldRoot, botId, runId, runs)

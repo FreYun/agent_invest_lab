@@ -478,3 +478,20 @@ test('/api/backtest/live-runs 返回 live run 汇总', async () => {
     }
   } finally { proc.kill() }
 })
+
+test('/api/backtest/bot 支持 live run，返回拼接 series', async () => {
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
+    const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
+    const list = await (await fetch(`${base}/api/backtest/live-runs`, { cache: 'no-store' })).json() as { runs: Array<Record<string, unknown>> }
+    if (!list.runs.length) return  // 无 live run 环境则跳过（不视为失败）
+    const one = list.runs[0]
+    const r = await fetch(`${base}/api/backtest/bot?bot_id=${one.botId}&run_id=${encodeURIComponent(String(one.liveRunId))}`, { cache: 'no-store' })
+    assert.equal(r.status, 200)
+    const bot = await r.json() as { runId: string; series: Array<Record<string, unknown>> }
+    assert.equal(bot.runId, one.liveRunId)
+    assert.ok(Array.isArray(bot.series))
+    if (bot.series.length) assert.ok(bot.series.every(p => p.segment === 'backtest' || p.segment === 'live'))
+  } finally { proc.kill() }
+})
