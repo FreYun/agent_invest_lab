@@ -412,41 +412,48 @@ function buildEvalRecord(raw){
   r._defaultPass = computeDefaultPass(r)
   return r
 }
-// 评测数据源：服务器 fund_bot_run_eval 表（原 runs.html 内嵌 CSV 已迁库，见 migrate_run_eval.py）。
-// 拉取失败 → records 维持空，页面降级为只剩 ingestHistory 的历史 run。
+// 评测记录（fund_bot_run_eval，含 dash）：不再直接成行，只建 lookup 供 live run 继承评级/点评/指数归类。
+const evalByKey = new Map()   // `run_id|bot` -> buildEvalRecord 后的记录
 async function loadEvalRecords(){
   let rows = []
   try { const r = await fetch('/api/backtest/run-evals', { cache: 'no-store' }); if (r.ok) rows = (await r.json()).rows || [] }
   catch { rows = [] }
-  for (const raw of rows){ const rec = buildEvalRecord(raw); if (rec) records.push(rec) }
+  for (const raw of rows){ const rec = buildEvalRecord(raw); if (rec) evalByKey.set(rec._key, rec) }
 }
-// 纳入所有历史 run（/api/backtest/all-runs）：CSV 没有的 run 以此补全，指数由「该 run 标的基金 →
-// 策略池反查」得到（拿不到则归「未分类」）。这些 run 无评级/无指标，默认合格按 6/5 日期规则判定。
-async function ingestHistory(){
+// 只纳入 live run（/api/backtest/live-runs）。每个 live run 克隆其 source dash 的评测记录（评级/点评/
+// 指数归类），覆盖 run_id、bot、指标（按拼接序列重算）与合格判定（继承源 dash 的 isPass）。
+async function ingestLive(){
   let data
-  try { const r = await fetch('/api/backtest/all-runs', { cache: 'no-store' }); if (!r.ok) return; data = await r.json() }
+  try { const r = await fetch('/api/backtest/live-runs', { cache: 'no-store' }); if (!r.ok) return; data = await r.json() }
   catch { return }
   const have = new Set(records.map(r => r._key))
   let added = 0
   for (const h of (data.runs || [])){
-    if (!String(h.runId).startsWith('dash-')) continue   // 只要真实回测 run，过滤 5d-step-test 等
-    const key = `${h.runId}|${h.botId}`
-    if (have.has(key)) continue                            // CSV 已有 → 以 CSV 为准
-    const ixSrc = FUND_IX[h.fund] || h.index               // 优先按「实际买的标的」归类
-    const r = {
-      _source: 'hist', _key: key, run_id: h.runId, bot: h.botId,
-      '对标指数': h.index || '', '策略': h.indexName || '', '可买基金': h.fund || '', '状态': '',
-      // 服务端 all-runs 已带基础业绩（与 bot 卡片同口径）：末日累计收益 / 区间最大回撤 / 252 年化。
-      '绝对收益%': h.absReturnPct ?? '', '年化收益%': h.annReturnPct ?? '', '最大回撤%': h.maxDrawdownPct ?? '',
-      _fund: h.fund || '', _ixRaw: ixCode(ixSrc), _ix: normCode(ixSrc), _calmar: null, _launch: launchDate(h.runId),
+    const key = `${h.liveRunId}|${h.botId}`
+    if (have.has(key)) continue
+    const srcKey = `${h.sourceRunId}|${h.botId}`
+    const src = evalByKey.get(srcKey)
+    // 基底：优先克隆源 dash 评测记录（继承评级/点评/指数/可买基金/状态）；查不到则最小降级。
+    const r = src ? { ...src } : {
+      '策略': '', '对标指数': '', '可买基金': '', '状态': '',
+      '普通投资者评级': '—', '综合点评': '', _ix: (typeof UNCLASSED !== 'undefined' ? UNCLASSED : '未分类'), _ixName: '未分类', _ixCode: '',
     }
-    // 卡玛 = 年化/|最大回撤|（与上方 CSV 行 computeMetrics 同口径；收益非正→无经济含义→null）
+    // 覆盖为 live 行身份 + 拼接指标。
+    r._source = 'live'
+    r._key = key
+    r.run_id = h.liveRunId
+    r.bot = h.botId
+    r._sourceRunId = h.sourceRunId
+    r['状态'] = h.status || r['状态'] || ''
+    r['绝对收益%'] = h.absReturnPct ?? ''
+    r['年化收益%'] = h.annReturnPct ?? ''
+    r['最大回撤%'] = h.maxDrawdownPct ?? ''
+    // 卡玛 = 年化/|最大回撤|（与 CSV 行同口径）。
     { const ann = num(r['年化收益%']), dd = num(r['最大回撤%'])
       r._calmar = (ann != null && ann > 0 && dd != null && dd < 0) ? ann / Math.abs(dd) : null }
-    { const m = MASTER_BY_KEY.get(r._ix)
-      r._ixName = m ? m.name : (r._ix === UNCLASSED ? UNCLASSED : indexName(h.indexName || ''))
-      r._ixCode = m ? m.code : r._ixRaw }
-    r._defaultPass = computeDefaultPass(r)
+    // 合格判定：继承源 dash 的最终 isPass（含他人手动覆盖）；查不到源则默认合格。
+    r._defaultPass = src ? isPass(src) : true
+    r._launch = src ? src._launch : null
     records.push(r); have.add(key); added++
   }
   if (added){ buildIndexSidebar(); render() }
@@ -1174,7 +1181,7 @@ void (async () => {
   await Promise.all([loadVerdicts(), loadEvalRecords(), loadLatestDecisions()])  // 并行拉「合格覆盖」+「评测记录」+「末日决策标识」
   buildIndexSidebar()
   render()                 // 用评测表的 run + 服务器覆盖渲染（每个指数区块默认展示该组卡玛最高的合格 run 的净值图）
-  void ingestHistory()     // 再异步纳入所有历史 run（指数由标的基金反查），完成后重渲染
+  void ingestLive()        // 再异步纳入所有 live run（继承源 dash 评测、拼接指标），完成后重渲染
 })()
 
 // ---- 方法论 + 反思 弹窗 ----
