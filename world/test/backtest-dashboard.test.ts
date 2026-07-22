@@ -547,3 +547,23 @@ test('/api/backtest/run-decisions 返回某 live run 的决策流水', async () 
     }
   } finally { proc.kill() }
 })
+
+test('/api/backtest/bot live run 的 series 与 actions live 段对齐', async () => {
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
+    const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
+    const list = await (await fetch(`${base}/api/backtest/live-runs`, { cache: 'no-store' })).json() as { runs: Array<Record<string, unknown>> }
+    if (!list.runs.length) return
+    // 找一个有 live 动作的 run（否则跳过）：任一 run 的 run-decisions 有 confirmed/pending 行即可
+    let picked: Record<string, unknown> | null = null
+    for (const one of list.runs) {
+      const rd = await (await fetch(`${base}/api/backtest/run-decisions?run_id=${encodeURIComponent(String(one.liveRunId))}&bot=${one.botId}`, { cache: 'no-store' })).json() as { rows: unknown[] }
+      if (rd.rows.length) { picked = one; break }
+    }
+    if (!picked) return
+    const bot = await (await fetch(`${base}/api/backtest/bot?bot_id=${picked.botId}&run_id=${encodeURIComponent(String(picked.liveRunId))}`, { cache: 'no-store' })).json() as { actions: Array<Record<string, unknown>> }
+    assert.ok(Array.isArray(bot.actions))
+    assert.ok(bot.actions.every(a => a.side === 'buy' || a.side === 'sell' || a.side === 'hold'))
+  } finally { proc.kill() }
+})

@@ -885,10 +885,30 @@ async function loadLiveBotForRun(dbPath: string, worldRoot: string, liveRunId: s
     'FROM fund_bot_daily_snapshots WHERE bot_id = ' + quoteSql(botId) +
     ' AND run_id = ' + quoteSql(liveRunId) + ' ORDER BY trade_date ASC')
   const series = stitchSeriesRows(historyRows, liveRows)
+  // live 段买卖点：源 dash actions（历史段日期）保留，追加 live run 自己的动作 + 今日 pending。
+  const baseActions = Array.isArray(base.actions) ? base.actions as Array<Record<string, unknown>> : []
+  const liveActs = queryRows<{ action_date: string; action_type: string; final_decision: string | null; amount: number | null; fund_name: string | null; fund_code: string }>(dbPath,
+    'SELECT a.action_date, a.action_type, a.final_decision, a.amount, ' +
+    'COALESCE(i.fund_name, a.fund_code) AS fund_name, a.fund_code ' +
+    'FROM fund_bot_actions a LEFT JOIN fund_info i ON i.fund_code = a.fund_code ' +
+    'WHERE a.run_id = ' + quoteSql(liveRunId) + ' AND a.bot_id = ' + quoteSql(botId) +
+    ' ORDER BY a.action_date ASC, a.action_id ASC')
+  const today = shanghaiToday()
+  const pend = queryRows<{ order_date: string; order_type: string; order_amount: number | null; fund_name: string | null; fund_code: string }>(dbPath,
+    'SELECT o.order_date, o.order_type, o.order_amount, ' +
+    'COALESCE(i.fund_name, o.fund_code) AS fund_name, o.fund_code ' +
+    'FROM fund_bot_orders o LEFT JOIN fund_info i ON i.fund_code = o.fund_code ' +
+    'WHERE o.order_run_id = ' + quoteSql(liveRunId) + ' AND o.bot_id = ' + quoteSql(botId) +
+    " AND o.status = 'pending' AND o.order_date = " + quoteSql(today) + ' ORDER BY o.order_id ASC')
+  const liveActions: Array<Record<string, unknown>> = [
+    ...liveActs.map(a => ({ action_date: a.action_date, side: classifyAction(a.action_type, a.final_decision), amount: num(a.amount), fund_name: a.fund_name ?? a.fund_code, fund_code: a.fund_code, status: 'confirmed' })),
+    ...pend.map(o => ({ action_date: o.order_date, side: (o.order_type === 'sell' ? 'sell' : 'buy'), amount: num(o.order_amount), fund_name: o.fund_name ?? o.fund_code, fund_code: o.fund_code, status: 'pending' })),
+  ]
   return {
     ...base,
     runId: liveRunId,
     series,
+    actions: [...baseActions, ...liveActions],
     availableRuns: [{ runId: liveRunId, latestDate: liveRows.length ? String(liveRows[liveRows.length - 1].trade_date) : (base.latestTradeDate ?? '') }],
   }
 }
