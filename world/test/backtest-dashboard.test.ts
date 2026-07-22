@@ -495,3 +495,21 @@ test('/api/backtest/bot 支持 live run，返回拼接 series', async () => {
     if (bot.series.length) assert.ok(bot.series.every(p => p.segment === 'backtest' || p.segment === 'live'))
   } finally { proc.kill() }
 })
+
+test('/api/backtest/today-decisions 返回今日 pending 决策（结构）', async () => {
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
+    const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
+    const r = await fetch(`${base}/api/backtest/today-decisions`, { cache: 'no-store' })
+    assert.equal(r.status, 200)
+    const body = await r.json() as { today: string; decisions: Record<string, { dir: string; items: unknown[] }> }
+    assert.match(body.today, /^\d{4}-\d{2}-\d{2}$/)
+    assert.equal(typeof body.decisions, 'object')
+    for (const [k, v] of Object.entries(body.decisions)) {
+      assert.ok(k.includes('|'), 'key 形如 run_id|bot')
+      assert.ok(['buy', 'sell', 'mixed'].includes(v.dir))
+      assert.ok(Array.isArray(v.items) && v.items.length > 0)
+    }
+  } finally { proc.kill() }
+})

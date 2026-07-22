@@ -1093,6 +1093,36 @@ async function loadLatestDecisions(dbPath: string): Promise<{ decisions: Record<
   return { decisions }
 }
 
+/** 今日（Asia/Shanghai）日期 YYYY-MM-DD。本机为 +08，用固定偏移避免依赖进程 TZ。 */
+function shanghaiToday(): string {
+  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10)
+}
+
+/** 今日 pending 盘中决策：只取 order_date=今日 且 status=pending 的 live 挂单，按 run_id|bot 分组。
+ *  含陈旧 pending（历史未结算单）必须靠 order_date=今日 排除。方向 dir：全买=buy/全卖=sell/混合=mixed。 */
+async function loadTodayDecisions(dbPath: string): Promise<{
+  today: string
+  decisions: Record<string, { dir: 'buy' | 'sell' | 'mixed'; items: Array<{ fund: string; type: 'buy' | 'sell'; amount: number; reason: string }> }>
+}> {
+  const today = shanghaiToday()
+  if (!(await tableExists(dbPath, 'fund_bot_orders'))) return { today, decisions: {} }
+  const rows = queryRows<{ order_run_id: string; bot_id: string; fund_code: string; fund_name: string | null; order_type: string; order_amount: number | null; action_reason: string | null }>(dbPath,
+    'SELECT o.order_run_id, o.bot_id, o.fund_code, ' +
+    "COALESCE(i.fund_name, o.fund_code) AS fund_name, o.order_type, o.order_amount, o.action_reason " +
+    'FROM fund_bot_orders o LEFT JOIN fund_info i ON i.fund_code = o.fund_code ' +
+    "WHERE o.status = 'pending' AND o.order_date = " + quoteSql(today) +
+    " AND o.order_run_id LIKE 'live-%' ORDER BY o.order_id ASC")
+  const decisions: Record<string, { dir: 'buy' | 'sell' | 'mixed'; items: Array<{ fund: string; type: 'buy' | 'sell'; amount: number; reason: string }> }> = {}
+  for (const r of rows) {
+    const type: 'buy' | 'sell' = r.order_type === 'sell' ? 'sell' : 'buy'
+    const key = `${r.order_run_id}|${r.bot_id}`
+    const g = decisions[key] ?? (decisions[key] = { dir: type, items: [] })
+    g.items.push({ fund: r.fund_name ?? r.fund_code, type, amount: num(r.order_amount), reason: r.action_reason ?? '' })
+    if (g.dir !== type) g.dir = 'mixed'
+  }
+  return { today, decisions }
+}
+
 interface MarketReportRow {
   id: number
   report_type: string
@@ -1780,6 +1810,11 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       // 前端据此在指数目录项上打三色标（仅合格 run 计入，聚合在前端做）。
       if (req.method === 'GET' && url.pathname === '/api/backtest/latest-decisions') {
         sendJson(res, 200, await loadLatestDecisions(dbPath))
+        return
+      }
+      // 今日盘中决策：今天的 pending 挂单（方向/标的/金额/理由），供一级页「今日决策」列。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/today-decisions') {
+        sendJson(res, 200, await loadTodayDecisions(dbPath))
         return
       }
       // 单条 set：{ key:"<run_id>|<bot>", verdict:"pass"|"fail"|"" }。
