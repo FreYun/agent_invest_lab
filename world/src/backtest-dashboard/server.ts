@@ -957,6 +957,31 @@ async function loadAllRunsSummary(dbPath: string, worldRoot: string): Promise<{ 
   return { runs }
 }
 
+/** /api/backtest/live-runs：54 个 live run 的拼接汇总。每 run 取源 dash + live 两段净值几何拼接，
+ *  在完整序列上算 绝对收益/年化/最大回撤。liveDays=0（今日首次 decide 前）时退化为源 dash 曲线本身，
+ *  指标即源 dash 的；status 标 '待启动'。评级/点评由前端按 sourceRunId 继承，本接口不含。 */
+export async function loadLiveRunsSummary(dbPath: string, worldRoot: string): Promise<{ runs: Array<Record<string, unknown>> }> {
+  const links = listLiveRuns(worldRoot)
+  const runs: Array<Record<string, unknown>> = []
+  const fetchSeries = (botId: string, runId: string) => queryRows<Record<string, unknown>>(dbPath,
+    'SELECT trade_date, net_value FROM fund_bot_daily_snapshots WHERE bot_id = ' + quoteSql(botId) +
+    ' AND run_id = ' + quoteSql(runId) + ' ORDER BY trade_date ASC')
+  for (const { liveRunId, botId, sourceRunId } of links) {
+    const historyRows = fetchSeries(botId, sourceRunId)
+    const liveRows = fetchSeries(botId, liveRunId)
+    const extended = stitchSeriesRows(historyRows, liveRows)
+    const m = computeStitchedMetrics(extended)
+    const liveDays = liveRows.length
+    const lastLiveDate = liveDays ? String(liveRows[liveRows.length - 1].trade_date) : ''
+    runs.push({
+      liveRunId, botId, sourceRunId,
+      absReturnPct: m.absReturnPct, annReturnPct: m.annReturnPct, maxDrawdownPct: m.maxDrawdownPct,
+      liveDays, lastLiveDate, status: liveDays ? '实盘中' : '待启动',
+    })
+  }
+  return { runs }
+}
+
 // fund_bot_run_eval 列 -> runs.html 内嵌 CSV 的中文列名。前端按中文键消费，故接口按此映射回吐，
 // 把「解析内嵌 CSV」换成「fetch 本接口」即可，下游分组/默认判定逻辑一行不用动。
 const RUN_EVAL_COL_MAP: Array<[string, string]> = [
@@ -1522,6 +1547,10 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/all-runs') {
         sendJson(res, 200, await loadAllRunsSummary(dbPath, worldRoot))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/backtest/live-runs') {
+        sendJson(res, 200, await loadLiveRunsSummary(dbPath, worldRoot))
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/market-reports') {

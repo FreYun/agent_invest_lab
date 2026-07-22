@@ -459,3 +459,22 @@ test('GET /api/backtest/bot-methodology 返回结构 + 参数校验', async () =
     rmSync(worldRoot, { recursive: true, force: true })
   }
 })
+
+test('/api/backtest/live-runs 返回 live run 汇总', async () => {
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
+    const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
+    const r = await fetch(`${base}/api/backtest/live-runs`, { cache: 'no-store' })
+    assert.equal(r.status, 200)
+    const body = await r.json() as { runs: Array<Record<string, unknown>> }
+    assert.ok(Array.isArray(body.runs))
+    for (const run of body.runs) {
+      assert.equal(typeof run.liveRunId, 'string')
+      assert.ok(String(run.liveRunId).startsWith('live-'))
+      assert.equal(typeof run.sourceRunId, 'string')
+      assert.equal(typeof run.liveDays, 'number')
+      assert.ok('absReturnPct' in run && 'maxDrawdownPct' in run)
+    }
+  } finally { proc.kill() }
+})
