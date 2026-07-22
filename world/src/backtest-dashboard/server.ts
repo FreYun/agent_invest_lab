@@ -1090,6 +1090,43 @@ async function loadLatestDecisions(dbPath: string): Promise<{ decisions: Record<
     else kind = 'reduce'
     decisions[`${r.run_id}|${r.bot_id}`] = kind
   }
+  // —— live 路径：snapshots 无 live 行，dash 循环覆盖不到。今日 pending 优先（buy→add/sell→reduce/
+  //    混合按净额），否则回退 fund_bot_actions 末日动作（after_weight≈0 → clear）。dash key 不受影响。 ——
+  const today = await loadTodayDecisions(dbPath)
+  for (const [key, g] of Object.entries(today.decisions)) {
+    if (g.dir === 'buy') decisions[key] = 'add'
+    else if (g.dir === 'sell') decisions[key] = 'reduce'
+    else {
+      const net = g.items.reduce((s, it) => s + (it.type === 'buy' ? it.amount : -it.amount), 0)
+      decisions[key] = net >= 0 ? 'add' : 'reduce'
+    }
+  }
+  if (await tableExists(dbPath, 'fund_bot_actions')) {
+    const liveActs = queryRows<{ run_id: string; bot_id: string; n_add: number; n_reduce: number; add_amt: number | null; reduce_amt: number | null; last_after: number | null }>(dbPath, `
+      WITH last_day AS (
+        SELECT run_id, bot_id, MAX(action_date) AS d FROM fund_bot_actions
+        WHERE run_id LIKE 'live-%' GROUP BY run_id, bot_id
+      )
+      SELECT a.run_id, a.bot_id,
+             SUM(CASE WHEN a.action_type='ADD' THEN 1 ELSE 0 END) AS n_add,
+             SUM(CASE WHEN a.action_type='REDUCE' THEN 1 ELSE 0 END) AS n_reduce,
+             SUM(CASE WHEN a.action_type='ADD' THEN COALESCE(a.amount,0) ELSE 0 END) AS add_amt,
+             SUM(CASE WHEN a.action_type='REDUCE' THEN COALESCE(a.amount,0) ELSE 0 END) AS reduce_amt,
+             MIN(a.after_weight) AS last_after
+      FROM fund_bot_actions a
+      JOIN last_day l ON l.run_id=a.run_id AND l.bot_id=a.bot_id AND a.action_date=l.d
+      GROUP BY a.run_id, a.bot_id
+    `)
+    for (const r of liveActs) {
+      const key = `${r.run_id}|${r.bot_id}`
+      if (key in decisions) continue   // 今日 pending 已定，优先
+      const hasAdd = num(r.n_add) > 0, hasReduce = num(r.n_reduce) > 0
+      if (!hasAdd && !hasReduce) continue
+      if (hasReduce && !hasAdd && r.last_after != null && num(r.last_after) <= 0.005) decisions[key] = 'clear'
+      else if (num(r.add_amt) - num(r.reduce_amt) >= 0 && hasAdd) decisions[key] = 'add'
+      else decisions[key] = 'reduce'
+    }
+  }
   return { decisions }
 }
 
