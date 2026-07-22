@@ -1121,6 +1121,24 @@ export function stitchSeriesRows(
   return extended
 }
 
+/** 拼接后完整序列上的业绩指标：绝对收益（末点-1）、最大回撤（跑动峰值法）、252 年化。
+ *  与 loadAllRunsSummary 同口径：base=1+abs/100，base>0 且 days>0 才算年化，否则 null。 */
+export function computeStitchedMetrics(extended: Array<Record<string, unknown>>): {
+  absReturnPct: number | null; annReturnPct: number | null; maxDrawdownPct: number | null; days: number
+} {
+  const navs: number[] = []
+  for (const r of extended) { const n = finiteNumber(r.net_value); if (n != null) navs.push(n) }
+  const days = navs.length
+  if (!days) return { absReturnPct: null, annReturnPct: null, maxDrawdownPct: null, days: 0 }
+  const absReturnPct = (navs[days - 1] - 1) * 100
+  let peak = -Infinity, mdd = 0
+  for (const n of navs) { if (n > peak) peak = n; const dd = n / peak - 1; if (dd < mdd) mdd = dd }
+  const maxDrawdownPct = mdd * 100
+  const base = 1 + absReturnPct / 100
+  const annReturnPct = base > 0 && days > 0 ? (Math.pow(base, 252 / days) - 1) * 100 : null
+  return { absReturnPct, annReturnPct, maxDrawdownPct, days }
+}
+
 function parseStructuredJson(raw: string | null): unknown {
   if (!raw || !raw.trim()) return null
   try { return JSON.parse(raw) }
