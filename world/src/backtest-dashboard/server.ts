@@ -1216,42 +1216,12 @@ function loadOosExtendedSeries(dbPath: string, botId: string, runId: string, liv
     (firstLiveDate ? ' AND trade_date < ' + quoteSql(firstLiveDate) : '') +
     ' ORDER BY trade_date ASC') : []
 
-  const extended: Array<Record<string, unknown>> = []
-  const firstHistoryNav = finiteNumber(historyRows[0]?.net_value)
-  if (firstHistoryNav != null && firstHistoryNav > 0) {
-    for (const row of historyRows) {
-      const rawNav = finiteNumber(row.net_value)
-      if (rawNav == null) continue
-      const nav = rawNav / firstHistoryNav
-      extended.push({
-        ...row,
-        net_value: nav,
-        cumulative_return_pct: (nav - 1) * 100,
-        segment: 'backtest',
-        source_run_id: historyRunId,
-        raw_net_value: rawNav,
-      })
-    }
+  const extended = stitchSeriesRows(historyRows, liveRows, { liveSegment: 'daily_oos' })
+  if (!extended.length) {
+    return liveRows.map(row => ({ ...row, segment: 'daily_oos', source_run_id: runId, raw_net_value: row.net_value }))
   }
-
-  const firstLiveNav = finiteNumber(liveRows[0]?.net_value)
-  const lastHistoryNav = finiteNumber(extended[extended.length - 1]?.net_value)
-  const liveScale = firstLiveNav != null && firstLiveNav > 0 && lastHistoryNav != null && lastHistoryNav > 0 ? lastHistoryNav / firstLiveNav : 1
-  for (const row of liveRows) {
-    const rawNav = finiteNumber(row.net_value)
-    if (rawNav == null) continue
-    const nav = rawNav * liveScale
-    extended.push({
-      ...row,
-      net_value: nav,
-      cumulative_return_pct: (nav - 1) * 100,
-      segment: 'daily_oos',
-      source_run_id: runId,
-      raw_net_value: rawNav,
-    })
-  }
-
-  return extended.length ? extended : liveRows.map(row => ({ ...row, segment: 'daily_oos', source_run_id: runId, raw_net_value: row.net_value }))
+  // 保持原字段：历史段挂 historyRunId、实盘段挂当前 runId。
+  return extended.map(r => ({ ...r, source_run_id: r.segment === 'backtest' ? historyRunId : runId }))
 }
 
 
