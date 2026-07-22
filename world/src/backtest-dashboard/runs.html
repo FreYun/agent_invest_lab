@@ -245,6 +245,14 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .rfl-body .rfl-p,.mdl-full .rfl-p{color:rgba(255,255,255,.84);margin:3px 0}
 .rfl-body .rfl-sp,.mdl-full .rfl-sp{height:8px}
 .rfl-body .rfl-p strong,.rfl-body .rfl-li strong,.rfl-body .rfl-quote strong,.rfl-body .rfl-h2 strong,.mdl-full .rfl-p strong,.mdl-full .rfl-li strong,.mdl-full .rfl-quote strong,.mdl-full .rfl-h2 strong{color:#fff;font-weight:700}
+.dec-panel{ margin-top:10px; }
+.dec-title{ font-weight:600; margin:6px 0; }
+.dec-table{ width:100%; border-collapse:collapse; font-size:12px; }
+.dec-table th,.dec-table td{ padding:3px 6px; border-bottom:1px solid var(--border,#333); text-align:left; }
+.dec-table td.buy{ color:var(--gain,#e5484d); } .dec-table td.sell{ color:var(--loss,#30a46c); }
+.dec-table tr.dec-pending{ opacity:.7; } .dec-tag{ font-size:10px; color:#999; border:1px dashed #999; border-radius:3px; padding:0 3px; }
+.dec-reason{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dec-empty{ color:var(--muted,#888); font-size:12px; padding:6px 0; }
 </style>
 </head>
 <body>
@@ -523,6 +531,29 @@ const state = {
 }
 const WORLD_BASE = '/world'   // 同源相对路径：经 :18888 代理；外部访问即 http://172.31.43.30:18888/world
 const botCache = new Map()    // `${run_id}|${bot}` -> /api/backtest/bot 响应（避免切换重复拉）
+const decCache = new Map()   // `${run_id}|${bot}` -> run-decisions rows
+async function loadRunDecisionsFE(runId, bot){
+  const k = `${runId}|${bot}`
+  if (decCache.has(k)) return decCache.get(k)
+  let rows = []
+  try { const r = await fetch(`/api/backtest/run-decisions?run_id=${encodeURIComponent(runId)}&bot=${encodeURIComponent(bot)}`, { cache: 'no-store' }); if (r.ok) rows = (await r.json()).rows || [] }
+  catch { rows = [] }
+  decCache.set(k, rows); return rows
+}
+function pctW(v){ return v == null ? '—' : (Number(v) * 100).toFixed(1) + '%' }
+function decTableHtml(rows){
+  if (!rows.length) return '<div class="dec-empty">暂无决策记录</div>'
+  const body = rows.map(p => {
+    const sideCls = p.side === 'sell' ? 'sell' : 'buy'
+    const sideTxt = p.side === 'sell' ? '▼ 卖' : '▲ 买'
+    const pend = p.status === 'pending' ? ' dec-pending' : ''
+    const w = (p.beforeWeight != null || p.afterWeight != null) ? `${pctW(p.beforeWeight)}→${pctW(p.afterWeight)}` : '—'
+    const amt = new Intl.NumberFormat('zh-CN',{maximumFractionDigits:0}).format(Number(p.amount||0))
+    return `<tr class="${pend.trim()}"><td>${esc(p.date)}${p.status==='pending'?' <span class="dec-tag">待确认</span>':''}</td>`
+      + `<td class="${sideCls}">${sideTxt}</td><td>${esc(p.fund)}</td><td>${w}</td><td>¥${amt}</td><td class="dec-reason" title="${esc(p.reason)}">${esc(String(p.reason).slice(0,60))}</td></tr>`
+  }).join('')
+  return `<div class="dec-panel"><div class="dec-title">决策流水</div><table class="dec-table"><thead><tr><th>日期</th><th>方向</th><th>标的</th><th>仓位</th><th>金额</th><th>理由</th></tr></thead><tbody>${body}</tbody></table></div>`
+}
 
 // ---- 左侧指数筛选栏（多选，默认全选）----
 // 返回 [归一化键, 展示名, 展示代码]：先按权威清单顺序列全 51（含 0 run），再追加清单外但有 run 的指数（未分类置底）。
@@ -1039,6 +1070,9 @@ function renderChartInto(panel, rec, bot, win){
   const { html, geom } = renderChartBody(bot, win)
   panel.innerHTML = chartHead(rec, bot, html)
   wireChart(panel, rec, bot, geom)
+  const holder = document.createElement('div'); holder.className = 'dec-holder'
+  panel.appendChild(holder)
+  loadRunDecisionsFE(rec['run_id'], rec['bot']).then(rows => { holder.innerHTML = decTableHtml(rows) })
 }
 // 绑定：① 窗口按钮点击→切窗重绘；② 图上 mousemove→吸附最近交易日、移动准星、更新浮层
 function wireChart(panel, rec, bot, geom){
