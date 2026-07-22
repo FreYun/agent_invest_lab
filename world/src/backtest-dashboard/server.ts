@@ -1160,6 +1160,38 @@ async function loadTodayDecisions(dbPath: string): Promise<{
   return { today, decisions }
 }
 
+/** 单 live run 决策流水：fund_bot_actions 历史（confirmed）+ 今日 pending 挂单。供流水面板与曲线 marker。 */
+async function loadRunDecisions(dbPath: string, runId: string, botId: string): Promise<{
+  rows: Array<{ date: string; side: 'buy' | 'sell'; fund: string; beforeWeight: number | null; afterWeight: number | null; amount: number; reason: string; status: 'confirmed' | 'pending' }>
+}> {
+  const rows: Array<{ date: string; side: 'buy' | 'sell'; fund: string; beforeWeight: number | null; afterWeight: number | null; amount: number; reason: string; status: 'confirmed' | 'pending' }> = []
+  if (await tableExists(dbPath, 'fund_bot_actions')) {
+    const acts = queryRows<{ action_date: string; action_type: string; final_decision: string | null; fund_name: string | null; fund_code: string; before_weight: number | null; after_weight: number | null; amount: number | null; reason: string | null }>(dbPath,
+      'SELECT a.action_date, a.action_type, a.final_decision, ' +
+      'COALESCE(i.fund_name, a.fund_code) AS fund_name, a.fund_code, a.before_weight, a.after_weight, a.amount, a.reason ' +
+      'FROM fund_bot_actions a LEFT JOIN fund_info i ON i.fund_code = a.fund_code ' +
+      'WHERE a.run_id = ' + quoteSql(runId) + ' AND a.bot_id = ' + quoteSql(botId) +
+      ' ORDER BY a.action_date ASC, a.action_id ASC')
+    for (const a of acts) {
+      const side = classifyAction(a.action_type, a.final_decision)
+      if (side === 'hold') continue
+      rows.push({ date: a.action_date, side, fund: a.fund_name ?? a.fund_code, beforeWeight: a.before_weight, afterWeight: a.after_weight, amount: num(a.amount), reason: a.reason ?? '', status: 'confirmed' })
+    }
+  }
+  if (await tableExists(dbPath, 'fund_bot_orders')) {
+    const today = shanghaiToday()
+    const pend = queryRows<{ fund_name: string | null; fund_code: string; order_type: string; order_amount: number | null; action_reason: string | null; order_date: string }>(dbPath,
+      'SELECT COALESCE(i.fund_name, o.fund_code) AS fund_name, o.fund_code, o.order_type, o.order_amount, o.action_reason, o.order_date ' +
+      'FROM fund_bot_orders o LEFT JOIN fund_info i ON i.fund_code = o.fund_code ' +
+      'WHERE o.order_run_id = ' + quoteSql(runId) + ' AND o.bot_id = ' + quoteSql(botId) +
+      " AND o.status = 'pending' AND o.order_date = " + quoteSql(today) + ' ORDER BY o.order_id ASC')
+    for (const o of pend) {
+      rows.push({ date: o.order_date, side: o.order_type === 'sell' ? 'sell' : 'buy', fund: o.fund_name ?? o.fund_code, beforeWeight: null, afterWeight: null, amount: num(o.order_amount), reason: o.action_reason ?? '', status: 'pending' })
+    }
+  }
+  return { rows }
+}
+
 interface MarketReportRow {
   id: number
   report_type: string
@@ -1852,6 +1884,14 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       // 今日盘中决策：今天的 pending 挂单（方向/标的/金额/理由），供一级页「今日决策」列。
       if (req.method === 'GET' && url.pathname === '/api/backtest/today-decisions') {
         sendJson(res, 200, await loadTodayDecisions(dbPath))
+        return
+      }
+      // 单 live run 决策流水：历史动作 + 今日 pending。前端决策流水面板与曲线 marker 用。
+      if (req.method === 'GET' && url.pathname === '/api/backtest/run-decisions') {
+        const runId = url.searchParams.get('run_id') ?? ''
+        const botId = url.searchParams.get('bot') ?? ''
+        if (!runId || !botId) { sendJson(res, 400, { error: 'run_id and bot required' }); return }
+        sendJson(res, 200, await loadRunDecisions(dbPath, runId, botId))
         return
       }
       // 单条 set：{ key:"<run_id>|<bot>", verdict:"pass"|"fail"|"" }。

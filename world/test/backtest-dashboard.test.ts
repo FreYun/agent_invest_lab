@@ -528,3 +528,22 @@ test('/api/backtest/latest-decisions 覆盖 live run（今日有 pending 的 liv
     }
   } finally { proc.kill() }
 })
+
+test('/api/backtest/run-decisions 返回某 live run 的决策流水', async () => {
+  const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB], { stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
+    const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
+    const list = await (await fetch(`${base}/api/backtest/live-runs`, { cache: 'no-store' })).json() as { runs: Array<Record<string, unknown>> }
+    if (!list.runs.length) return
+    const one = list.runs[0]
+    const r = await fetch(`${base}/api/backtest/run-decisions?run_id=${encodeURIComponent(String(one.liveRunId))}&bot=${one.botId}`, { cache: 'no-store' })
+    assert.equal(r.status, 200)
+    const body = await r.json() as { rows: Array<Record<string, unknown>> }
+    assert.ok(Array.isArray(body.rows))
+    for (const p of body.rows) {
+      assert.ok(['buy', 'sell'].includes(p.side as string))
+      assert.ok(['confirmed', 'pending'].includes(p.status as string))
+    }
+  } finally { proc.kill() }
+})
