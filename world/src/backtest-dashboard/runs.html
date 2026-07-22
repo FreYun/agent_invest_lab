@@ -426,6 +426,13 @@ async function ingestLive(){
   let data
   try { const r = await fetch('/api/backtest/live-runs', { cache: 'no-store' }); if (!r.ok) return; data = await r.json() }
   catch { return }
+  // 源 dash 的指数归类锚点：评测表（run-evals）只覆盖部分 run；其余 live run 用其 source dash 在
+  // all-runs 里的 fund/index 归类（照搬 7.21 ingestHistory 的 `FUND_IX[fund] || index` 口径），
+  // 否则会全部掉进「未分类」，指数覆盖数虚降。
+  const allByKey = new Map()   // `dash-runId|bot` -> { fund, index, indexName, ... }
+  try { const ar = await fetch('/api/backtest/all-runs', { cache: 'no-store' })
+    if (ar.ok){ const a = await ar.json(); for (const h of (a.runs || [])) allByKey.set(`${h.runId}|${h.botId}`, h) } }
+  catch {}
   const have = new Set(records.map(r => r._key))
   let added = 0
   for (const h of (data.runs || [])){
@@ -437,6 +444,20 @@ async function ingestLive(){
     const r = src ? { ...src } : {
       '策略': '', '对标指数': '', '可买基金': '', '状态': '',
       '普通投资者评级': '—', '综合点评': '', _ix: (typeof UNCLASSED !== 'undefined' ? UNCLASSED : '未分类'), _ixName: '未分类', _ixCode: '',
+    }
+    // 无评测记录时，按源 dash 的 all-runs 标的归类（与 7.21 ingestHistory 同口径），补回指数分组。
+    if (!src){
+      const a = allByKey.get(srcKey)
+      const ixSrc = a ? (FUND_IX[a.fund] || a.index) : ''
+      r._fund = a ? (a.fund || '') : ''
+      r['可买基金'] = r._fund
+      r['对标指数'] = a ? (a.index || '') : ''
+      r['策略'] = a ? (a.indexName || '') : ''
+      r._ixRaw = ixCode(ixSrc)
+      r._ix = normCode(ixSrc)
+      { const m = MASTER_BY_KEY.get(r._ix)
+        r._ixName = m ? m.name : (r._ix === UNCLASSED ? UNCLASSED : indexName(a ? a.indexName : ''))
+        r._ixCode = m ? m.code : r._ixRaw }
     }
     // 覆盖为 live 行身份 + 拼接指标。
     r._source = 'live'
