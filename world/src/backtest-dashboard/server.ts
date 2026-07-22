@@ -1088,6 +1088,39 @@ function finiteNumber(v: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/** 把「历史净值序列 + 实盘净值序列」几何拼接成一条连续曲线（纯函数，不碰 DB）。
+ *  历史段：首点净值归一到 1.0；实盘段：整体 ×(历史末点/实盘首点)，从历史末点续上。
+ *  liveSegment 默认 'live'；OOS 传 'daily_oos' 以保持 market-reports.html 的着色。 */
+export function stitchSeriesRows(
+  historyRows: Array<Record<string, unknown>>,
+  liveRows: Array<Record<string, unknown>>,
+  opts: { liveSegment?: string } = {},
+): Array<Record<string, unknown>> {
+  const liveSegment = opts.liveSegment ?? 'live'
+  const extended: Array<Record<string, unknown>> = []
+  const firstHistoryNav = finiteNumber(historyRows[0]?.net_value)
+  if (firstHistoryNav != null && firstHistoryNav > 0) {
+    for (const row of historyRows) {
+      const rawNav = finiteNumber(row.net_value)
+      if (rawNav == null) continue
+      const nav = rawNav / firstHistoryNav
+      extended.push({ ...row, net_value: nav, cumulative_return_pct: (nav - 1) * 100, segment: 'backtest', raw_net_value: rawNav })
+    }
+  }
+  const filteredLive = liveRows.filter(r => typeof r.trade_date === 'string' && finiteNumber(r.net_value) != null)
+  const firstLiveNav = finiteNumber(filteredLive[0]?.net_value)
+  const lastHistoryNav = finiteNumber(extended[extended.length - 1]?.net_value)
+  const liveScale = firstLiveNav != null && firstLiveNav > 0 && lastHistoryNav != null && lastHistoryNav > 0
+    ? lastHistoryNav / firstLiveNav : 1
+  for (const row of filteredLive) {
+    const rawNav = finiteNumber(row.net_value)
+    if (rawNav == null) continue
+    const nav = rawNav * liveScale
+    extended.push({ ...row, net_value: nav, cumulative_return_pct: (nav - 1) * 100, segment: liveSegment, raw_net_value: rawNav })
+  }
+  return extended
+}
+
 function parseStructuredJson(raw: string | null): unknown {
   if (!raw || !raw.trim()) return null
   try { return JSON.parse(raw) }
