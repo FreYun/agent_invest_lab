@@ -118,6 +118,15 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .fail-toggle td{color:var(--dim);font-size:11px;background:rgba(255,107,138,.05);border-top:1px solid rgba(255,107,138,.14)}
 .fail-toggle:hover td{color:var(--fail);background:rgba(255,107,138,.1)}
 .runs tbody tr.fail-row td{opacity:.7}
+/* ---- 今日决策徽标 ---- */
+.today-dec{ font-size:12px; padding:1px 5px; border-radius:4px; white-space:nowrap; }
+.today-dec.none{ color:var(--muted,#888); }
+.today-dec.buy{ color:var(--gain,#e5484d); }
+.today-dec.sell{ color:var(--loss,#30a46c); }
+.today-dec.mixed{ color:var(--accent,#66d9e8); }
+/* pending=未结算：灰边虚线 + 小字标注 */
+.today-dec.pending{ border:1px dashed #999; opacity:.85; }
+.today-dec .td-pend{ margin-left:4px; font-size:10px; color:#999; }
 /* ---- 每个指数一个区块：左表格 + 右净值图，左右对齐 ---- */
 .index-block{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:16px;align-items:start;margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid rgba(255,255,255,.06)}
 .index-block:last-child{border-bottom:none}
@@ -653,6 +662,16 @@ function renderSummary(){
   }
 }
 
+// 今日决策徽标：买▲红 / 卖▼绿 / 混合⇅；pending 恒为灰/虚线（未结算）；无今日决策显「—」。
+function todayDecHtml(key){
+  const g = todayDecisions[key]
+  if (!g || !g.items || !g.items.length) return '<span class="today-dec none">—</span>'
+  const sym = g.dir === 'sell' ? '▼ 卖' : g.dir === 'buy' ? '▲ 买' : '⇅ 调'
+  const cls = g.dir === 'sell' ? 'sell' : g.dir === 'buy' ? 'buy' : 'mixed'
+  const title = g.items.map(it => `${it.type === 'sell' ? '卖' : '买'} ${it.fund} ¥${new Intl.NumberFormat('zh-CN',{maximumFractionDigits:0}).format(it.amount)}｜${it.reason}`).join('\n')
+  return `<span class="today-dec ${cls} pending" title="${esc(title)}">${sym}<span class="td-pend">待确认</span></span>`
+}
+
 function rowHtml(r, opts = {}){
   const pass = isPass(r)
   const edited = isEdited(r)
@@ -666,6 +685,7 @@ function rowHtml(r, opts = {}){
     <td class="l"><span class="run-id">${esc(r['run_id'])}</span></td>
     <td class="l"><span class="run-bot">${esc(r['bot'])}</span></td>
     <td class="l"><span class="status-pill ${statusCls}">${esc(r['状态']||'—')}</span></td>
+    <td class="l">${todayDecHtml(r._key)}</td>
     ${pctCell(r['绝对收益%'])}
     ${pctCell(r['最大回撤%'])}
     ${calmarCell(r._calmar)}
@@ -675,6 +695,7 @@ function rowHtml(r, opts = {}){
 
 const TH = [
   ['pass','合格','l'],['run_id','run_id','l'],['bot','bot','l'],['状态','状态','l'],
+  ['_today','今日决策','l'],
   ['绝对收益%','收益%',''],['最大回撤%','回撤%',''],['_calmar','卡玛',''],['普通投资者评级','评级','l'],
 ]
 // 合格行始终展示；不合格行默认折叠在一个可展开的提示行下面（每个指数独立记展开态）。
@@ -1190,6 +1211,15 @@ async function loadVerdicts(){
   }
 }
 
+// 今日盘中决策（今天的 pending 挂单）：run_id|bot -> {dir, items:[{fund,type,amount,reason}]}。
+let todayDecisions = {}
+async function loadTodayDecisions(){
+  try {
+    const r = await fetch('/api/backtest/today-decisions', { cache: 'no-store' })
+    if (r.ok) todayDecisions = (await r.json()).decisions || {}
+  } catch { todayDecisions = {} }
+}
+
 // 末日决策标识：拉每个 (run,bot) 末日当天的动作方向（add/reduce/clear）。失败则留空、侧栏不打标。
 async function loadLatestDecisions(){
   try {
@@ -1199,7 +1229,7 @@ async function loadLatestDecisions(){
 }
 
 void (async () => {
-  await Promise.all([loadVerdicts(), loadEvalRecords(), loadLatestDecisions()])  // 并行拉「合格覆盖」+「评测记录」+「末日决策标识」
+  await Promise.all([loadVerdicts(), loadEvalRecords(), loadLatestDecisions(), loadTodayDecisions()])  // +「今日决策」
   buildIndexSidebar()
   render()                 // 用评测表的 run + 服务器覆盖渲染（每个指数区块默认展示该组卡玛最高的合格 run 的净值图）
   void ingestLive()        // 再异步纳入所有 live run（继承源 dash 评测、拼接指标），完成后重渲染
