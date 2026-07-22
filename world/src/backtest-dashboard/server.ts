@@ -1142,6 +1142,8 @@ async function loadLatestDecisions(dbPath: string): Promise<{ decisions: Record<
       if (key in decisions) continue   // 今日 pending 已定，优先
       const hasAdd = num(r.n_add) > 0, hasReduce = num(r.n_reduce) > 0
       if (!hasAdd && !hasReduce) continue
+      // 注意：现库 live 段 fund_bot_actions.after_weight 全为 NULL（settle 未回填仓位），
+      // 故该 clear 分支对 live 恒不触发，live 清仓会退化显示为「减▼」。dash 段走 snapshot 路径不受影响。
       if (hasReduce && !hasAdd && r.last_after != null && num(r.last_after) <= 0.005) decisions[key] = 'clear'
       else if (num(r.add_amt) - num(r.reduce_amt) >= 0 && hasAdd) decisions[key] = 'add'
       else decisions[key] = 'reduce'

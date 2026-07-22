@@ -732,6 +732,7 @@ const TH = [
 // 合格行始终展示；不合格行默认折叠在一个可展开的提示行下面（每个指数独立记展开态）。
 function tableHtml(rows, ix){
   const head = TH.map(([k,label,cls]) => {
+    if (k === '_today') return `<th class="${cls}">${label}</th>`  // 今日决策非排序列
     const arrow = state.sortKey === k ? (state.sortDir > 0 ? ' ▲' : ' ▼') : ''
     return `<th class="${cls}" data-sort="${k}">${label}${arrow}</th>`
   }).join('')
