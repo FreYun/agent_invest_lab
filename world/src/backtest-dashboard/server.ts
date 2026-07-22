@@ -1168,6 +1168,16 @@ export function isLiveRunId(runId: string): boolean {
   return runId.startsWith('live-')
 }
 
+/** live run id 反推源 dash run id：live-<bot>-YYYYMMDDThhmmss -> dash-YYYY-MM-DDThh-mm-ss。
+ *  实盘引擎重写 state.json 会丢掉 source_run_id，但 run id 本身无损编码了源时间戳，可反推兜底。
+ *  无法解析（run id 不含标准时间戳）返回 ''。 */
+export function sourceRunIdFromLiveRunId(liveRunId: string): string {
+  const m = /(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/.exec(liveRunId)
+  if (!m) return ''
+  const [, y, mo, d, h, mi, s] = m
+  return `dash-${y}-${mo}-${d}T${h}-${mi}-${s}`
+}
+
 /** 读单个 live run 的 state.json → { botId=bots[0], sourceRunId=source_run_id }；缺字段返回 null。 */
 export function readLiveRunLink(worldRoot: string, liveRunId: string): { botId: string; sourceRunId: string } | null {
   const path = join(worldRoot, 'runs', liveRunId, 'state.json')
@@ -1176,7 +1186,9 @@ export function readLiveRunLink(worldRoot: string, liveRunId: string): { botId: 
     const st = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
     const bots = Array.isArray(st.bots) ? st.bots : []
     const botId = typeof bots[0] === 'string' ? bots[0] : ''
-    const sourceRunId = typeof st.source_run_id === 'string' ? st.source_run_id : ''
+    // 源映射优先取 state.json 显式字段；引擎重写丢字段时，从 liveRunId 时间戳反推兜底。
+    const sourceRunId = typeof st.source_run_id === 'string' && st.source_run_id
+      ? st.source_run_id : sourceRunIdFromLiveRunId(liveRunId)
     if (!botId || !sourceRunId) return null
     return { botId, sourceRunId }
   } catch { return null }

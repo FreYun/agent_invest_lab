@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isLiveRunId, readLiveRunLink, listLiveRuns } from '../src/backtest-dashboard/server.ts'
+import { isLiveRunId, readLiveRunLink, listLiveRuns, sourceRunIdFromLiveRunId } from '../src/backtest-dashboard/server.ts'
 
 function makeWorld(): string {
   const world = mkdtempSync(join(tmpdir(), 'world-'))
@@ -42,4 +42,20 @@ test('listLiveRuns 只列有效 live run', () => {
     assert.equal(runs[0].botId, 'bot10')
     assert.equal(runs[1].sourceRunId, 'dash-2026-06-10T03-19-36')
   } finally { rmSync(world, { recursive: true, force: true }) }
+})
+
+test('readLiveRunLink 兜底：state.json 丢了 source_run_id 时从 run id 反推源 dash', () => {
+  const world = mkdtempSync(join(tmpdir(), 'world-'))
+  try {
+    const d = join(world, 'runs', 'live-bot20-20260601T120000'); mkdirSync(d, { recursive: true })
+    // 模拟实盘引擎重写后的 state.json：有 bots、无 source_run_id。
+    writeFileSync(join(d, 'state.json'), JSON.stringify({ run_id: 'live-bot20-20260601T120000', bots: ['bot20'], status: 'done' }))
+    const link = readLiveRunLink(world, 'live-bot20-20260601T120000')
+    assert.deepEqual(link, { botId: 'bot20', sourceRunId: 'dash-2026-06-01T12-00-00' })
+  } finally { rmSync(world, { recursive: true, force: true }) }
+})
+
+test('sourceRunIdFromLiveRunId 反推与无法解析', () => {
+  assert.equal(sourceRunIdFromLiveRunId('live-bot10-20260616T095923'), 'dash-2026-06-16T09-59-23')
+  assert.equal(sourceRunIdFromLiveRunId('live-broken'), '')
 })
