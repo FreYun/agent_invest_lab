@@ -43,6 +43,9 @@ export class BotServer {
   // 累计 tool.call 通知数。run.ts:chatOneBot 在 chat 前后取差值，用于"放松"判定——
   // chat 超时时如果当次至少有过一个 tool call，认为当日有推进，不再 pause。
   private _toolCallCount = 0
+  // 每 session 已批准的 start_research 次数。硬上限=1；第 2+ 次直接 reject。
+  // key=p.session_id（rust server 生成，稳定跨同一 chat；不同 date/chat 天然隔离）。
+  private readonly startResearchApprovedPerSession = new Map<string, number>()
 
   private constructor(botId: string, child: ChildProcessWithoutNullStreams, client: JsonRpcStdioClient, onLog?: (l: string) => void) {
     this.botId = botId
@@ -69,15 +72,32 @@ export class BotServer {
       // （topic/initial_phase/initial_hypothesis 原样回传，engine 侧只认这个 schema）。
       if (n.method === 'research_approval') {
         const p = n.params
-        client.request('research_approval_answer', {
-          id: p.id,
-          action: 'approve',
-          topic: p.topic,
-          initial_phase: p.initial_phase,
-          initial_hypothesis: p.initial_hypothesis,
-        }, { timeoutMs: 10_000 })
-          .then(r => opts.onLog?.(`[${botId}] research_approval auto-approved (id=${String(p.id)}, topic=${String(p.topic ?? '').slice(0, 80)}) → ${JSON.stringify(r)}`))
-          .catch(err => opts.onLog?.(`[${botId}] research_approval_answer failed: ${err instanceof Error ? err.message : String(err)}`))
+        const sid = String(p.session_id ?? '')
+        const prevCount = bs.startResearchApprovedPerSession.get(sid) ?? 0
+        if (prevCount >= 1) {
+          // 硬上限=1/session：第 2+ 次不予批准，防止 bot 在同一决策日重复触发 start_research
+          // 造成预算/时间失控。engine 侧收到 reject 会走正常 rejection 分支（不算 crash）。
+          opts.onLog?.(`[${botId}] research_approval REJECTED (id=${String(p.id)}, session=${sid.slice(0, 12)}, prev_approved=${prevCount}, topic=${String(p.topic ?? '').slice(0, 80)})——per-session start_research 硬上限=1，第 ${prevCount + 1} 次被拦截`)
+          client.request('research_approval_answer', {
+            id: p.id,
+            action: 'reject',
+            topic: p.topic,
+            initial_phase: p.initial_phase,
+            initial_hypothesis: p.initial_hypothesis,
+          }, { timeoutMs: 10_000 })
+            .catch(err => opts.onLog?.(`[${botId}] research_approval_answer(reject) failed: ${err instanceof Error ? err.message : String(err)}`))
+        } else {
+          bs.startResearchApprovedPerSession.set(sid, prevCount + 1)
+          client.request('research_approval_answer', {
+            id: p.id,
+            action: 'approve',
+            topic: p.topic,
+            initial_phase: p.initial_phase,
+            initial_hypothesis: p.initial_hypothesis,
+          }, { timeoutMs: 10_000 })
+            .then(r => opts.onLog?.(`[${botId}] research_approval auto-approved (id=${String(p.id)}, session=${sid.slice(0, 12)}, topic=${String(p.topic ?? '').slice(0, 80)}) → ${JSON.stringify(r)}`))
+            .catch(err => opts.onLog?.(`[${botId}] research_approval_answer failed: ${err instanceof Error ? err.message : String(err)}`))
+        }
       }
       opts.onNotification?.(n.method, n.params)
     })

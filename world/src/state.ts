@@ -25,6 +25,10 @@ export interface WorldState {
   chat_weekday?: number
   /** monthly 模式的目标交易日序号（正=从月初、负=从月末倒数，如 -1=月末）；缺省=1（月初）。 */
   chat_monthly_nth?: number
+  /** 最近一次 bot 实际发起 start_research 的日期（ISO yyyy-mm-dd）。仅 agent-triggered
+   *  模式使用：run.ts 用它计算 gapDays，判定今日是 forced/authorized；chat 后若 tool_trace
+   *  含 start_research，则次日 writeState 时更新为当日日期。null/undefined = 从未深研。 */
+  last_deep_research_date?: string
   /** PID of the world orchestrator process that owns this run. Stale across restarts
    *  if the process died without teardown — that's the signal external readers (e.g.
    *  the dashboard) use to detect orphan runs and self-heal them to 'aborted'. */

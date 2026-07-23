@@ -44,6 +44,15 @@ export interface WorldConfig {
   // 深度研究日的 per-bot chat 超时（外层 kill）。要覆盖引擎内研究预算（rl config limits.max_time_minutes）
   // + 常规决策时间。缺省 = max(researchDayTimeoutSeconds, 2400)。
   deepResearchTimeoutSeconds?: number
+  // 深度研究调度模式。
+  //   ordinal（默认，向后兼容）：按 deepResearchEvery 的第 N/2N/3N 个决策日强制深研。
+  //   agent-triggered：bot 自主决定哪天深研，硬上限 deepResearchMaxGapDays 交易日。
+  //   run.ts 侧据此计算 { authorized, forced, gapDays } 三态；message.ts 侧据此渲染
+  //   触发信号块 vs 强制块。
+  deepResearchMode?: 'ordinal' | 'agent-triggered'
+  // agent-triggered 模式下距上次深研的最大交易日 gap，达到即 forced（系统在 message
+  // 里下强制指令）。仅 agent-triggered 生效；缺省=4。
+  deepResearchMaxGapDays?: number
   // bot chat 频率（交易日步长）。1 = 每个交易日都唤起 bot（默认）。N > 1 = 每 N 个交易日唤起
   // 一次 bot chat（cursor 0, N, 2N, …），中间天系统侧 settle_pending_orders + close_my_day 仍
   // 按日推进，simulated_datetime 和 currentDateRef 同样每天更新——只是 bot 不被叫起。用于
@@ -239,6 +248,9 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const researchDayTimeoutSeconds = typeof raw.research_day_timeout_seconds === 'number' && raw.research_day_timeout_seconds > 0 ? Math.floor(raw.research_day_timeout_seconds) : Math.max(perBotTimeoutSeconds, 300)
   const deepResearchEvery = typeof raw.deep_research_every === 'number' && raw.deep_research_every >= 0 ? Math.floor(raw.deep_research_every) : 0
   const deepResearchTimeoutSeconds = typeof raw.deep_research_timeout_seconds === 'number' && raw.deep_research_timeout_seconds > 0 ? Math.floor(raw.deep_research_timeout_seconds) : Math.max(researchDayTimeoutSeconds, 2400)
+  const rawDrMode = typeof raw.deep_research_mode === 'string' ? raw.deep_research_mode.trim() : ''
+  const deepResearchMode: 'ordinal' | 'agent-triggered' = rawDrMode === 'agent-triggered' ? 'agent-triggered' : 'ordinal'
+  const deepResearchMaxGapDays = typeof raw.deep_research_max_gap_days === 'number' && raw.deep_research_max_gap_days >= 1 ? Math.floor(raw.deep_research_max_gap_days) : 4
   const chatStepDays = typeof raw.chat_step_days === 'number' && raw.chat_step_days >= 1 ? Math.floor(raw.chat_step_days) : 1
   const rawStepMode = typeof raw.chat_step_mode === 'string' ? raw.chat_step_mode.trim() : ''
   const chatStepMode: 'trading_days' | 'weekly' | 'monthly' = rawStepMode === 'weekly' || rawStepMode === 'monthly' ? rawStepMode : 'trading_days'
@@ -374,7 +386,7 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const skipClose = typeof raw.skip_close === 'boolean' ? raw.skip_close : undefined
   const skipChat = typeof raw.skip_chat === 'boolean' ? raw.skip_chat : undefined
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
 }
 
 export function loadWorldConfig(path: string): WorldConfig {

@@ -1,17 +1,19 @@
 research_loop: /home/rooot/.openclaw/research-loop/ts
-research_loop_rust_bin: /home/rooot/agent_invest_lab/vendor/research-loop-105d/rust/target/release/research-loop-rust2
-rl_config_base: trading-rl-config-rsloop-105d.json
+research_loop_rust_bin: /home/rooot/.openclaw/research-loop/rust/target/release/research-loop-rust2
+rl_config_base: trading-rl-config-rsloop-glm.json
 bots:
-  - bot105d
+  - bot105g
 replay:
   from: '2025-01-01'
   to: '2026-07-17'
 calendar: ../runtime/calendar.json
 concurrency: 1
-per_bot_timeout_seconds: 600
+per_bot_timeout_seconds: 900
 research_day_every: 0
 research_day_timeout_seconds: 900
-deep_research_every: 1
+deep_research_every: 0
+deep_research_mode: agent-triggered
+deep_research_max_gap_days: 4
 deep_research_timeout_seconds: 3900
 simworld_upstream_url: http://127.0.0.1:18078/mcp
 fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
@@ -1600,14 +1602,14 @@ simworld_tools:
     description: 检查 SimWorld Data API 是否可用。
 strategy_library_root: ../../strategies/index-products
 bot_assignments:
-  bot105d:
+  bot105g:
     strategy_id: multi_equity_high_v2
     buyable_fund_codes: *ref_0
-chat_step_mode: weekly
+chat_step_mode: trading_days
 chat_step_days: 1
 bot_models:
-  bot105d:
+  bot105g:
     provider: openai_compatible
     base_url: https://dd-ai-api.eastmoney.com/v1
-    model: qwen3.6-plus
+    model: glm-5.2
     api_key_from_openclaw: zai-coding-plan

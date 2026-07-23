@@ -55,6 +55,10 @@ export interface DailyMessageContext {
   // 系统在 chat 前预取的盘中实时行情块。仅同一天 14:30 一类实盘 OOS 决策注入；
   // 历史回测 / T+1 早盘跑昨日时为空，避免把 host 当天实时行情污染历史世界日。
   intradayMarketBlock?: string
+  // 「当日研究室简报」：单指数 run 按 strategy_id 路由到 res 研究室（宏观 res1 + 指数技术面 res14 常驻
+  // + 对口板块室）取每室规范主报最新一份拼成的 markdown，由 run.ts 的 assembleBriefing() 填充。
+  // 定位＝**参考信号（昨日盘面/regime/板块资金流解读）不是指令**。空/缺省 → 跳过整块。仅单指数 bot 注入。
+  briefing?: string
   // 末条 standing belief 的关键 horizon 上涨概率（t+5 / t+20 的 p_up），由 caller 从
   // buildBeliefContext 一并取出（同一次扫盘，不二次 IO）。用于「belief ↔ 仓位 言行一致」核对块：
   // bot 上次说看多却空仓 / 说看空却重仓 = 言行不一，每天硬拦。null/缺省（无历史 belief）→ 不核对。
@@ -65,7 +69,20 @@ export interface DailyMessageContext {
   //   开了 → fullRules/briefRules 的"研究模式全部禁用"措辞换成"仅限【深度研究日】"。
   // - deepResearchDay：本决策日是否深度研究日（第 N/2N/3N 个决策日）→ 注入【深度研究日】块。
   deepResearchEnabled?: boolean
+  /** 老字段：ordinal 模式的日历强制日。等价于 deepResearchForced（老 caller 保持兼容）。 */
   deepResearchDay?: boolean
+  /** 深研调度模式。'ordinal' 保持历史；'agent-triggered' 走 bot 自主 + 硬上限双档。 */
+  deepResearchMode?: 'ordinal' | 'agent-triggered'
+  /** 系统强制：本决策日必须 start_research，跳过 = 违反调度纪律。 */
+  deepResearchForced?: boolean
+  /** 系统授权：本决策日允许 start_research（forced=true 时同时授权）。agent-triggered 下几乎恒 true。 */
+  deepResearchAuthorized?: boolean
+  /** 距上次深研的交易日 gap（含今日的偏移；MAX_SAFE_INTEGER = 从未深研过）。 */
+  deepResearchGapDays?: number
+  /** agent-triggered 模式硬上限，用于渲染 gap 剩余提示。 */
+  deepResearchMaxGapDays?: number
+  /** 上次深研日期（ISO），null/undefined = 从未。 */
+  deepResearchLastDate?: string
 }
 
 export function weekdayOf(isoDate: string): string {
@@ -754,17 +771,73 @@ ${bodies}${resSection}
 【市场研究报告 结束】`
 }
 
-// 深度研究日块：run.ts 判定「第 N/2N/3N 个决策日」后置 true。放在 message 尾部（recency 高），
-// 是 bot 当天允许调 start_research 的唯一授权信号——非深研日 message 里不会出现这个标注。
-function deepResearchBlock(isDeepResearchDay: boolean | undefined): string {
-  if (!isDeepResearchDay) return ''
+// 深度研究「强制块」：run.ts 判定 forced=true 时注入（ordinal 模式的 N 倍决策日；agent-triggered
+// 模式距上次深研 ≥ maxGapDays 交易日）。放在 message 尾部（recency 高），是 bot 当天必须调
+// start_research 的硬指令。
+function deepResearchBlock(forced: boolean | undefined, gapDays?: number, lastDate?: string): string {
+  if (!forced) return ''
+  const gapNote = typeof gapDays === 'number' && gapDays < Number.MAX_SAFE_INTEGER
+    ? `距上次深研已 ${gapDays} 交易日${lastDate ? `（上次=${lastDate}）` : ''}，达调度硬上限——`
+    : (lastDate ? `距上次深研（${lastDate}）已超硬上限——` : '本 run 尚未做过深研——')
   return `
 
-【深度研究日】今天是深度研究日——本决策日**必须调用一次 \`start_research\` 完成深度研究，这不是可选项**。深研窗口每隔多个决策日才有一次，今天跳过 = 本周期的深研机会作废，回复里没有深度研究结论 = 本日流程未完成：
-- **只研究一个命题**：从近期决策里挑最有价值的一个问题（主线持续性 / 某指数的趋势与资金结构 / 方法论某条规则是否有效），一次讲透，不摊开多个泛泛话题。
+【深度研究日 · 强制】${gapNote}今天**必须调用 \`start_research\` 一次、且只一次完成深度研究，这不是可选项**（第 2+ 次会被 botServer 硬拒回，同时算调度违规）。跳过（0 次）= 违反调度纪律（mem0_add 记 \`[调度违规, forced-day-skip, ${lastDate ?? 'never'}→今日]\`）；重复触发（≥2 次）= 违反调度纪律（mem0_add 记 \`[调度违规, forced-day-double-fire]\`）：
+- **只研究一个命题**：从近期决策里挑最有价值的一个（主线持续性 / 某指数的趋势与资金结构 / 方法论某条规则是否有效），一次讲透，不摊开多个泛泛话题。
 - **数据边界与日常一致**：研究内仍然只有 simworld（PIT）与组合工具，不假设任何实时外部数据。
 - **结论必须落地**：研究结束后把「结论 → 对后续操作的具体影响」写进当日复盘，并 mem0_add 落库，供后续决策日直接引用。
 - **研究不得挤掉当日决策**：先做研究、让结论直接服务今天的仓位决策；若研究耗时逼近预算，先回来完成今天的决策与下单再收尾——漏掉调仓比研究写得不完美严重得多。`
+}
+
+// 深度研究「触发提示块」：agent-triggered 模式下 authorized-not-forced 日注入（forced 日走强制块，
+// 不叠加）。定位＝**软规则 + bot 自主判断**——列出经验触发条件供 bot 参考，不强凑；bot 综合判断
+// 值得深研就自主发起，无异常就正常复盘。
+function deepResearchTriggerBlock(ctx: {
+  authorized: boolean | undefined
+  forced: boolean | undefined
+  mode: 'ordinal' | 'agent-triggered' | undefined
+  gapDays?: number
+  maxGap?: number
+  lastDate?: string
+}): string {
+  if (!ctx.authorized || ctx.forced) return ''
+  if (ctx.mode !== 'agent-triggered') return ''
+  const gap = typeof ctx.gapDays === 'number' && ctx.gapDays < Number.MAX_SAFE_INTEGER ? ctx.gapDays : null
+  const max = ctx.maxGap ?? 4
+  const remaining = gap === null ? null : Math.max(0, max - gap)
+  const gapNote = gap === null
+    ? '本 run 尚未做过深研（今天可以是首次）'
+    : `距上次深研 ${gap} 交易日${ctx.lastDate ? `（上次=${ctx.lastDate}）` : ''}，硬上限 ${max}，还剩 ${remaining} 天缓冲`
+  return `
+
+【深研触发提示 · 授权可选】${gapNote}。今天**允许**调用 \`start_research\`，但**是否触发由你自主判断**——不强凑（"为触发而触发"是浪费）。
+
+**建议触发条件（软规则，任一命中即建议深研，多条共振更强）**：
+1. HS300 或组合基准**单日涨跌 ≥ ±2%**（或 ≥ ±2σ 短横异动）
+2. 组合从 **20 日高点回撤 ≥ 5%**
+3. 任一持仓 **5 日跌幅 ≥ 8%**（急跌需要检视）
+4. 状态机 top5 **变动 ≥ 2 席**（主线切换嫌疑）
+5. 上次深研 **p_up ≤ 0.35 或 ≥ 0.65** 的 T+1~T+3 跟进（强信号复核）
+6. 你综合判断的其他值得深研的情形（例如政策/消息面突变、方法论某条规则连错 2 次需要复盘）
+
+**判定要点**：
+- **数据你已经有**——上方 dailyContext / 市场研报块已经给了 HS300、组合 20d 回撤、持仓涨跌，自查即可，不必再拉。
+- **无异常就不发**——常规日按正常节奏做 settle 复核 + 状态机审阅 + 必要下单即可，不必为凑深研强上一课；系统会在 gap 达 ${max} 交易日时切换到"强制"档兜底。
+- **强度选择**：真触发就按【深度研究日】的四点纪律执行（只研究一个命题、数据边界、结论落地、不挤掉决策）。**单日硬上限=1 次**——第 2 次 \`start_research\` 会被 botServer 硬拒回并记 \`[调度违规, soft-day-double-fire]\`，值得研究的第二个命题请留到下个交易日。`
+}
+
+// 「当日研究室简报」块：单指数 run 用。内容由 run.ts 的 assembleBriefing() 按 strategy_id 路由拼好
+// 传进来（res1 宏观 + res14 指数技术面 + 对口板块室）。定位＝参考信号，不覆盖 METHODOLOGY 的仓位/闸门
+// 决策。空串 → 跳过整块（宽基/缺失时也可能非空，只是少一个板块室）。
+function briefingBlock(briefing?: string): string {
+  if (!briefing || !briefing.trim()) return ''
+  return `\n\n【当日研究室简报（系统预读 · 昨日盘面/宏观/板块解读）】
+下面是各研究室对**最近盘面、宏观 regime 与对口板块资金流**的当期解读，作为你今天择时的**参考信号**：
+- 这是**参考信号，不是指令**——仓位/风险闸门/配置纪律仍以你的 METHODOLOGY 为准，简报只帮你校准方向与力度；
+- 段头标「报告日 X · 距今 N 天」；标了「已过期」的（如中美室停更）**自行判断时效**，别把旧结论当当日事实；
+- 结合你自己的 PIT 行情与持仓做决策，简报与你的判断冲突时，写清理由后按你的方法论执行。
+
+${briefing.trim()}
+【当日研究室简报 结束】`
 }
 
 export function renderDailyMessage(ctx: DailyMessageContext): string {
@@ -779,6 +852,8 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   } else {
     pipelineBlock = injectedSkillsBlock(ctx.injectedSkills)
   }
+  // 当日研究室简报：仅单指数 run 注入（multi-fund 走上面的 marketReportsBlock，不叠加）。
+  const briefing = kind === 'multi-fund' ? '' : briefingBlock(ctx.briefing)
   const contextBlocks = dailyContextBlocks(ctx.dailyContext)
   // 可买池每天都播报；single-fund / multi-fund 文案分两套，复用上面的 kind（解耦池子大小与 bot 决策风格）。
   const buyable = ctx.buyableFundCodes && ctx.buyableFundCodes.length
@@ -791,11 +866,21 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   // Belief block 由 caller (run.ts) 先 await buildBeliefContext(...) 渲染成完整字符串塞进来；
   // 已自带 header / schema 要求 / 21d 校准反馈，本函数只前置两个换行做分隔即可。空/缺省 → 跳过。
   const beliefStr = ctx.beliefBlock && ctx.beliefBlock.trim() ? `\n\n${ctx.beliefBlock.trim()}` : ''
-  const deepResearch = deepResearchBlock(ctx.deepResearchDay)
+  // 强制块：forced 优先取 deepResearchForced（新 caller），回退 deepResearchDay（老 caller/ordinal）。
+  const forced = ctx.deepResearchForced ?? ctx.deepResearchDay
+  const deepResearch = deepResearchBlock(forced, ctx.deepResearchGapDays, ctx.deepResearchLastDate)
+  const deepResearchTrigger = deepResearchTriggerBlock({
+    authorized: ctx.deepResearchAuthorized,
+    forced,
+    mode: ctx.deepResearchMode,
+    gapDays: ctx.deepResearchGapDays,
+    maxGap: ctx.deepResearchMaxGapDays,
+    lastDate: ctx.deepResearchLastDate,
+  })
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -808,5 +893,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
 }

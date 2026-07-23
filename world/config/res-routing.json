@@ -1,0 +1,32 @@
+{
+  "_doc": "盘中简报路由：strategy_id → 研究室。always 常驻室对所有单指数 run 注入；sectors 为对口板块室（每 strategy 最多 1 个）；broad 宽基只吃 always。改这里即可增删策略，无需改代码。",
+  "always": ["res1", "res14"],
+  "staleDays": 7,
+  "rooms": {
+    "res1":  { "name": "宏观·市场环境",        "dir": "workspace-res1/memory",  "pattern": "market_env" },
+    "res5":  { "name": "中美·隔夜美股A股传导",  "dir": "workspace-res5/memory",  "pattern": "us_transmit" },
+    "res6":  { "name": "硬科技(TMT)",           "dir": "workspace-res6/memory",  "pattern": "date" },
+    "res7":  { "name": "能源材料",              "dir": "workspace-res7/memory",  "pattern": "date" },
+    "res8":  { "name": "医药",                  "dir": "workspace-res8/memory",  "pattern": "date" },
+    "res9":  { "name": "大消费",                "dir": "workspace-res9/memory",  "pattern": "date" },
+    "res10": { "name": "金融地产",              "dir": "workspace-res10/memory", "pattern": "date" },
+    "res11": { "name": "周期资源",              "dir": "workspace-res11/memory", "pattern": "date" },
+    "res12": { "name": "高端制造",              "dir": "workspace-res12/memory", "pattern": "date" },
+    "res14": { "name": "指数技术面",            "dir": "workspace-res14/memory", "pattern": "date" }
+  },
+  "sectors": {
+    "semiconductor": "res6", "semiconductor_industry": "res6", "chip": "res6",
+    "telecom_tech": "res6", "cloud": "res6", "ai": "res6", "internet50": "res6",
+    "hstech": "res6", "nasdaq100": "res6", "shuangchuang": "res6",
+    "nev": "res7", "solar": "res7", "battery": "res7", "green_power": "res7",
+    "power": "res7", "power_grid": "res7",
+    "medical": "res8", "innodrug": "res8",
+    "baijiu": "res9", "liquor": "res9", "consumer800": "res9",
+    "bank": "res10", "securities": "res10", "insurance": "res10",
+    "gold_stocks": "res11", "gold_au9999": "res11", "chemical": "res11",
+    "rare_earth": "res11", "rare_metals": "res11",
+    "robot": "res12", "defense": "res12",
+    "sp500": "res5", "hsi": "res5", "hscei": "res5"
+  },
+  "broad": ["sse50", "zz1000", "zz500", "hs300", "bse50", "dividend"]
+}

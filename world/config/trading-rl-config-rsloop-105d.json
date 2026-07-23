@@ -1,0 +1,63 @@
+{
+  "model": {
+    "primary": {
+      "provider": "openai_compatible",
+      "model": "qwen3.6-plus",
+      "api_key_from_openclaw": "zai-coding-plan"
+    }
+  },
+  "llm": {
+    "chat_max_tokens": 8000,
+    "chat_temperature": 0.3,
+    "chat_max_tool_iterations": 500,
+    "skill_max_tokens": 4000,
+    "skill_temperature": 0.3,
+    "compact_max_tokens": 2000,
+    "compact_temperature": 0.1
+  },
+  "timeouts": {
+    "chat_llm": 180,
+    "compact_llm": 60,
+    "skill_llm": 60
+  },
+  "tools": {
+    "deny": [
+      "bash",
+      "ls",
+      "glob",
+      "grep",
+      "write_file",
+      "web_search",
+      "web_fetch",
+      "spawn_skill_agent",
+      "check_task",
+      "wait_task",
+      "kill_task",
+      "ask_user",
+      "submit_post"
+    ],
+    "chat_auto_activate_deferred": true
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "plugins": {
+    "browser": {
+      "enabled": false
+    },
+    "memory-mem0": {
+      "enabled": true
+    }
+  },
+  "limits": {
+    "max_total_turns": 32,
+    "max_time_minutes": 40,
+    "token_budget": 3500000,
+    "compact_threshold_pct": 60,
+    "min_sources_for_dig": 3,
+    "context_window": 1000000
+  },
+  "dashboard": {
+    "enabled": false
+  }
+}

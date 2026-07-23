@@ -17,6 +17,7 @@ import { createSimworldProxy, HIDDEN_TOOLS, type SimworldProxyHandle } from './s
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
 import { createStrategyServer, type StrategyServerHandle, runSqlite, sqlStr } from './strategy-server/server.ts'
 import { fetchIntradayQuoteBlock } from './intraday-market.ts'
+import { assembleBriefing } from './intraday-briefing.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
 import * as P from './paths.ts'
@@ -720,7 +721,7 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
   return p
 }
 
-interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number }
+interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean }
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -780,15 +781,20 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
       Array.isArray(r.tool_trace) ? r.tool_trace.length : 0,
       b.server.toolCallCount - toolCallStart,
     )
+    const deepResearchFired = Array.isArray(r.tool_trace) && r.tool_trace.some((ev: unknown) => {
+      if (!ev || typeof ev !== 'object') return false
+      const o = ev as Record<string, unknown>
+      return o.type === 'tool_start' && o.name === 'start_research'
+    })
     if (toolCalls === 0) {
       const reason = r.chat_error ? `no tool calls; chat_error: ${r.chat_error}` : 'no tool calls (chat returned without invoking any tool)'
-      const s: DayBotStatus = { bot: b.botId, status: 'error', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, error: reason, toolCalls }
+      const s: DayBotStatus = { bot: b.botId, status: 'error', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, error: reason, toolCalls, deepResearchFired }
       writeStatus(s.status, { iterations: s.iterations, usage: s.usage, error: s.error, finishedAt: new Date().toISOString() })
       log(worldRoot, runId, `bot ${b.botId}: chat made no tool calls — failing the day${r.chat_error ? ` (chat_error: ${r.chat_error})` : ''}`)
       return s
     }
     if (r.chat_error) log(worldRoot, runId, `bot ${b.botId}: chat ended with chat_error but ${toolCalls} tool call(s) made — advancing (${r.chat_error})`)
-    const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, toolCalls }
+    const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, toolCalls, deepResearchFired }
     writeStatus(s.status, { iterations: s.iterations, usage: s.usage, finishedAt: new Date().toISOString() })
     return s
   } catch (err) {
@@ -888,6 +894,47 @@ export function isDeepResearchDay(ordinal: number, deepResearchEvery: number): b
   return deepResearchEvery > 0 && ordinal % deepResearchEvery === 0
 }
 
+/** 交易日 gap：dates[] 里 fromDate → toDate 的间隔（不含 fromDate 当日）。fromDate 不在 dates
+ *  中或 toDate 更早 → 返回 Number.MAX_SAFE_INTEGER，触发 forced（相当于"从未深研过"）。 */
+export function tradingDaysBetween(dates: string[], fromDate: string | undefined, toDate: string): number {
+  if (!fromDate) return Number.MAX_SAFE_INTEGER
+  const i = dates.indexOf(fromDate)
+  const j = dates.indexOf(toDate)
+  if (i < 0 || j < 0 || j < i) return Number.MAX_SAFE_INTEGER
+  return j - i
+}
+
+export interface DeepResearchStateInput {
+  mode: 'ordinal' | 'agent-triggered'
+  ordinal: number
+  every: number
+  maxGapDays: number
+  todayDate: string
+  lastDeepDate?: string
+  tradingDates: string[]
+}
+export interface DeepResearchStateOut {
+  /** 是否允许 bot 今日调 start_research（message.ts 是否渲染触发块或强制块）。 */
+  authorized: boolean
+  /** 是否强制（forced 日不做 = 违反调度纪律；authorized-not-forced 是可选）。 */
+  forced: boolean
+  /** 距上次深研的交易日 gap（含今日的偏移）；从未深研过 = MAX_SAFE_INTEGER。 */
+  gapDays: number
+}
+
+/** 三分支判定：
+ *   ordinal：authorized = forced = isDeepResearchDay(ordinal, every)；等价老行为。
+ *   agent-triggered：authorized 恒 true；forced = (gapDays >= maxGapDays) —— 达上限系统强制。 */
+export function computeDeepResearchState(inp: DeepResearchStateInput): DeepResearchStateOut {
+  const gapDays = tradingDaysBetween(inp.tradingDates, inp.lastDeepDate, inp.todayDate)
+  if (inp.mode === 'agent-triggered') {
+    return { authorized: true, forced: gapDays >= inp.maxGapDays, gapDays }
+  }
+  const isDR = isDeepResearchDay(inp.ordinal, inp.every)
+  return { authorized: isDR, forced: isDR, gapDays }
+}
+
+
 /** ISO 周锚：返回该日期所在自然周的周一（YYYY-MM-DD）。同一周的任意一天得到同一字符串。 */
 export function isoWeekKey(isoDate: string): string {
   const d = new Date(isoDate + 'T00:00:00Z')
@@ -968,6 +1015,8 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   const researchDayTimeoutMs = config.researchDayTimeoutSeconds * 1000
   const deepResearchEvery = config.deepResearchEvery ?? 0
   const deepResearchTimeoutMs = (config.deepResearchTimeoutSeconds ?? Math.max(config.researchDayTimeoutSeconds, 2400)) * 1000
+  const deepResearchMode: 'ordinal' | 'agent-triggered' = config.deepResearchMode ?? 'ordinal'
+  const deepResearchMaxGapDays = config.deepResearchMaxGapDays ?? 4
   // dead = bot server 进程已经退出，无可挽救 → 加入 brokenBots，剩余日子直接 writeSkippedDeadBot
   // 跳过。timeout 不进这个集合：当天记 timeout，但下一天循环顶部会 restartBot 重启该 bot 的
   // server（kill 老的、spawn 新的），这样后续日子能恢复正常 chat。重启的必要性：research-loop-ts
@@ -1081,12 +1130,29 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // 深度研究日（第 N/2N/3N 个决策日）：给最宽预算（覆盖引擎内研究 budget + 常规决策），
       // 并让 message.ts 注入【深度研究日】授权块。deepResearchEvery=0 时恒 false（历史行为）。
       const chatOrdinal = chatDayOrdinal(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
-      const isDeepResearch = isDeepResearchDay(chatOrdinal, deepResearchEvery)
-      const timeoutMs = isDeepResearch ? deepResearchTimeoutMs : (useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs)
+      const stateNow = readState(worldRoot, runId)
+      const drState = computeDeepResearchState({
+        mode: deepResearchMode,
+        ordinal: chatOrdinal,
+        every: deepResearchEvery,
+        maxGapDays: deepResearchMaxGapDays,
+        todayDate: date,
+        lastDeepDate: stateNow.last_deep_research_date,
+        tradingDates: dates,
+      })
+      const isDeepResearch = drState.forced
+      const isDeepAuthorized = drState.authorized
+      // agent-triggered 下 authorized-not-forced 也给中间档预算：允许 bot 若真选择研究不被 900s 卡死。
+      // 常规日 timeout 保持 perBotTimeoutMs（用户明确不加压）。
+      const timeoutMs = drState.forced
+        ? deepResearchTimeoutMs
+        : (isDeepAuthorized && deepResearchMode === 'agent-triggered'
+            ? Math.max(Math.floor(deepResearchTimeoutMs / 2), perBotTimeoutMs * 2)
+            : (useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs))
       const stepTag = config.chatStepMode === 'weekly' ? `[weekly@dow${config.chatWeekday ?? 1}]`
         : config.chatStepMode === 'monthly' ? `[monthly#${config.chatMonthlyNth ?? 1}]`
         : (config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : '')
-      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', isDeepResearch ? `[deep-research#${chatOrdinal}]` : '', periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
+      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', drState.forced ? `[deep-research#forced gap=${drState.gapDays}]` : (isDeepAuthorized && deepResearchMode === 'agent-triggered' ? `[deep-research#authorized gap=${drState.gapDays}]` : ''), periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
       log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
@@ -1173,6 +1239,24 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const marketReports = kind === "multi-fund"
           ? readMarketReportsForInjection(P.fundDbFile(worldRoot), date)
           : undefined
+        // 当日研究室简报：仅单指数 run（非 reporter、非多基金），按本 run 的 strategy_id 路由到 res 研究室，
+        // 取每室规范主报最新一份拼成参考信号。res 根 = <repoRoot>/.openclaw（worldRoot=<world>/runtime，
+        // 故 ../../.openclaw = /home/rooot/.openclaw），路由表在 config/res-routing.json。
+        let briefing = ""
+        if (!config.reporterMode && kind === "single-fund") {
+          const strategyId = config.botAssignments?.[b.botId]?.strategyId
+          try {
+            briefing = assembleBriefing({
+              strategyId,
+              resRoot: resolve(worldRoot, "..", "..", ".openclaw"),
+              routingPath: join(worldRoot, "..", "config", "res-routing.json"),
+              asOfDate: date,
+            })
+            if (briefing) log(worldRoot, runId, "[briefing] bot " + b.botId + " " + date + ": injected (strategy=" + (strategyId ?? "?") + ", " + briefing.length + " chars)")
+          } catch (e) {
+            log(worldRoot, runId, "[briefing] bot " + b.botId + " " + date + ": skipped: " + (e as Error).message)
+          }
+        }
         let intradayMarketBlock = ""
         if (!config.reporterMode && kind === "multi-fund" && marketReports) {
           const rt = await fetchIntradayQuoteBlock({ repoRoot: resolve(worldRoot, "..", ".."), date, reports: marketReports })
@@ -1197,6 +1281,8 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           // 系统预读注入三份市场研报：仅多基金权益 bot（multi-fund，bot101/102/103）——与 message.ts
           // 的注入分流口径一致；single-fund / multi-asset 不读、不注入，省一次 DB 查询。
           marketReports,
+          // 当日研究室简报：仅单指数 run 非空（message.ts 也对 multi-fund 门控，双保险）。
+          briefing,
           intradayMarketBlock,
           dailyContext,
           historyWindow,
@@ -1207,8 +1293,14 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           tradingDaysTotal: setupRes.tradingDates.length,
           // 深度研究实验：enabled = run 级（措辞从"研究模式禁用"换成"仅限深研日"）；
           // deepResearchDay = 本决策日注入【深度研究日】授权块。every=0 时两者恒 false/undefined。
-          deepResearchEnabled: deepResearchEvery > 0,
+          deepResearchEnabled: deepResearchEvery > 0 || deepResearchMode === 'agent-triggered',
           deepResearchDay: isDeepResearch,
+          deepResearchMode,
+          deepResearchForced: drState.forced,
+          deepResearchAuthorized: drState.authorized,
+          deepResearchGapDays: drState.gapDays,
+          deepResearchMaxGapDays,
+          deepResearchLastDate: stateNow.last_deep_research_date,
         })
         if (brokenBots.has(b.botId)) return writeSkippedDeadBot(worldRoot, runId, date, message, b)
         return chatOneBot(worldRoot, runId, date, message, timeoutMs, b)
@@ -1260,7 +1352,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         log(worldRoot, runId, `day ${date} done: [skip-chat] settle/close only`)
       }
       const st = readState(worldRoot, runId)
-      writeState(worldRoot, runId, { ...st, cursor: cursor + 1, updated_at: new Date().toISOString() })
+      // agent-triggered 下：若任一 bot 当日调了 start_research → 更新 last_deep_research_date。
+      // ordinal 模式：仍按 forced 日无条件更新（bot 不调也算走过一个深研窗口，避免下一日 gap 累加）。
+      const fired = statuses.some(s => s.deepResearchFired === true)
+      const nextLastDeep = fired ? date : st.last_deep_research_date
+      writeState(worldRoot, runId, { ...st, cursor: cursor + 1, updated_at: new Date().toISOString(), last_deep_research_date: nextLastDeep })
+      if (fired) log(worldRoot, runId, `day ${date}: start_research fired — last_deep_research_date <- ${date}`)
     }
     await teardown(worldRoot, runId, setupRes, 'done', days)
   } catch (err) {

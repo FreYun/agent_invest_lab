@@ -8,10 +8,12 @@ replay:
   to: '2026-07-17'
 calendar: ../runtime/calendar.json
 concurrency: 1
-per_bot_timeout_seconds: 600
+per_bot_timeout_seconds: 900
 research_day_every: 0
 research_day_timeout_seconds: 900
-deep_research_every: 1
+deep_research_every: 0
+deep_research_mode: agent-triggered
+deep_research_max_gap_days: 4
 deep_research_timeout_seconds: 3900
 simworld_upstream_url: http://127.0.0.1:18078/mcp
 fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
@@ -1603,7 +1605,7 @@ bot_assignments:
   bot105d:
     strategy_id: multi_equity_high_v2
     buyable_fund_codes: *ref_0
-chat_step_mode: weekly
+chat_step_mode: trading_days
 chat_step_days: 1
 bot_models:
   bot105d:
