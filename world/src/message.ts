@@ -66,7 +66,8 @@ export interface DailyMessageContext {
   // 深度研究实验（deep_research_every > 0 的 run）：
   // - deepResearchEnabled：run 级开关。research-loop 的工具集是进程级静态的——rl_config_base 放开
   //   deny 后 start_research 等工具**每天**都挂在工具列表里，只能靠 message 措辞门控使用时机。
-  //   开了 → fullRules/briefRules 的"研究模式全部禁用"措辞换成"仅限【深度研究日】"。
+  //   开了 → fullRules/briefRules 的"研究模式全部禁用"措辞换成"以尾部调度块为准"
+  //   （【深度研究日 · 强制】必须调 / 【深研触发提示 · 授权可选】自主判断 / 都没有则禁止）。
   // - deepResearchDay：本决策日是否深度研究日（第 N/2N/3N 个决策日）→ 注入【深度研究日】块。
   deepResearchEnabled?: boolean
   /** 老字段：ordinal 模式的日历强制日。等价于 deepResearchForced（老 caller 保持兼容）。 */
@@ -123,7 +124,7 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
 【决策框架】请参考你的 **AGENTS.md**（已注入到 system prompt 的 \`## AGENTS.md\` section）——这是你的角色定位、决策风格和操作边界的总纲；再参考 **METHODOLOGY.md**（\`## METHODOLOGY.md\` section）——这是本轮 assignment 绑定的 active 产品策略，定义当前产品看什么信号、按什么规则下单。
 
 【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。注意：mem0_search / mem0_add / list_skills / load_skill 是裸名工具，**不带 mcp__ 前缀**（\`mcp__simworld_data__mem0_search\` 这种名字不存在，调了必报错）。${deepResearchEnabled
-    ? '文件读写、web_fetch、bash、子代理（spawn_skill_agent）全部禁用——调用会被直接拒。研究模式工具（start_research 等）虽在工具列表里，但**只允许在明确标注【深度研究日】的决策日使用**，其余日子调用属于违规。'
+    ? '文件读写、web_fetch、bash、子代理（spawn_skill_agent）全部禁用——调用会被直接拒。研究模式工具（start_research 等）虽在工具列表里，但使用时机以 message 尾部的调度块为准：标注【深度研究日 · 强制】= 今天必须调用一次；标注【深研触发提示 · 授权可选】= 允许调用、是否触发由你自主判断；两个标注都没有 = 今天禁止调用。'
     : '文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。'}
 
 【skill 体系】list_skills 看本 bot 装了哪些可加载的研究/判断框架，load_skill <name>（参数名 \`skill_id\`，传 skill 目录名）把 skill 内容直接载入当前对话当思考脚手架。**如果你的 METHODOLOGY 顶部标了「技能驱动」判断管线，每个决策日必须先按它列的顺序 load_skill 把那几个 skill 读进来照做，再做判断和下单——没 load 就凭印象决策 = 没按流程。** 不确定本 bot 装了哪些就先 list_skills 确认。
@@ -139,7 +140,7 @@ function briefRules(date: string, weekday: string, botId: string, deepResearchEn
   return `当前世界日期：${date}（${weekday}）。
 牢记：你的终极目标是追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
 你的 bot_id = **${botId}**——所有 portfolio_* / mcp__strategy_mcp__update_my_strategy 工具的 \`bot_id\` 参数都按字面量传 \`"${botId}"\`（proxy 不会自动注入，传 "me" / "self" / 空串都会被服务端按字符串匹配判成"无账户"）。
-可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。${deepResearchEnabled ? '研究模式工具（start_research 等）只允许在明确标注【深度研究日】的决策日使用——今天若没有该标注，禁止调用。' : ''}
+可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。${deepResearchEnabled ? '研究模式工具（start_research 等）使用时机以 message 尾部调度块为准：【深度研究日 · 强制】= 必须调用一次；【深研触发提示 · 授权可选】= 允许调用、由你自主判断；都没有 = 禁止调用。' : ''}
 
 今天的节奏（按顺序）：
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
@@ -507,6 +508,14 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
 // chat 都 splice），daily message 不重复注入正文，只附一段短提示告诉 bot：按 methodology 决策，
 // 发现失效用 mcp__strategy_mcp__update_my_strategy 重写。Day 1 / Day N 文案略有差别——Day 1 强调"直接按它交易"，
 // Day N 只一行 reminder。
+// 会话边界块：一次会话只处理一个交易日。曾观察到 bot 在 Day N 会话内自我推演 Day N+1
+// （虚构次日行情继续"日度决策"），既污染 reply 提取（reply 取最后一条 assistant 消息）
+// 又破坏逐日回放语义。放在 message 尾部；Day-N 复盘日仍让 coherence/review 收尾
+// （"复盘是收工前最后一条硬约束"的既有契约不动）。
+const CHAT_BOUNDARY = `
+
+【会话边界】本次会话只处理**当前世界日期**这一个交易日。完成当日决策 / 复盘 / mem0_add 后即收尾结束，**禁止推演、模拟或预写任何未来日期的决策**（如写出"日度决策 <次日日期>"再继续操作）——下一交易日的行情与消息由系统在下次会话注入，自行虚构未来日 = 严重违规。`
+
 const METHODOLOGY_DAY1_HINT = `
 
 【你的 active methodology 已就位】你的 system prompt 里的 \`## METHODOLOGY.md\` section 是本轮 assignment 绑定的 active 产品策略，不是你的固定人设。
@@ -776,12 +785,13 @@ ${bodies}${resSection}
 // start_research 的硬指令。
 function deepResearchBlock(forced: boolean | undefined, gapDays?: number, lastDate?: string): string {
   if (!forced) return ''
-  const gapNote = typeof gapDays === 'number' && gapDays < Number.MAX_SAFE_INTEGER
-    ? `距上次深研已 ${gapDays} 交易日${lastDate ? `（上次=${lastDate}）` : ''}，达调度硬上限——`
-    : (lastDate ? `距上次深研（${lastDate}）已超硬上限——` : '本 run 尚未做过深研——')
+  const gapFinite = typeof gapDays === 'number' && gapDays < Number.MAX_SAFE_INTEGER
+  const gapNote = lastDate
+    ? (gapFinite ? `距上次深研（${lastDate}）已 ${gapDays} 交易日，达调度硬上限——` : `距上次深研（${lastDate}）已超硬上限——`)
+    : (gapFinite ? `本 run 起点至今 ${gapDays} 交易日尚未深研，达调度硬上限——` : '本 run 尚未做过深研，已达调度硬上限——')
   return `
 
-【深度研究日 · 强制】${gapNote}今天**必须调用 \`start_research\` 一次、且只一次完成深度研究，这不是可选项**（第 2+ 次会被 botServer 硬拒回，同时算调度违规）。跳过（0 次）= 违反调度纪律（mem0_add 记 \`[调度违规, forced-day-skip, ${lastDate ?? 'never'}→今日]\`）；重复触发（≥2 次）= 违反调度纪律（mem0_add 记 \`[调度违规, forced-day-double-fire]\`）：
+【深度研究日 · 强制】${gapNote}今天**必须调用 \`start_research\` 一次、且只一次完成深度研究，这不是可选项**（单日上限 1 次，第 2 次调用会被系统拒绝）。跳过 = 违反调度纪律（mem0_add 记 \`[调度违规, forced-day-skip, ${lastDate ?? 'run起点'}→今日]\`）：
 - **只研究一个命题**：从近期决策里挑最有价值的一个（主线持续性 / 某指数的趋势与资金结构 / 方法论某条规则是否有效），一次讲透，不摊开多个泛泛话题。
 - **数据边界与日常一致**：研究内仍然只有 simworld（PIT）与组合工具，不假设任何实时外部数据。
 - **结论必须落地**：研究结束后把「结论 → 对后续操作的具体影响」写进当日复盘，并 mem0_add 落库，供后续决策日直接引用。
@@ -804,9 +814,11 @@ function deepResearchTriggerBlock(ctx: {
   const gap = typeof ctx.gapDays === 'number' && ctx.gapDays < Number.MAX_SAFE_INTEGER ? ctx.gapDays : null
   const max = ctx.maxGap ?? 4
   const remaining = gap === null ? null : Math.max(0, max - gap)
-  const gapNote = gap === null
-    ? '本 run 尚未做过深研（今天可以是首次）'
-    : `距上次深研 ${gap} 交易日${ctx.lastDate ? `（上次=${ctx.lastDate}）` : ''}，硬上限 ${max}，还剩 ${remaining} 天缓冲`
+  // forced 日不走本块，故 gap === null（日历异常）在此不可达；留兜底文案防御。
+  const who = ctx.lastDate
+    ? `距上次深研 ${gap ?? '?'} 交易日（上次=${ctx.lastDate}）`
+    : `本 run 尚未做过深研（起点至今 ${gap ?? '?'} 交易日）`
+  const gapNote = `${who}，硬上限 ${max}，还剩 ${remaining ?? '?'} 天缓冲`
   return `
 
 【深研触发提示 · 授权可选】${gapNote}。今天**允许**调用 \`start_research\`，但**是否触发由你自主判断**——不强凑（"为触发而触发"是浪费）。
@@ -822,7 +834,7 @@ function deepResearchTriggerBlock(ctx: {
 **判定要点**：
 - **数据你已经有**——上方 dailyContext / 市场研报块已经给了 HS300、组合 20d 回撤、持仓涨跌，自查即可，不必再拉。
 - **无异常就不发**——常规日按正常节奏做 settle 复核 + 状态机审阅 + 必要下单即可，不必为凑深研强上一课；系统会在 gap 达 ${max} 交易日时切换到"强制"档兜底。
-- **强度选择**：真触发就按【深度研究日】的四点纪律执行（只研究一个命题、数据边界、结论落地、不挤掉决策）。**单日硬上限=1 次**——第 2 次 \`start_research\` 会被 botServer 硬拒回并记 \`[调度违规, soft-day-double-fire]\`，值得研究的第二个命题请留到下个交易日。`
+- **强度选择**：真触发就按【深度研究日】的四点纪律执行（只研究一个命题、数据边界、结论落地、不挤掉决策）。**单日硬上限=1 次**——第 2 次 \`start_research\` 会被系统拒绝，值得研究的第二个命题请留到下个交易日。`
 }
 
 // 「当日研究室简报」块：单指数 run 用。内容由 run.ts 的 assembleBriefing() 按 strategy_id 路由拼好
@@ -880,7 +892,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}${CHAT_BOUNDARY}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -893,5 +905,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${CHAT_BOUNDARY}${coherence}${review}\n`
 }

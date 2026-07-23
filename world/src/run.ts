@@ -894,11 +894,12 @@ export function isDeepResearchDay(ordinal: number, deepResearchEvery: number): b
   return deepResearchEvery > 0 && ordinal % deepResearchEvery === 0
 }
 
-/** 交易日 gap：dates[] 里 fromDate → toDate 的间隔（不含 fromDate 当日）。fromDate 不在 dates
- *  中或 toDate 更早 → 返回 Number.MAX_SAFE_INTEGER，触发 forced（相当于"从未深研过"）。 */
+/** 交易日 gap：dates[] 里 fromDate → toDate 的间隔（不含 fromDate 当日）。
+ *  fromDate 缺失（run 内从未深研）→ 锚定 dates[0] 起算：Day1 gap=0、逐日 +1，
+ *  maxGap=4 时最迟第 5 个交易日才 forced（Day1 不强制）。
+ *  日期不在 dates 中或次序颠倒 → MAX_SAFE_INTEGER（数据异常，宁可 forced 兜底）。 */
 export function tradingDaysBetween(dates: string[], fromDate: string | undefined, toDate: string): number {
-  if (!fromDate) return Number.MAX_SAFE_INTEGER
-  const i = dates.indexOf(fromDate)
+  const i = dates.indexOf(fromDate ?? dates[0])
   const j = dates.indexOf(toDate)
   if (i < 0 || j < 0 || j < i) return Number.MAX_SAFE_INTEGER
   return j - i
@@ -918,7 +919,8 @@ export interface DeepResearchStateOut {
   authorized: boolean
   /** 是否强制（forced 日不做 = 违反调度纪律；authorized-not-forced 是可选）。 */
   forced: boolean
-  /** 距上次深研的交易日 gap（含今日的偏移）；从未深研过 = MAX_SAFE_INTEGER。 */
+  /** 距上次深研的交易日 gap；从未深研过 = 距 run 首个交易日的 gap（Day1=0）。
+   *  仅当日期不在交易日历中（数据异常）才为 MAX_SAFE_INTEGER。 */
   gapDays: number
 }
 
@@ -1142,8 +1144,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       })
       const isDeepResearch = drState.forced
       const isDeepAuthorized = drState.authorized
-      // agent-triggered 下 authorized-not-forced 也给中间档预算：允许 bot 若真选择研究不被 900s 卡死。
-      // 常规日 timeout 保持 perBotTimeoutMs（用户明确不加压）。
+      // agent-triggered 下 authorized 恒 true，因此除 forced 日（deepResearchTimeoutMs）外
+      // 每天都拿中间档 max(deep/2, perBot*2)——bot 自主触发深研时不被常规档卡死；不研究的日子
+      // 实际远用不满，成本影响小。ordinal 模式不受影响，仍走 extended/perBot 旧逻辑。
       const timeoutMs = drState.forced
         ? deepResearchTimeoutMs
         : (isDeepAuthorized && deepResearchMode === 'agent-triggered'
@@ -1352,8 +1355,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         log(worldRoot, runId, `day ${date} done: [skip-chat] settle/close only`)
       }
       const st = readState(worldRoot, runId)
-      // agent-triggered 下：若任一 bot 当日调了 start_research → 更新 last_deep_research_date。
-      // ordinal 模式：仍按 forced 日无条件更新（bot 不调也算走过一个深研窗口，避免下一日 gap 累加）。
+      // 若任一 bot 当日实际调了 start_research → 更新 last_deep_research_date（gap 归零）。
+      // bot 没调（含 forced 日跳过）则不更新，gap 继续累加、次日仍 forced——调度自愈。
+      // ordinal 模式不读 gap（forced 由 ordinal 决定），该字段只作记录。
       const fired = statuses.some(s => s.deepResearchFired === true)
       const nextLastDeep = fired ? date : st.last_deep_research_date
       writeState(worldRoot, runId, { ...st, cursor: cursor + 1, updated_at: new Date().toISOString(), last_deep_research_date: nextLastDeep })
