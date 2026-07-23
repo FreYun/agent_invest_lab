@@ -2475,6 +2475,17 @@ async def portfolio_init_my_account(
                 (bot_id, run_id, run_id),
             )
             cleaned["fund_bot_orders"] = cur.rowcount
+            # 其它 run 遗留的本 bot pending 单：账户即将清零重建，若留着会在 T+1 被
+            # settle 进新账户（settle_pending_fund_orders 按 bot_id 扫、不分 run——
+            # live 续跑依赖这个跨 run 结算语义，不能在 settle 侧加过滤）。这里改
+            # cancelled 并盖 settle_run_id 留痕，不物理删，历史 run 仍可回看。
+            # live 续跑不走 force 分支，隔夜单不受影响。
+            cur = conn.execute(
+                "UPDATE fund_bot_orders SET status='cancelled', settle_run_id=? "
+                "WHERE bot_id=? AND status='pending'",
+                (run_id, bot_id),
+            )
+            cleaned["stale_pending_orders_cancelled"] = cur.rowcount
             # accounts 表 PRIMARY KEY 是 bot_id（不是 (bot_id, run_id)），所以一个 bot
             # 只能有一行。下面的 INSERT OR REPLACE 会把这一行刷成本 run 的初始状态。
             # 这意味着旧 run 在结束后 accounts 行被本 run 覆盖，dashboard 查老 run 的
