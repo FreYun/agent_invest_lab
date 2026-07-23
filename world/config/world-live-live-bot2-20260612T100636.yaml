@@ -13,7 +13,7 @@ research_day_timeout_seconds: 600
 simworld_upstream_url: http://127.0.0.1:18078/mcp
 fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
 buyable_fund_codes:
-- 012857
+- '012857'
 simworld_tools:
 - name: fund_top_holdings
   description: 基金前十大重仓股。
@@ -90,7 +90,7 @@ bot_assignments:
   bot2:
     strategy_id: consumer800
     buyable_fund_codes:
-    - 012857
+    - '012857'
 chat_step_mode: weekly
 chat_weekday: 1
 bot_models:

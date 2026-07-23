@@ -95,6 +95,6 @@ chat_step_days: 1
 bot_models:
   bot16:
     provider: openai_compatible
-    base_url: https://sd7o0ricc19oldoovnj30.apigateway-cn-beijing.volceapi.com/v1
-    model: Kimi-K2.6
-    api_key_from_openclaw: kimi-volc
+    base_url: https://dd-ai-api.eastmoney.com/v1
+    model: qwen3.5-plus
+    api_key_from_openclaw: zai-coding-plan

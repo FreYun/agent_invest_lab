@@ -13,7 +13,7 @@ research_day_timeout_seconds: 600
 simworld_upstream_url: http://127.0.0.1:18078/mcp
 fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
 buyable_fund_codes: &id001
-- 016186
+- '016186'
 simworld_tools:
 - name: fund_top_holdings
   description: 基金前十大重仓股。

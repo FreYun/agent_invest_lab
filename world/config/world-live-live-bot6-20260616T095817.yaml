@@ -13,7 +13,7 @@ research_day_timeout_seconds: 600
 simworld_upstream_url: http://127.0.0.1:18078/mcp
 fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py
 buyable_fund_codes: &id001
-- 005693
+- '005693'
 simworld_tools:
 - name: fund_top_holdings
   description: 基金前十大重仓股。
@@ -95,6 +95,6 @@ chat_step_days: 1
 bot_models:
   bot6:
     provider: openai_compatible
-    base_url: https://sd7o0ricc19oldoovnj30.apigateway-cn-beijing.volceapi.com/v1
-    model: Kimi-K2.6
-    api_key_from_openclaw: kimi-volc
+    base_url: https://dd-ai-api.eastmoney.com/v1
+    model: qwen3.5-plus
+    api_key_from_openclaw: zai-coding-plan
