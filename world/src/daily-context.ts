@@ -695,6 +695,54 @@ function computeBenchmarkMetrics(navSeries: number[]): BenchmarkMetrics | undefi
   return { return_pct, max_drawdown_pct: mdd, volatility_pct, sharpe_ratio, calmar_ratio, data_points: navSeries.length }
 }
 
+export interface BenchmarkDailyState {
+  lastDate: string
+  lastDayMovePct: number | null            // (close[n]-close[n-1])/close[n-1]*100；无前一日 → null
+  drawdownFromRecentHighPct: number | null // <=0；窗口内 peak→trough，复用 maxDrawdownPct
+}
+
+/** 从收盘序列（升序）算崩盘判定的两个标量。纯函数，便于单测。 */
+export function computeCrashSignalFromCloses(closes: { date: string; close: number }[]): BenchmarkDailyState | null {
+  if (closes.length === 0) return null
+  const last = closes[closes.length - 1]
+  const prev = closes.length >= 2 ? closes[closes.length - 2] : undefined
+  const lastDayMovePct = prev && prev.close > 0 ? (last.close - prev.close) / prev.close * 100 : null
+  const drawdownFromRecentHighPct = maxDrawdownPct(closes.map(c => c.close))
+  return { lastDate: last.date, lastDayMovePct, drawdownFromRecentHighPct }
+}
+
+function shiftIsoDaysBack(iso: string, n: number): string {
+  const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - n)
+  return d.toISOString().slice(0, 10)
+}
+
+/** 拉基准指数近 lookbackDays 交易日收盘（PIT：end_date = asOfDate 前一交易日），
+ *  返回崩盘判定标量。复用 fetchIndexBenchmark 的 market_index_quote 路径。best-effort。 */
+export async function fetchBenchmarkDailyState(opts: {
+  simworldUrl: string; code: string; asOfDate: string; lookbackDays?: number
+}): Promise<BenchmarkDailyState | null> {
+  const lookback = opts.lookbackDays ?? 60
+  const startDate = shiftIsoDaysBack(opts.asOfDate, lookback * 2) // 日历日预估，够覆盖 lookback 交易日
+  const simDt = `${opts.asOfDate} 15:00:00`
+  try {
+    const raw = await callSimworldTool(opts.simworldUrl, 'market_index_quote', {
+      market: 'cn',
+      symbols: [opts.code],
+      simulated_datetime: simDt,
+      start_date: startDate,
+      end_date: priorDay(opts.asOfDate),
+    }) as { items?: { 是否可用?: boolean; 行情记录?: { 日期?: string; 收盘?: number }[] }[] } | null
+    const item = raw?.items?.[0]
+    if (!item || !item['是否可用'] || !Array.isArray(item['行情记录'])) return null
+    const closes = item['行情记录']
+      .map(r => ({ date: String(r['日期'] ?? '').slice(0, 10), close: Number(r['收盘'] ?? 0) }))
+      .filter(r => r.date && r.close > 0)
+    return computeCrashSignalFromCloses(closes)
+  } catch {
+    return null
+  }
+}
+
 async function fetchIndexBenchmark(opts: {
   simworldUrl: string
   code: string
