@@ -197,6 +197,43 @@ test('runWorld: a chat that times out AFTER making tool calls still advances (�
   assert.match(readFileSync(P.runLogFile(worldRoot, 'rrelax'), 'utf8'), /chat timeout but 3 tool call\(s\) made before — will advance via 放松判定/)
   cleanup()
 })
+test('runWorld: per-day tool-call cap aborts a runaway chat and advances to the next day (postmortem r4 Day26 fix)', async () => {
+  // 复现Day26 一 session 跑 104+ tool call、写 8 天未来日 mem0 + 6 单实盘的失控模式。
+  // 世界侧硬闸门：默认非深研日 cap=40，poller 每 1s 采样 toolCallCount delta，越过 → server.shutdown()
+  // → chat rejects → catch 分支识别 capExceeded → status=timeout（触发 needsRestart 冷启新 server）+
+  // toolCalls>0（放松判定当日算已推进，close_my_day 正常收尾，cursor 前进）。次日跑正常 stub。
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
+  config.perBotTimeoutSeconds = 30
+  config.researchDayTimeoutSeconds = 30
+  // 默认 ordinal + every=0 → 每天 drState.forced=drState.authorized=false → 世界侧 cap=40
+  let spawnCount = 0
+  const start = (botId: string, _argv: string[]) => {
+    spawnCount += 1
+    // 第一次 spawn: hang + 一次发 50 个 tool.call notification → 1s 后 cap poller 命中 (50 > 40) → shutdown
+    // 第二次 spawn: 默认 reply → status=ok，用于验证 needsRestart 生效
+    const env: Record<string, string> = spawnCount === 1 ? { STUB_CHAT_MODE: 'hang', STUB_NOTIFY_TOOL_CALLS: '50' } : {}
+    return BotServer.start(botId, {
+      argv: [process.execPath, '--experimental-strip-types', STUB, '--bot-id', botId, '--workspace', `/shadow/${botId}`],
+      readyTimeoutMs: 5000,
+      env,
+    })
+  }
+  await runWorld({ worldRoot, config, runId: 'rcap', startBotServer: start })
+  const st = readState(worldRoot, 'rcap')
+  assert.equal(st.status, 'done', 'cap-aborted day advances via 放松判定 (toolCalls>0)，不 pause')
+  assert.equal(st.cursor, 2, 'cursor 前进到第二天末尾')
+  const day1 = JSON.parse(readFileSync(P.statusFile(worldRoot, 'rcap', '2024-03-14', 'bot1'), 'utf8'))
+  assert.equal(day1.status, 'timeout', 'cap-abort 记为 timeout（driver=needsRestart 语义）')
+  assert.match(String(day1.error), /cap exceeded/, 'error 里含 cap exceeded 说明来源')
+  const day2 = JSON.parse(readFileSync(P.statusFile(worldRoot, 'rcap', '2024-03-15', 'bot1'), 'utf8'))
+  assert.equal(day2.status, 'ok', 'day 2 冷启的新 server 上正常回复')
+  assert.equal(spawnCount, 2, 'day 1 timeout 后触发 needsRestart，day 2 冷启一次')
+  const runLog = readFileSync(P.runLogFile(worldRoot, 'rcap'), 'utf8')
+  assert.match(runLog, /tool-call cap exceeded on 2024-03-14/, '闸门触发写入 run log')
+  assert.match(runLog, /cap-abort finished on 2024-03-14/, '收尾也留痕')
+  cleanup()
+})
+
 
 test('runWorld writes a running status as soon as a bot chat is dispatched', async () => {
   const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14'] })
