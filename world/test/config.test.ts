@@ -248,3 +248,35 @@ test('loadWorldConfig validates strategy assignments fail-fast', () => {
   ])), /6-digit fund code/)
   rmSync(dir, { recursive: true, force: true })
 })
+
+test('loadWorldConfig 崩盘触发字段：缺省时安全默认', () => {
+  const p = tmpYaml(`
+research_loop: /opt/rl
+bots: [bot16d]
+replay: { from: "2025-01-02", to: "2025-06-28" }
+simworld_upstream_url: http://127.0.0.1:18078/mcp
+`)
+  const c = loadWorldConfig(p)
+  assert.equal(c.crashTriggerEnabled, false)
+  assert.equal(c.crashTriggerDailyMovePct, 3)
+  assert.equal(c.crashTriggerDrawdownPct, 8)
+  assert.deepEqual(c.crashTriggerBenchmark, { code: '000300.SH', name: '沪深300' })
+})
+
+test('loadWorldConfig 崩盘触发字段：显式覆盖', () => {
+  const p = tmpYaml(`
+research_loop: /opt/rl
+bots: [bot16d]
+replay: { from: "2025-01-02", to: "2025-06-28" }
+simworld_upstream_url: http://127.0.0.1:18078/mcp
+crash_trigger_enabled: true
+crash_trigger_daily_move_pct: 2.5
+crash_trigger_drawdown_pct: 10
+crash_trigger_benchmark: { code: "399989.SZ", name: "中证医疗" }
+`)
+  const c = loadWorldConfig(p)
+  assert.equal(c.crashTriggerEnabled, true)
+  assert.equal(c.crashTriggerDailyMovePct, 2.5)
+  assert.equal(c.crashTriggerDrawdownPct, 10)
+  assert.deepEqual(c.crashTriggerBenchmark, { code: '399989.SZ', name: '中证医疗' })
+})

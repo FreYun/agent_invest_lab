@@ -53,6 +53,13 @@ export interface WorldConfig {
   // agent-triggered 模式下距上次深研的最大交易日 gap，达到即 forced（系统在 message
   // 里下强制指令）。仅 agent-triggered 生效；缺省=4。
   deepResearchMaxGapDays?: number
+  // 崩盘阈值强制深研（默认关闭，开则不依赖 agent 自主判断）。基准指数出现
+  //   |单日涨跌%| >= crashTriggerDailyMovePct 或 距近高回撤 >= crashTriggerDrawdownPct
+  // 时，当日 forced 深研。基准默认沪深300，单指数 bot 应在 config 里改成自己的目标指数。
+  crashTriggerEnabled?: boolean
+  crashTriggerDailyMovePct?: number
+  crashTriggerDrawdownPct?: number
+  crashTriggerBenchmark?: { code: string; name: string }
   // bot chat 频率（交易日步长）。1 = 每个交易日都唤起 bot（默认）。N > 1 = 每 N 个交易日唤起
   // 一次 bot chat（cursor 0, N, 2N, …），中间天系统侧 settle_pending_orders + close_my_day 仍
   // 按日推进，simulated_datetime 和 currentDateRef 同样每天更新——只是 bot 不被叫起。用于
@@ -251,6 +258,13 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const rawDrMode = typeof raw.deep_research_mode === 'string' ? raw.deep_research_mode.trim() : ''
   const deepResearchMode: 'ordinal' | 'agent-triggered' = rawDrMode === 'agent-triggered' ? 'agent-triggered' : 'ordinal'
   const deepResearchMaxGapDays = typeof raw.deep_research_max_gap_days === 'number' && raw.deep_research_max_gap_days >= 1 ? Math.floor(raw.deep_research_max_gap_days) : 4
+  const crashTriggerEnabled = raw.crash_trigger_enabled === true
+  const crashTriggerDailyMovePct = typeof raw.crash_trigger_daily_move_pct === 'number' && raw.crash_trigger_daily_move_pct > 0 ? raw.crash_trigger_daily_move_pct : 3
+  const crashTriggerDrawdownPct = typeof raw.crash_trigger_drawdown_pct === 'number' && raw.crash_trigger_drawdown_pct > 0 ? raw.crash_trigger_drawdown_pct : 8
+  const ctb = raw.crash_trigger_benchmark
+  const crashTriggerBenchmark = (ctb && typeof ctb === 'object' && typeof ctb.code === 'string' && typeof ctb.name === 'string')
+    ? { code: ctb.code, name: ctb.name }
+    : { code: '000300.SH', name: '沪深300' }
   const chatStepDays = typeof raw.chat_step_days === 'number' && raw.chat_step_days >= 1 ? Math.floor(raw.chat_step_days) : 1
   const rawStepMode = typeof raw.chat_step_mode === 'string' ? raw.chat_step_mode.trim() : ''
   const chatStepMode: 'trading_days' | 'weekly' | 'monthly' = rawStepMode === 'weekly' || rawStepMode === 'monthly' ? rawStepMode : 'trading_days'
@@ -386,7 +400,7 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const skipClose = typeof raw.skip_close === 'boolean' ? raw.skip_close : undefined
   const skipChat = typeof raw.skip_chat === 'boolean' ? raw.skip_chat : undefined
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, crashTriggerDrawdownPct, crashTriggerBenchmark, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
 }
 
 export function loadWorldConfig(path: string): WorldConfig {
