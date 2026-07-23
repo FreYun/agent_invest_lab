@@ -9,7 +9,7 @@ import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
 import { buildShadowWorkspace } from './shadowWorkspace.ts'
 import { renderDailyMessage, botKindOf } from './message.ts'
-import { fetchDailyContext } from './daily-context.ts'
+import { fetchDailyContext, fetchBenchmarkDailyState } from './daily-context.ts'
 import { buildHistoryWindow } from './history-window/index.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
@@ -1151,6 +1151,21 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // 并让 message.ts 注入【深度研究日】授权块。deepResearchEvery=0 时恒 false（历史行为）。
       const chatOrdinal = chatDayOrdinal(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
       const stateNow = readState(worldRoot, runId)
+      let crashSignal: Parameters<typeof computeDeepResearchState>[0]['crashSignal']
+      if (config.crashTriggerEnabled) {
+        const st = await fetchBenchmarkDailyState({
+          simworldUrl: config.simworldUpstreamUrl,
+          code: config.crashTriggerBenchmark.code,
+          asOfDate: date,
+        }).catch(() => null)
+        if (st) crashSignal = {
+          dailyMovePct: st.lastDayMovePct,
+          drawdownPct: st.drawdownFromRecentHighPct,
+          dailyMoveThreshold: config.crashTriggerDailyMovePct,
+          drawdownThreshold: config.crashTriggerDrawdownPct,
+        }
+        log(worldRoot, runId, `crash-check ${date} bench=${config.crashTriggerBenchmark.code} move=${st?.lastDayMovePct?.toFixed(2) ?? 'n/a'}% dd=${st?.drawdownFromRecentHighPct?.toFixed(2) ?? 'n/a'}%`)
+      }
       const drState = computeDeepResearchState({
         mode: deepResearchMode,
         ordinal: chatOrdinal,
@@ -1159,6 +1174,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         todayDate: date,
         lastDeepDate: stateNow.last_deep_research_date,
         tradingDates: dates,
+        crashSignal,
       })
       const isDeepResearch = drState.forced
       const isDeepAuthorized = drState.authorized
@@ -1173,7 +1189,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       const stepTag = config.chatStepMode === 'weekly' ? `[weekly@dow${config.chatWeekday ?? 1}]`
         : config.chatStepMode === 'monthly' ? `[monthly#${config.chatMonthlyNth ?? 1}]`
         : (config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : '')
-      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', drState.forced ? `[deep-research#forced gap=${drState.gapDays}]` : (isDeepAuthorized && deepResearchMode === 'agent-triggered' ? `[deep-research#authorized gap=${drState.gapDays}]` : ''), periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
+      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', drState.forced ? `[deep-research#${isCrashForced(crashSignal) ? 'crash' : 'forced'} gap=${drState.gapDays}${isCrashForced(crashSignal) ? ` move=${crashSignal?.dailyMovePct?.toFixed(1) ?? '?'}% dd=${crashSignal?.drawdownPct?.toFixed(1) ?? '?'}%` : ''}]` : (isDeepAuthorized && deepResearchMode === 'agent-triggered' ? `[deep-research#authorized gap=${drState.gapDays}]` : ''), periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
       log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
