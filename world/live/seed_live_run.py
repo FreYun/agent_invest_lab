@@ -69,8 +69,20 @@ def seed_live_config(src_cfg_path, dst_cfg_path, dst_run_id):
         if t["name"] not in have:
             tools.append(t)
     cfg["simworld_tools"] = tools
+
+    # 纯数字字符串（基金代码，如 '006328'）必须强制加引号落盘：PyYAML 默认对带前导 0
+    # 的数字样字符串不加引号，而 node 的 js-yaml(YAML 1.2) 会把 006328 读成整数 6328，
+    # 导致 world config 校验 "buyable_fund_codes must be an array of 6-digit fund code strings" 失败。
+    class _QuoteDigitDumper(yaml.SafeDumper):
+        pass
+
+    def _repr_str(dumper, data):
+        style = "'" if data.isdigit() else None
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+    _QuoteDigitDumper.add_representer(str, _repr_str)
     with open(dst_cfg_path, "w") as f:
-        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        yaml.dump(cfg, f, Dumper=_QuoteDigitDumper, allow_unicode=True, sort_keys=False)
 
 
 def write_state_stub(dst_state_path, dst_run_id, bot, src_run_id):

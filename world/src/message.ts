@@ -514,7 +514,14 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
 // （"复盘是收工前最后一条硬约束"的既有契约不动）。
 const CHAT_BOUNDARY = `
 
-【会话边界】本次会话只处理**当前世界日期**这一个交易日。完成当日决策 / 复盘 / mem0_add 后即收尾结束，**禁止推演、模拟或预写任何未来日期的决策**（如写出"日度决策 <次日日期>"再继续操作）——下一交易日的行情与消息由系统在下次会话注入，自行虚构未来日 = 严重违规。`
+【会话边界 · 硬约束】本次会话只处理**当前世界日期**这一个交易日。完成当日 mem0_add 后即收尾结束——**未来日期的行情、消息、决策由系统在下一次会话注入**，你现在没有明天的数据、看不到明天的行情，任何针对未来日的推演/下单/mem0 记录都是**幻觉**。
+
+**自我检测**（继续行动前先核对）：
+- 你正要写的 mem0_add ref 日期 / decision-day label 必须 = 当前世界日期。若准备写 \`[YYYY-MM-DD DayN+? …]\` 而 YYYY-MM-DD 或 DayN+? 指向**未来某日**——立刻停止，只保留当前日期这条 mem0_add 收尾。
+- 你正要调的 \`portfolio_place_buy_order\` / \`portfolio_place_sell_order\` 会以**当前世界日期**为 order_date 落到 fund.db。若你脑子里觉得"这是明天的加仓/减仓"——那是幻觉，撤单，改成当日执行或不下。
+- 单次会话里下一份"次日决策"/"下周计划"/"分批分步执行" mem0 记录 → 违规级别 = **严重**。审计会抓，收尾结束时也会自查。
+
+**为什么这条硬**：先前的 run 里 bot 曾在 Day 26 一个会话里连着写了 Day 27~35 的 mem0 决策 + 下了 6 单实盘，全部 order_date=Day26 世界日期。结果是**次日 settle 时全部一次性成交**，组合被过度交易到破。这是回测里最贵的失控模式，别当第二次教训。`
 
 const METHODOLOGY_DAY1_HINT = `
 
@@ -894,7 +901,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}${CHAT_BOUNDARY}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -907,5 +914,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${CHAT_BOUNDARY}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
 }

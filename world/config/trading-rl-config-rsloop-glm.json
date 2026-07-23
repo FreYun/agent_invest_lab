@@ -9,7 +9,7 @@
   "llm": {
     "chat_max_tokens": 32000,
     "chat_temperature": 0.3,
-    "chat_max_tool_iterations": 500,
+    "chat_max_tool_iterations": 100,
     "skill_max_tokens": 16000,
     "skill_temperature": 0.3,
     "compact_max_tokens": 8000,

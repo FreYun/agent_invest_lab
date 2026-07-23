@@ -723,7 +723,7 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
 
 interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean }
 
-async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }): Promise<DayBotStatus> {
+async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }, opts?: { maxToolCalls?: number }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
   mkdirSync(dir, { recursive: true })
   writeFileSync(P.sentFile(worldRoot, runId, date, b.botId), message)
@@ -750,8 +750,23 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
   // 也要拿这个值——chat 没正常 return，没法看 result.tool_trace，但 server 端的 tool.call 通知
   // 已经流过 BotServer 的 listener。用这个 delta 实现"放松"判定。
   const toolCallStart = b.server.toolCallCount
+  // Per-day tool-call cap（世界侧硬闸门）：rust chat_max_tool_iterations 是 LLM 一次消息内的
+  // 迭代上限，管不住 bot 在一个 chat session 里连续跑很多 tool。这里每 2s 采样一次 delta，
+  // 越过 cap → server.shutdown()，chat rejects 进入 catch → status=dead。
+  // 起因：r4 Day26 bot 一 session 跑了 104+ tool call 写了 8 个未来日 mem0 + 6 单实盘。
+  let capExceeded = false
+  const capPoller = opts?.maxToolCalls && opts.maxToolCalls > 0 ? setInterval(() => {
+    const delta = b.server.toolCallCount - toolCallStart
+    if (delta > opts.maxToolCalls!) {
+      capExceeded = true
+      clearInterval(capPoller!)
+      log(worldRoot, runId, `bot ${b.botId}: tool-call cap exceeded on ${date} (${delta} > ${opts.maxToolCalls}) — shutting down server to abort chat`)
+      b.server.shutdown({ timeoutMs: 3000 }).catch(() => { /* ignore — chat will reject anyway */ })
+    }
+  }, 1000) : null
   try {
     const r = await b.server.chat({ message, session_key: SESSION_KEY(runId, b.botId, date), history: [] }, { timeoutMs: perBotTimeoutMs })
+    if (capPoller) clearInterval(capPoller)
     writeFileSync(P.replyFile(worldRoot, runId, date, b.botId), JSON.stringify(r, null, 2) + '\n')
     // belief 校验（非阻塞）：两路源——多基金 bot 在 MD frontmatter, 单基金 bot 在 reply.json fence。
     // 结果落 belief_validation.json，便于审阅与下回合 buildBeliefContext。
@@ -798,12 +813,18 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
     writeStatus(s.status, { iterations: s.iterations, usage: s.usage, finishedAt: new Date().toISOString() })
     return s
   } catch (err) {
+    if (capPoller) clearInterval(capPoller)
     const msg = err instanceof Error ? err.message : String(err)
-    const status: DayBotStatus['status'] = /timeout/i.test(msg) ? 'timeout' : !b.server.alive ? 'dead' : 'error'
+    // capExceeded 优先：我们主动 shutdown 了服务，等价于 timeout 语义——
+    //   1. 触发 needsRestart（下一天冷启新 server，不永久 disable bot）
+    //   2. toolCalls>0，放松判定当日算已推进，close_my_day 正常跑
+    const status: DayBotStatus['status'] = capExceeded ? 'timeout' : /timeout/i.test(msg) ? 'timeout' : !b.server.alive ? 'dead' : 'error'
     const toolCalls = b.server.toolCallCount - toolCallStart
-    const s: DayBotStatus = { bot: b.botId, status, ms: Date.now() - startedAt, error: msg, toolCalls }
+    const error = capExceeded ? `tool-call cap exceeded (${toolCalls} > ${opts?.maxToolCalls}) — chat aborted by world` : msg
+    const s: DayBotStatus = { bot: b.botId, status, ms: Date.now() - startedAt, error, toolCalls }
     writeStatus(s.status, { error: s.error, finishedAt: new Date().toISOString() })
-    if (toolCalls > 0) log(worldRoot, runId, `bot ${b.botId}: chat ${status} but ${toolCalls} tool call(s) made before — will advance via 放松判定`)
+    if (capExceeded) log(worldRoot, runId, `bot ${b.botId}: cap-abort finished on ${date} — ${toolCalls} tool calls, will advance day`)
+    else if (toolCalls > 0) log(worldRoot, runId, `bot ${b.botId}: chat ${status} but ${toolCalls} tool call(s) made before — will advance via 放松判定`)
     return s
   }
 }
@@ -1340,7 +1361,13 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           deepResearchLastDate: stateNow.last_deep_research_date,
         })
         if (brokenBots.has(b.botId)) return writeSkippedDeadBot(worldRoot, runId, date, message, b)
-        return chatOneBot(worldRoot, runId, date, message, timeoutMs, b)
+        // Per-day tool-call cap（世界侧硬闸门，防跨日决策失控）：
+        //   - forced 深研日：80（深研本身耗 15~30 tool + 常规日决策 15~20 tool，留一倍余量）
+        //   - authorized-not-forced：60（可能触发深研，中档）
+        //   - 常规日：40（无深研，纯 settle/复盘/下单，20 已够用，40 是余量）
+        // 起因：r4 Day26 bot 一 session 跑 104+ tool 写 8 天 mem0 + 6 单实盘（见 postmortem）。
+        const maxToolCalls = drState.forced ? 80 : drState.authorized ? 60 : 40
+        return chatOneBot(worldRoot, runId, date, message, timeoutMs, b, { maxToolCalls })
       })
       for (const s of statuses) {
         if (s.status === 'dead') brokenBots.add(s.bot)

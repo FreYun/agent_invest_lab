@@ -47,6 +47,13 @@ research/**/*.csv
 /daily_factor_values.csv
 /factor_definition.csv
 
+# 第三方 vendor（research-loop-105d 的 rust target 编译产物 + workspace/tmp，2.6G 构建产物，不入库）
+/vendor/
+
+# dashboard 临时配置的备份 / 隐藏中间产物（.kimibak 备份、.world-*.intraday.* 隐藏临时配置）
+world/config/*.kimibak
+world/config/.world-*.yaml
+
 # 本地临时产物和敏感联调草稿，不入库
 /.write_test_xyz
 /runtime/res-reports-backfill-cache/
