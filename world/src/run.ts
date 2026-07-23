@@ -913,6 +913,13 @@ export interface DeepResearchStateInput {
   todayDate: string
   lastDeepDate?: string
   tradingDates: string[]
+  /** 崩盘阈值信号（可选）。任一命中 → forced。dailyMovePct/drawdownPct 为 null 时该维不触发。 */
+  crashSignal?: {
+    dailyMovePct: number | null
+    drawdownPct: number | null     // <=0
+    dailyMoveThreshold: number     // 正数，如 3
+    drawdownThreshold: number      // 正数，如 8
+  }
 }
 export interface DeepResearchStateOut {
   /** 是否允许 bot 今日调 start_research（message.ts 是否渲染触发块或强制块）。 */
@@ -924,16 +931,27 @@ export interface DeepResearchStateOut {
   gapDays: number
 }
 
+/** 崩盘信号是否强制深研：|单日涨跌| >= 阈值 或 回撤 <= -阈值。null 字段不触发。 */
+export function isCrashForced(s?: DeepResearchStateInput['crashSignal']): boolean {
+  if (!s) return false
+  const moveHit = s.dailyMovePct != null && Math.abs(s.dailyMovePct) >= s.dailyMoveThreshold
+  const ddHit = s.drawdownPct != null && s.drawdownPct <= -s.drawdownThreshold
+  return moveHit || ddHit
+}
+
 /** 三分支判定：
  *   ordinal：authorized = forced = isDeepResearchDay(ordinal, every)；等价老行为。
- *   agent-triggered：authorized 恒 true；forced = (gapDays >= maxGapDays) —— 达上限系统强制。 */
+ *   agent-triggered：authorized 恒 true；forced = (gapDays >= maxGapDays) —— 达上限系统强制。
+ *   两分支均可被崩盘信号强制。 */
 export function computeDeepResearchState(inp: DeepResearchStateInput): DeepResearchStateOut {
   const gapDays = tradingDaysBetween(inp.tradingDates, inp.lastDeepDate, inp.todayDate)
+  const crashForced = isCrashForced(inp.crashSignal)
   if (inp.mode === 'agent-triggered') {
-    return { authorized: true, forced: gapDays >= inp.maxGapDays, gapDays }
+    return { authorized: true, forced: (gapDays >= inp.maxGapDays) || crashForced, gapDays }
   }
   const isDR = isDeepResearchDay(inp.ordinal, inp.every)
-  return { authorized: isDR, forced: isDR, gapDays }
+  const forced = isDR || crashForced
+  return { authorized: forced, forced, gapDays } // 崩盘强制时同步放行 start_research
 }
 
 
