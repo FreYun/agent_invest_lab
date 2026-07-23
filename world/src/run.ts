@@ -1174,18 +1174,19 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       const stateNow = readState(worldRoot, runId)
       let crashSignal: Parameters<typeof computeDeepResearchState>[0]['crashSignal']
       if (config.crashTriggerEnabled) {
+        const bench = config.crashTriggerBenchmark ?? { code: '000300.SH', name: '沪深300' }
         const st = await fetchBenchmarkDailyState({
           simworldUrl: config.simworldUpstreamUrl,
-          code: config.crashTriggerBenchmark.code,
+          code: bench.code,
           asOfDate: date,
         }).catch(() => null)
         if (st) crashSignal = {
           dailyMovePct: st.lastDayMovePct,
           drawdownPct: st.drawdownFromRecentHighPct,
-          dailyMoveThreshold: config.crashTriggerDailyMovePct,
-          drawdownThreshold: config.crashTriggerDrawdownPct,
+          dailyMoveThreshold: config.crashTriggerDailyMovePct ?? 3,
+          drawdownThreshold: config.crashTriggerDrawdownPct ?? 8,
         }
-        log(worldRoot, runId, `crash-check ${date} bench=${config.crashTriggerBenchmark.code} move=${st?.lastDayMovePct?.toFixed(2) ?? 'n/a'}% dd=${st?.drawdownFromRecentHighPct?.toFixed(2) ?? 'n/a'}%`)
+        log(worldRoot, runId, `crash-check ${date} bench=${bench.code} move=${st?.lastDayMovePct?.toFixed(2) ?? 'n/a'}% dd=${st?.drawdownFromRecentHighPct?.toFixed(2) ?? 'n/a'}%`)
       }
       const drState = computeDeepResearchState({
         mode: deepResearchMode,

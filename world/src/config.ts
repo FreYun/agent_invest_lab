@@ -261,7 +261,7 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const crashTriggerEnabled = raw.crash_trigger_enabled === true
   const crashTriggerDailyMovePct = typeof raw.crash_trigger_daily_move_pct === 'number' && raw.crash_trigger_daily_move_pct > 0 ? raw.crash_trigger_daily_move_pct : 3
   const crashTriggerDrawdownPct = typeof raw.crash_trigger_drawdown_pct === 'number' && raw.crash_trigger_drawdown_pct > 0 ? raw.crash_trigger_drawdown_pct : 8
-  const ctb = raw.crash_trigger_benchmark
+  const ctb = raw.crash_trigger_benchmark as { code?: unknown; name?: unknown } | undefined
   const crashTriggerBenchmark = (ctb && typeof ctb === 'object' && typeof ctb.code === 'string' && typeof ctb.name === 'string')
     ? { code: ctb.code, name: ctb.name }
     : { code: '000300.SH', name: '沪深300' }
