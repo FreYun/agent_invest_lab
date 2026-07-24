@@ -280,3 +280,59 @@ crash_trigger_benchmark: { code: "399989.SZ", name: "中证医疗" }
   assert.equal(c.crashTriggerDrawdownPct, 10)
   assert.deepEqual(c.crashTriggerBenchmark, { code: '399989.SZ', name: '中证医疗' })
 })
+
+
+function tmpCrashStrategyWorld(targetIndex: string, extraConfigLines: string[] = []): string {
+  const dir = mkdtempSync(join(tmpdir(), 'wcfg-crash-strategy-'))
+  const lib = join(dir, 'strategies', 'index-products')
+  mkdirSync(lib, { recursive: true })
+  writeFileSync(join(lib, 'strategy.md'), "# Strategy\n")
+  writeFileSync(join(lib, 'manifest.yaml'), [
+    'version: 1',
+    'strategies:',
+    '  hstech:',
+    '    title: 恒生科技指数投资框架',
+    '    methodology: strategy.md',
+    `    target_index: "${targetIndex}"`,
+    "    default_buyable_fund_codes: [\"513180\"]",
+  ].join("\n") + "\n")
+  const p = join(dir, 'world.yaml')
+  writeFileSync(p, [
+    'research_loop: /opt/rl',
+    'bots: [bot16d]',
+    "replay: { from: \"2025-01-02\", to: \"2025-06-28\" }",
+    'simworld_upstream_url: http://127.0.0.1:18078/mcp',
+    'deep_research_mode: agent-triggered',
+    ...extraConfigLines,
+    'strategy_library_root: ./strategies/index-products',
+    'bot_assignments:',
+    '  bot16d:',
+    '    strategy_id: hstech',
+  ].join("\n") + "\n")
+  return p
+}
+
+test('loadWorldConfig 崩盘触发字段：agent-triggered 单指数策略自动开启', () => {
+  const p = tmpCrashStrategyWorld('HSTECH.HI')
+  const c = loadWorldConfig(p)
+  assert.equal(c.crashTriggerEnabled, true)
+  assert.equal(c.crashTriggerDailyMovePct, 3)
+  assert.equal(c.crashTriggerDrawdownPct, 8)
+  assert.deepEqual(c.crashTriggerBenchmark, { code: 'HSTECH.HI', name: '恒生科技指数投资框架' })
+  rmSync(dirname(p), { recursive: true, force: true })
+})
+
+test('loadWorldConfig 崩盘触发字段：显式关闭优先于自动推断', () => {
+  const p = tmpCrashStrategyWorld('HSTECH.HI', ['crash_trigger_enabled: false'])
+  const c = loadWorldConfig(p)
+  assert.equal(c.crashTriggerEnabled, false)
+  rmSync(dirname(p), { recursive: true, force: true })
+})
+
+test('loadWorldConfig 崩盘触发字段：buyable-pool 不自动开启', () => {
+  const p = tmpCrashStrategyWorld('buyable-pool')
+  const c = loadWorldConfig(p)
+  assert.equal(c.crashTriggerEnabled, false)
+  assert.deepEqual(c.crashTriggerBenchmark, { code: '000300.SH', name: '沪深300' })
+  rmSync(dirname(p), { recursive: true, force: true })
+})

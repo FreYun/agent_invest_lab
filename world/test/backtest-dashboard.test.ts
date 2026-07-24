@@ -496,7 +496,7 @@ test('/api/backtest/bot 支持 live run，返回拼接 series', async () => {
   } finally { proc.kill() }
 })
 
-test('/api/backtest/today-decisions 返回今日 pending 决策（结构）', async () => {
+test('/api/backtest/today-decisions 返回最新 pending 决策（结构）', async () => {
   const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB], { stdio: ['ignore', 'pipe', 'pipe'] })
   try {
     const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
@@ -514,14 +514,14 @@ test('/api/backtest/today-decisions 返回今日 pending 决策（结构）', as
   } finally { proc.kill() }
 })
 
-test('/api/backtest/latest-decisions 覆盖 live run（今日有 pending 的 live 出现在结果里）', async () => {
+test('/api/backtest/latest-decisions 只覆盖最新 live 决策日', async () => {
   const proc = spawn(process.execPath, ['--experimental-strip-types', SERVER, '--host', '127.0.0.1', '--port', '0', '--db', DB], { stdio: ['ignore', 'pipe', 'pipe'] })
   try {
     const out = await waitForOutput(proc, /backtest dashboard listening on http:\/\//)
     const base = `http://127.0.0.1:${out.match(/http:\/\/127\.0\.0\.1:(\d+)\//)![1]}`
     const td = await (await fetch(`${base}/api/backtest/today-decisions`, { cache: 'no-store' })).json() as { decisions: Record<string, unknown> }
     const ld = await (await fetch(`${base}/api/backtest/latest-decisions`, { cache: 'no-store' })).json() as { decisions: Record<string, 'add' | 'reduce' | 'clear'> }
-    // 今日有 pending 的每个 live run，必须在 latest-decisions 里有三色标
+    // 最新 pending 决策日的每个 live run，必须在 latest-decisions 里有三色标
     for (const k of Object.keys(td.decisions)) {
       assert.ok(k in ld.decisions, `live ${k} 应出现在 latest-decisions`)
       assert.ok(['add', 'reduce', 'clear'].includes(ld.decisions[k]))

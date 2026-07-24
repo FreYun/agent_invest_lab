@@ -117,7 +117,7 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .idx-item.active{background:rgba(102,217,232,.14);color:var(--accent)}
 .idx-item .idx-cnt{margin-left:auto}
 .idx-item .idx-cnt .idx-pass{color:var(--pass);font-weight:600}
-/* 末日决策三色标识：合格 run 末日当天有动作时显示。加仓▲红 / 减仓▼绿 / 清仓⊘橙 */
+/* 最新交易日盘中决策三色标识：合格 live run 最新订单日有动作时显示。加仓▲红 / 减仓▼绿 / 清仓⊘橙 */
 .idx-decisions{margin-left:auto;display:inline-flex;align-items:center;gap:3px;font-size:11px;line-height:1;flex-shrink:0}
 .idx-decisions + .idx-cnt{margin-left:6px}
 .dec-dot{font-weight:700}
@@ -601,9 +601,10 @@ async function ingestLive(){
 // ---- 覆盖（用户手动标记，全员共享）----
 // overrides 启动时从服务器 GET 填充（见底部 loadVerdicts），不再从 localStorage 读。
 let overrides = {}
-// 末日决策标识：{ "run_id|bot": "add"|"reduce"|"clear" }，启动时从服务器拉（见 loadLatestDecisions）。
-// 只含末日当天真有动作的 (run,bot)；侧栏据此在指数目录项上打三色标（仅合格 run 计入）。
+// 最新交易日盘中决策标识：{ "run_id|bot": "add"|"reduce"|"clear" }，启动时从服务器拉（见 loadLatestDecisions）。
+// 只含最新订单日真有动作的 (run,bot)；侧栏据此在指数目录项上打三色标（仅合格 run 计入）。
 let latestDecisions = {}
+let latestDecisionDate = ''
 function isPass(r){ const o = overrides[r._key]; return o ? o === 'pass' : r._defaultPass }
 function isEdited(r){ const o = overrides[r._key]; return o && (o === 'pass') !== r._defaultPass }
 function setMark(key, val){
@@ -688,14 +689,14 @@ function idxRunCounts(){
 }
 // 角标内容：有 run → 「合格/总」（合格数用 pass 色突出）；无 run → 灰 0。
 function idxCntHtml(p, c){ return c ? `<span class="idx-pass">${p}</span>/${c}` : '0' }
-// 末日决策标识：加仓 ▲ / 减仓 ▼ / 清仓 ⊘，固定展示顺序。
+// 最新交易日盘中决策标识：加仓 ▲ / 减仓 ▼ / 清仓 ⊘，固定展示顺序。
 const DECISION_META = {
   add:    { icon: '▲', cls: 'dec-add',    label: '加仓' },
   reduce: { icon: '▼', cls: 'dec-reduce', label: '减仓' },
   clear:  { icon: '⊘', cls: 'dec-clear',  label: '清仓' },
 }
 const DECISION_ORDER = ['add', 'reduce', 'clear']
-// 某指数下所有【合格】run 里，末日当天有动作的方向集合（去重、固定顺序）。
+// 某指数下所有【合格】run 里，最新订单日有动作的方向集合（去重、固定顺序）。
 function idxDecisionKinds(ix){
   const kinds = new Set()
   for (const r of records){
@@ -704,13 +705,13 @@ function idxDecisionKinds(ix){
   }
   return DECISION_ORDER.filter(k => kinds.has(k))
 }
-// 侧栏指数项的三色标识 HTML；该指数下无合格 run 有末日动作时返回空串（不打标）。
+// 侧栏指数项的三色标识 HTML；该指数下无合格 live run 有最新交易日盘中动作时返回空串（不打标）。
 function idxMarkerHtml(ix){
   const kinds = idxDecisionKinds(ix)
   if (!kinds.length) return ''
   const dots = kinds.map(k => `<span class="dec-dot ${DECISION_META[k].cls}">${DECISION_META[k].icon}</span>`).join('')
   const title = kinds.map(k => DECISION_META[k].label).join(' / ')
-  return `<span class="idx-decisions" title="末日决策：${title}（合格 run）">${dots}</span>`
+  return `<span class="idx-decisions" title="最新交易日盘中决策${latestDecisionDate ? " · " + latestDecisionDate : ""}：${title}（合格 live run）">${dots}</span>`
 }
 // 左侧「对标指数」目录：点击某项平滑滚动到右侧对应指数区块（纯导航，不做筛选）。
 function buildIndexSidebar(){
@@ -736,7 +737,7 @@ function updateIndexSidebarCounts(){
     const nm = item.querySelector('.idx-name')?.textContent || ''
     item.title = `跳转到「${nm}」（合格 ${p} / 共 ${c}）`
     const cnt = item.querySelector('.idx-cnt'); if (cnt) cnt.innerHTML = idxCntHtml(p, c)
-    // 末日决策标识随「合格/不合格」手动切换实时刷新（聚合口径只算合格 run）
+    // 最新交易日盘中决策标识随「合格/不合格」手动切换实时刷新（聚合口径只算合格 live run）
     const dec = item.querySelector('.idx-decisions'), html = idxMarkerHtml(key)
     if (!html){ if (dec) dec.remove() }
     else if (dec){ dec.outerHTML = html }
@@ -1486,7 +1487,7 @@ async function loadVerdicts(){
   }
 }
 
-// 今日盘中决策（今天的 pending 挂单）：run_id|bot -> {dir, items:[{fund,type,amount,reason}]}。
+// 今日盘中决策（最新 pending 订单日的挂单）：run_id|bot -> {dir, items:[{fund,type,amount,reason}]}。
 let todayDecisions = {}
 async function loadTodayDecisions(){
   try {
@@ -1495,11 +1496,11 @@ async function loadTodayDecisions(){
   } catch { todayDecisions = {} }
 }
 
-// 末日决策标识：拉每个 (run,bot) 末日当天的动作方向（add/reduce/clear）。失败则留空、侧栏不打标。
+// 最新交易日盘中决策标识：拉每个 (run,bot) 最新订单日的动作方向（add/reduce/clear）。失败则留空、侧栏不打标。
 async function loadLatestDecisions(){
   try {
     const r = await fetch('/api/backtest/latest-decisions', { cache: 'no-store' })
-    if (r.ok) latestDecisions = (await r.json()).decisions || {}
+    if (r.ok) { const p = await r.json(); latestDecisions = p.decisions || {}; latestDecisionDate = p.tradeDate || '' }
   } catch { latestDecisions = {} }
 }
 

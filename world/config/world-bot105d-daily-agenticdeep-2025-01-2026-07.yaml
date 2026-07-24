@@ -13,7 +13,7 @@ research_day_every: 0
 research_day_timeout_seconds: 900
 deep_research_every: 0
 deep_research_mode: agent-triggered
-deep_research_max_gap_days: 4
+deep_research_max_gap_days: 7
 deep_research_timeout_seconds: 3900
 simworld_upstream_url: http://127.0.0.1:18078/mcp
 fund_mcp_cli: ../../fund-portfolio-mcp/cli_tools.py

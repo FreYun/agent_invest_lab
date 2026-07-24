@@ -46,11 +46,11 @@ export interface WorldConfig {
   deepResearchTimeoutSeconds?: number
   // 深度研究调度模式。
   //   ordinal（默认，向后兼容）：按 deepResearchEvery 的第 N/2N/3N 个决策日强制深研。
-  //   agent-triggered：bot 自主决定哪天深研，硬上限 deepResearchMaxGapDays 交易日。
+  //   agent-triggered：达到 deepResearchMaxGapDays 个交易日才授权并强制深研；崩盘信号可提前触发。
   //   run.ts 侧据此计算 { authorized, forced, gapDays } 三态；message.ts 侧据此渲染
-  //   触发信号块 vs 强制块。
+  //   固定间隔强制块。
   deepResearchMode?: 'ordinal' | 'agent-triggered'
-  // agent-triggered 模式下距上次深研的最大交易日 gap，达到即 forced（系统在 message
+  // agent-triggered 模式下距上次深研的固定交易日间隔，达到即授权并 forced（系统在 message
   // 里下强制指令）。仅 agent-triggered 生效；缺省=4。
   deepResearchMaxGapDays?: number
   // 崩盘阈值强制深研（默认关闭，开则不依赖 agent 自主判断）。基准指数出现
@@ -254,6 +254,12 @@ function parseBotAssignments(raw: unknown, bots: string[]): Record<string, BotAs
   return Object.keys(out).length ? out : undefined
 }
 
+function isCrashTriggerIndexTarget(targetIndex: string): boolean {
+  const target = targetIndex.trim()
+  if (!target || target === 'buyable-pool') return false
+  return target.includes('.')
+}
+
 /** 从 raw YAML 对象解析 WorldConfig（供测试直接调用，无需 yaml 文件）。
  * baseDir 用于相对路径解析；测试时可省略（缺省当前工作目录）。
  */
@@ -320,13 +326,13 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const rawDrMode = typeof raw.deep_research_mode === 'string' ? raw.deep_research_mode.trim() : ''
   const deepResearchMode: 'ordinal' | 'agent-triggered' = rawDrMode === 'agent-triggered' ? 'agent-triggered' : 'ordinal'
   const deepResearchMaxGapDays = typeof raw.deep_research_max_gap_days === 'number' && raw.deep_research_max_gap_days >= 1 ? Math.floor(raw.deep_research_max_gap_days) : 4
-  const crashTriggerEnabled = raw.crash_trigger_enabled === true
+  const explicitCrashTriggerEnabled = typeof raw.crash_trigger_enabled === 'boolean' ? raw.crash_trigger_enabled : undefined
   const crashTriggerDailyMovePct = typeof raw.crash_trigger_daily_move_pct === 'number' && raw.crash_trigger_daily_move_pct > 0 ? raw.crash_trigger_daily_move_pct : 3
   const crashTriggerDrawdownPct = typeof raw.crash_trigger_drawdown_pct === 'number' && raw.crash_trigger_drawdown_pct > 0 ? raw.crash_trigger_drawdown_pct : 8
   const ctb = raw.crash_trigger_benchmark as { code?: unknown; name?: unknown } | undefined
-  const crashTriggerBenchmark = (ctb && typeof ctb === 'object' && typeof ctb.code === 'string' && typeof ctb.name === 'string')
+  const explicitCrashTriggerBenchmark = (ctb && typeof ctb === 'object' && typeof ctb.code === 'string' && typeof ctb.name === 'string')
     ? { code: ctb.code, name: ctb.name }
-    : { code: '000300.SH', name: '沪深300' }
+    : undefined
   const chatStepDays = typeof raw.chat_step_days === 'number' && raw.chat_step_days >= 1 ? Math.floor(raw.chat_step_days) : 1
   const rawStepMode = typeof raw.chat_step_mode === 'string' ? raw.chat_step_mode.trim() : ''
   const chatStepMode: 'trading_days' | 'weekly' | 'monthly' = rawStepMode === 'weekly' || rawStepMode === 'monthly' ? rawStepMode : 'trading_days'
@@ -441,13 +447,25 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   }
 
   const strategyDefaults: Record<string, string[]> = {}
+  let inferredCrashTriggerBenchmark: { code: string; name: string } | undefined
   if (botAssignments) {
     if (!strategyLibraryRoot) throw new Error('world config: "strategy_library_root" is required when "bot_assignments" is set')
     const lib = loadStrategyLibrary(strategyLibraryRoot)
+    const inferredTargets = new Map<string, string>()
+    let canInferCrashBenchmark = true
     for (const [botId, assignment] of Object.entries(botAssignments)) {
       const strategy = lib.strategies.get(assignment.strategyId)
       if (!strategy) throw new Error('world config: bot_assignments.' + botId + '.strategy_id "' + assignment.strategyId + '" not found in strategy library')
       strategyDefaults[botId] = strategy.defaultBuyableFundCodes
+      if (isCrashTriggerIndexTarget(strategy.targetIndex)) {
+        inferredTargets.set(strategy.targetIndex, strategy.title)
+      } else {
+        canInferCrashBenchmark = false
+      }
+    }
+    if (canInferCrashBenchmark && inferredTargets.size === 1) {
+      const [[code, name]] = [...inferredTargets.entries()]
+      inferredCrashTriggerBenchmark = { code, name }
     }
   }
   if (fundMcpCli && !buyableFundCodes) {
@@ -462,6 +480,12 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
 
   const skipClose = typeof raw.skip_close === 'boolean' ? raw.skip_close : undefined
   const skipChat = typeof raw.skip_chat === 'boolean' ? raw.skip_chat : undefined
+
+  const crashTriggerBenchmark = explicitCrashTriggerBenchmark
+    ?? inferredCrashTriggerBenchmark
+    ?? { code: '000300.SH', name: '沪深300' }
+  const crashTriggerEnabled = explicitCrashTriggerEnabled
+    ?? (deepResearchMode === 'agent-triggered' && inferredCrashTriggerBenchmark !== undefined)
 
   return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, crashTriggerDrawdownPct, crashTriggerBenchmark, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, singleFundBriefingRes, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
 }

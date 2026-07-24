@@ -943,9 +943,9 @@ export interface DeepResearchStateInput {
   }
 }
 export interface DeepResearchStateOut {
-  /** 是否允许 bot 今日调 start_research（message.ts 是否渲染触发块或强制块）。 */
+  /** 是否允许 bot 今日调 start_research（达到间隔或命中崩盘信号才放行）。 */
   authorized: boolean
-  /** 是否强制（forced 日不做 = 违反调度纪律；authorized-not-forced 是可选）。 */
+  /** 是否强制（forced 日不做 = 违反调度纪律）。 */
   forced: boolean
   /** 距上次深研的交易日 gap；从未深研过 = 距 run 首个交易日的 gap（Day1=0）。
    *  仅当日期不在交易日历中（数据异常）才为 MAX_SAFE_INTEGER。 */
@@ -962,13 +962,14 @@ export function isCrashForced(s?: DeepResearchStateInput['crashSignal']): boolea
 
 /** 三分支判定：
  *   ordinal：authorized = forced = isDeepResearchDay(ordinal, every)；等价老行为。
- *   agent-triggered：authorized 恒 true；forced = (gapDays >= maxGapDays) —— 达上限系统强制。
+ *   agent-triggered：未达间隔不授权；达到 maxGapDays 后授权并强制。
  *   两分支均可被崩盘信号强制。 */
 export function computeDeepResearchState(inp: DeepResearchStateInput): DeepResearchStateOut {
   const gapDays = tradingDaysBetween(inp.tradingDates, inp.lastDeepDate, inp.todayDate)
   const crashForced = isCrashForced(inp.crashSignal)
   if (inp.mode === 'agent-triggered') {
-    return { authorized: true, forced: (gapDays >= inp.maxGapDays) || crashForced, gapDays }
+    const due = gapDays >= inp.maxGapDays || crashForced
+    return { authorized: due, forced: due, gapDays }
   }
   const isDR = isDeepResearchDay(inp.ordinal, inp.every)
   const forced = isDR || crashForced
@@ -1200,9 +1201,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       })
       const isDeepResearch = drState.forced
       const isDeepAuthorized = drState.authorized
-      // agent-triggered 下 authorized 恒 true，因此除 forced 日（deepResearchTimeoutMs）外
-      // 每天都拿中间档 max(deep/2, perBot*2)——bot 自主触发深研时不被常规档卡死；不研究的日子
-      // 实际远用不满，成本影响小。ordinal 模式不受影响，仍走 extended/perBot 旧逻辑。
+      // agent-triggered 只有达到固定间隔或命中崩盘信号才授权，授权日走完整深研预算。
       const timeoutMs = drState.forced
         ? deepResearchTimeoutMs
         : (isDeepAuthorized && deepResearchMode === 'agent-triggered'

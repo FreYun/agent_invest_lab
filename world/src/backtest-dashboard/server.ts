@@ -254,6 +254,23 @@ function sliceSentSections(md: string): { header: string; body: string }[] {
   return out.map(s => ({ header: s.header, body: s.lines.join('\n').trim() }))
 }
 
+/** reply.json 的 `reply` 只是 agent 最后一条 assistant 消息。多数日子它就是当日决策总结，
+ *  但偶尔 bot 在给出完整决策后又追一句收尾闲话（如"要开始后台历史类比分析吗？"），`reply` 就
+ *  只截到那句短话，「当日思考」看着像空的——决策其实躺在前一条 assistant 消息里。
+ *  规则：正常仍用 `reply`（末条即决策，历史健康日 reply 均 >= 260 字，行为不变）；仅当 `reply`
+ *  短到不像决策且存在明显更长的 assistant 正文时，回退到最长那条（= 被挤到非末尾的真决策）。 */
+const DECISION_STUB_MAXLEN = 200
+function pickDecisionText(parsed: { reply?: unknown; assistant_messages?: unknown }): string {
+  const reply = typeof parsed.reply === 'string' ? parsed.reply : ''
+  const msgs = Array.isArray(parsed.assistant_messages) ? parsed.assistant_messages : []
+  let longest = ''
+  for (const m of msgs) {
+    const c = (m as { content?: unknown } | null)?.content
+    if (typeof c === 'string' && c.length > longest.length) longest = c
+  }
+  return (reply.length < DECISION_STUB_MAXLEN && longest.length > reply.length) ? longest : reply
+}
+
 /** 读当日 sent.md / reply.json，best-effort 拼出反思内容。文件缺失（首日 / 旧 run）
  *  时对应字段留空字符串，由前端兜底提示——保证功能可加性，不抛错。 */
 function loadReflection(worldRoot: string, runId: string, botId: string, date: string): BotReflection {
@@ -267,8 +284,8 @@ function loadReflection(worldRoot: string, runId: string, botId: string, date: s
   const replyPath = replyFile(worldRoot, runId, date, botId)
   if (existsSync(replyPath)) {
     try {
-      const parsed = JSON.parse(readFileSync(replyPath, 'utf8')) as { reply?: unknown }
-      if (typeof parsed.reply === 'string') result.decision = parsed.reply
+      const parsed = JSON.parse(readFileSync(replyPath, 'utf8')) as { reply?: unknown; assistant_messages?: unknown }
+      result.decision = pickDecisionText(parsed)
     } catch { /* best-effort：reply.json 损坏就留空 */ }
   }
   return result
@@ -466,7 +483,7 @@ async function loadBenchmark(
 // hidden-records.json = { hidden: [{botId, runId}] }。被隐藏的 (bot, run) 在 listRunsForBot
 // 处被滤掉 → 该 run 从主列表/run 选择器消失；某 bot 全部 run 被隐藏则整行消失。可随时恢复。
 interface HiddenRecord { botId: string; runId: string }
-function hiddenKey(botId: string, runId: string): string { return `${botId} ${runId}` }
+function hiddenKey(botId: string, runId: string): string { return `${botId}\0${runId}` }
 function loadHiddenRecords(worldRoot: string): HiddenRecord[] {
   try {
     const parsed = JSON.parse(readFileSync(hiddenRecordsFile(worldRoot), 'utf8')) as { hidden?: unknown }
@@ -939,6 +956,43 @@ async function loadLiveBotForRun(dbPath: string, worldRoot: string, liveRunId: s
     ...liveActs.map(a => ({ action_date: a.action_date, side: classifyAction(a.action_type, a.final_decision), amount: num(a.amount), fund_name: a.fund_name ?? a.fund_code, fund_code: a.fund_code, status: 'confirmed' })),
     ...pend.map(o => ({ action_date: o.order_date, side: (o.order_type === 'sell' ? 'sell' : 'buy'), amount: num(o.order_amount), fund_name: o.fund_name ?? o.fund_code, fund_code: o.fund_code, status: 'pending' })),
   ]
+  const baseHoldingsByDate = (base.holdingsByDate && typeof base.holdingsByDate === 'object')
+    ? base.holdingsByDate as Record<string, Array<Record<string, unknown>>> : {}
+  const livePosRows = queryRows<Record<string, unknown>>(dbPath,
+    'SELECT p.trade_date, p.fund_code, COALESCE(i.fund_name, p.fund_code) AS fund_name, ' +
+    "COALESCE(i.theme, p.asset_class, '') AS theme, p.asset_class, p.role, p.shares, p.nav, " +
+    'p.market_value, p.weight, p.daily_pnl, p.cumulative_return_pct, p.holding_days ' +
+    'FROM fund_bot_position_snapshots p LEFT JOIN fund_info i ON i.fund_code = p.fund_code ' +
+    'WHERE p.run_id = ' + quoteSql(liveRunId) + ' AND p.bot_id = ' + quoteSql(botId) +
+    ' ORDER BY p.trade_date ASC, p.weight DESC, p.fund_code ASC')
+  const liveHoldingsByDate: Record<string, Array<Record<string, unknown>>> = {}
+  for (const r of livePosRows) {
+    const d = String(r.trade_date ?? '')
+    if (!d) continue
+    if (!liveHoldingsByDate[d]) liveHoldingsByDate[d] = []
+    liveHoldingsByDate[d].push(r)
+  }
+  const holdingsByDate = { ...baseHoldingsByDate }
+  let lastPositions: Array<Record<string, unknown>> = []
+  const baseDates = Object.keys(baseHoldingsByDate).sort()
+  if (liveRows.length) {
+    const firstLiveDate = String(liveRows[0]?.trade_date ?? '')
+    const lastBaseDate = [...baseDates].reverse().find(d => !firstLiveDate || d < firstLiveDate)
+    if (lastBaseDate) lastPositions = baseHoldingsByDate[lastBaseDate] || []
+  }
+  for (const row of liveRows) {
+    const d = String(row.trade_date ?? '')
+    if (!d) continue
+    const direct = liveHoldingsByDate[d]
+    if (direct && direct.length) {
+      holdingsByDate[d] = direct
+      lastPositions = direct
+      continue
+    }
+    const cashWeight = finiteNumber(row.cash_weight)
+    if (lastPositions.length && cashWeight != null && cashWeight < 0.995) holdingsByDate[d] = lastPositions
+    else holdingsByDate[d] = []
+  }
   // 反思面板日期轴取自 reflectionDates。base 只带源 dash run 的日期（停在源 run 末日），
   // live run 自己每天 decide 落在 runtime/runs/<liveRunId>/<date>/ 下——并进来，日期轴才够得到
   // 今日/最新日的决策（即便当日净值点尚未结算）。
@@ -951,6 +1005,7 @@ async function loadLiveBotForRun(dbPath: string, worldRoot: string, liveRunId: s
     benchmark,
     reflectionDates,
     actions: [...baseActions, ...liveActions],
+    holdingsByDate,
     availableRuns: [{ runId: liveRunId, latestDate: liveRows.length ? String(liveRows[liveRows.length - 1].trade_date) : (base.latestTradeDate ?? '') }],
   }
 }
@@ -1105,96 +1160,70 @@ async function loadRunEvals(dbPath: string): Promise<{ rows: Array<Record<string
   return { rows }
 }
 
-// 侧栏「末日决策」标识数据：每个 (run, bot) 在其最后一个交易日当天有没有买卖动作，
-// 及方向（加仓 add / 减仓 reduce / 清仓 clear）。末日在持有观望的 (run,bot) 不返回。
-// 末日 D = fund_bot_daily_snapshots 里该 (run,bot) 的 MAX(trade_date)；只取 action_date=D
-// 的动作。清仓靠 D 当天快照「现金占比≥99.5%」判定：equity/bond/gold_weight 三列多数 run
-// 未落库(全为0)不可用，故改用 cash_weight（为空时退化 cash/total_value）。实测清仓 run
-// 末日 cash_weight=1.0 同日已反映；减仓 run 现金占比 0.2~0.67 仍持仓，据此与清仓区分。
-async function loadLatestDecisions(dbPath: string): Promise<{ decisions: Record<string, 'add' | 'reduce' | 'clear'> }> {
-  if (!(await tableExists(dbPath, 'fund_bot_daily_snapshots')) || !(await tableExists(dbPath, 'fund_bot_actions'))) {
-    return { decisions: {} }
-  }
-  const rows = queryRows<{
-    run_id: string; bot_id: string;
-    cash_weight: number | null; cash: number | null; total_value: number | null;
-    n_add: number; n_reduce: number; add_amt: number | null; reduce_amt: number | null;
-  }>(dbPath, `
-    WITH last_day AS (
-      SELECT run_id, bot_id, MAX(trade_date) AS d
-      FROM fund_bot_daily_snapshots GROUP BY run_id, bot_id
-    ),
-    last_acts AS (
-      SELECT a.run_id, a.bot_id,
-             SUM(CASE WHEN a.action_type = 'ADD'    THEN 1 ELSE 0 END) AS n_add,
-             SUM(CASE WHEN a.action_type = 'REDUCE' THEN 1 ELSE 0 END) AS n_reduce,
-             SUM(CASE WHEN a.action_type = 'ADD'    THEN COALESCE(a.amount, 0) ELSE 0 END) AS add_amt,
-             SUM(CASE WHEN a.action_type = 'REDUCE' THEN COALESCE(a.amount, 0) ELSE 0 END) AS reduce_amt
-      FROM fund_bot_actions a
-      JOIN last_day l ON l.run_id = a.run_id AND l.bot_id = a.bot_id AND a.action_date = l.d
-      GROUP BY a.run_id, a.bot_id
-    )
-    SELECT la.run_id, la.bot_id,
-           s.cash_weight, s.cash, s.total_value,
-           la.n_add, la.n_reduce, la.add_amt, la.reduce_amt
-    FROM last_acts la
-    JOIN last_day l ON l.run_id = la.run_id AND l.bot_id = la.bot_id
-    JOIN fund_bot_daily_snapshots s
-      ON s.run_id = la.run_id AND s.bot_id = la.bot_id AND s.trade_date = l.d
-  `)
-  const decisions: Record<string, 'add' | 'reduce' | 'clear'> = {}
-  for (const r of rows) {
-    const hasAdd = num(r.n_add) > 0, hasReduce = num(r.n_reduce) > 0
-    if (!hasAdd && !hasReduce) continue
-    // 末日几乎全现金 → 清仓；否则纯减仓算减仓。cash_weight 优先，缺失退化 cash/total_value。
-    const cashRatio = r.cash_weight != null ? num(r.cash_weight)
-      : (num(r.total_value) > 0 ? num(r.cash) / num(r.total_value) : 0)
-    let kind: 'add' | 'reduce' | 'clear'
-    if (hasReduce && !hasAdd && cashRatio >= 0.995) kind = 'clear'
-    else if (num(r.add_amt) - num(r.reduce_amt) >= 0 && hasAdd) kind = 'add'
-    else kind = 'reduce'
-    decisions[`${r.run_id}|${r.bot_id}`] = kind
-  }
-  // —— live 路径：snapshots 无 live 行，dash 循环覆盖不到。今日 pending 优先（buy→add/sell→reduce/
-  //    混合按净额），否则回退 fund_bot_actions 末日动作（after_weight≈0 → clear）。dash key 不受影响。 ——
-  const today = await loadTodayDecisions(dbPath)
-  for (const [key, g] of Object.entries(today.decisions)) {
-    if (g.dir === 'buy') decisions[key] = 'add'
-    else if (g.dir === 'sell') decisions[key] = 'reduce'
-    else {
-      const net = g.items.reduce((s, it) => s + (it.type === 'buy' ? it.amount : -it.amount), 0)
-      decisions[key] = net >= 0 ? 'add' : 'reduce'
-    }
+async function latestLiveDecisionDate(dbPath: string): Promise<string> {
+  const dates: string[] = []
+  if (await tableExists(dbPath, 'fund_bot_daily_snapshots')) {
+    const d = queryRows<{ d: string | null }>(dbPath,
+      'SELECT MAX(trade_date) AS d FROM fund_bot_daily_snapshots WHERE run_id LIKE \'live-%\'')[0]?.d
+    if (d) dates.push(d)
   }
   if (await tableExists(dbPath, 'fund_bot_actions')) {
-    const liveActs = queryRows<{ run_id: string; bot_id: string; n_add: number; n_reduce: number; add_amt: number | null; reduce_amt: number | null; last_after: number | null }>(dbPath, `
-      WITH last_day AS (
-        SELECT run_id, bot_id, MAX(action_date) AS d FROM fund_bot_actions
-        WHERE run_id LIKE 'live-%' GROUP BY run_id, bot_id
-      )
-      SELECT a.run_id, a.bot_id,
-             SUM(CASE WHEN a.action_type='ADD' THEN 1 ELSE 0 END) AS n_add,
-             SUM(CASE WHEN a.action_type='REDUCE' THEN 1 ELSE 0 END) AS n_reduce,
-             SUM(CASE WHEN a.action_type='ADD' THEN COALESCE(a.amount,0) ELSE 0 END) AS add_amt,
-             SUM(CASE WHEN a.action_type='REDUCE' THEN COALESCE(a.amount,0) ELSE 0 END) AS reduce_amt,
-             MIN(a.after_weight) AS last_after
-      FROM fund_bot_actions a
-      JOIN last_day l ON l.run_id=a.run_id AND l.bot_id=a.bot_id AND a.action_date=l.d
-      GROUP BY a.run_id, a.bot_id
-    `)
-    for (const r of liveActs) {
-      const key = `${r.run_id}|${r.bot_id}`
-      if (key in decisions) continue   // 今日 pending 已定，优先
-      const hasAdd = num(r.n_add) > 0, hasReduce = num(r.n_reduce) > 0
-      if (!hasAdd && !hasReduce) continue
-      // 注意：现库 live 段 fund_bot_actions.after_weight 全为 NULL（settle 未回填仓位），
-      // 故该 clear 分支对 live 恒不触发，live 清仓会退化显示为「减▼」。dash 段走 snapshot 路径不受影响。
-      if (hasReduce && !hasAdd && r.last_after != null && num(r.last_after) <= 0.005) decisions[key] = 'clear'
-      else if (num(r.add_amt) - num(r.reduce_amt) >= 0 && hasAdd) decisions[key] = 'add'
-      else decisions[key] = 'reduce'
-    }
+    const d = queryRows<{ d: string | null }>(dbPath,
+      'SELECT MAX(action_date) AS d FROM fund_bot_actions WHERE run_id LIKE \'live-%\'')[0]?.d
+    if (d) dates.push(d)
   }
-  return { decisions }
+  if (await tableExists(dbPath, 'fund_bot_orders')) {
+    const d = queryRows<{ d: string | null }>(dbPath,
+      'SELECT MAX(order_date) AS d FROM fund_bot_orders '
+      + 'WHERE order_run_id LIKE \'live-%\' AND COALESCE(status, \'\') <> \'cancelled\'')[0]?.d
+    if (d) dates.push(d)
+  }
+  return dates.sort().at(-1) ?? ''
+}
+
+// 侧栏「最新交易日盘中决策」标识数据：只看 live run 在最新 live 交易日下出的订单。
+// 这是盘中 decide 阶段的决策标识，不再混入历史回测 run 的“末日动作”。
+async function loadLatestDecisions(dbPath: string): Promise<{ tradeDate: string; decisions: Record<string, 'add' | 'reduce' | 'clear'> }> {
+  if (!(await tableExists(dbPath, 'fund_bot_orders'))) return { tradeDate: '', decisions: {} }
+  const tradeDate = await latestLiveDecisionDate(dbPath)
+  if (!tradeDate) return { tradeDate: '', decisions: {} }
+  const rows = queryRows<{
+    order_run_id: string; bot_id: string; fund_code: string; order_type: string;
+    order_amount: number | null; prev_shares: number | null;
+  }>(dbPath,
+    'SELECT o.order_run_id, o.bot_id, o.fund_code, o.order_type, o.order_amount, '
+    + '  (SELECT p.shares FROM fund_bot_position_snapshots p '
+    + '   WHERE p.run_id = o.order_run_id AND p.bot_id = o.bot_id AND p.fund_code = o.fund_code '
+    + '     AND p.trade_date < o.order_date '
+    + '   ORDER BY p.trade_date DESC LIMIT 1) AS prev_shares '
+    + 'FROM fund_bot_orders o '
+    + 'WHERE o.order_run_id LIKE \'live-%\' AND COALESCE(o.status, \'\') <> \'cancelled\' '
+    + '  AND o.order_date = ' + quoteSql(tradeDate)
+    + ' ORDER BY o.order_id ASC')
+  const groups = new Map<string, { buy: number; sell: number; clearable: boolean }>()
+  for (const r of rows) {
+    const key = r.order_run_id + '|' + r.bot_id
+    const g = groups.get(key) ?? { buy: 0, sell: 0, clearable: true }
+    if (r.order_type === 'sell') {
+      g.sell += 1
+      const prevShares = r.prev_shares == null ? null : num(r.prev_shares)
+      if (!(prevShares != null && prevShares > 0 && num(r.order_amount) >= prevShares * 0.995)) {
+        g.clearable = false
+      }
+    } else {
+      g.buy += 1
+      g.clearable = false
+    }
+    groups.set(key, g)
+  }
+  const decisions: Record<string, 'add' | 'reduce' | 'clear'> = {}
+  for (const [key, g] of groups) {
+    if (g.buy > 0 && g.sell === 0) decisions[key] = 'add'
+    else if (g.sell > 0 && g.buy === 0 && g.clearable) decisions[key] = 'clear'
+    else if (g.sell > 0 && g.buy === 0) decisions[key] = 'reduce'
+    else decisions[key] = g.buy >= g.sell ? 'add' : 'reduce'
+  }
+  return { tradeDate, decisions }
 }
 
 /** 今日（Asia/Shanghai）日期 YYYY-MM-DD。本机为 +08，用固定偏移避免依赖进程 TZ。 */
@@ -1202,14 +1231,16 @@ function shanghaiToday(): string {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10)
 }
 
-/** 今日 pending 盘中决策：只取 order_date=今日 且 status=pending 的 live 挂单，按 run_id|bot 分组。
- *  含陈旧 pending（历史未结算单）必须靠 order_date=今日 排除。方向 dir：全买=buy/全卖=sell/混合=mixed。 */
+/** 最新 pending 盘中决策：只取最新 pending order_date 的 live 挂单，按 run_id|bot 分组。
+ *  用最新订单日而不是机器日期，避免周末/节假日或跨时区时“今日”为空。方向 dir：全买=buy/全卖=sell/混合=mixed。 */
 async function loadTodayDecisions(dbPath: string): Promise<{
   today: string
   decisions: Record<string, { dir: 'buy' | 'sell' | 'mixed'; items: Array<{ fund: string; type: 'buy' | 'sell'; amount: number; reason: string }> }>
 }> {
-  const today = shanghaiToday()
-  if (!(await tableExists(dbPath, 'fund_bot_orders'))) return { today, decisions: {} }
+  if (!(await tableExists(dbPath, 'fund_bot_orders'))) return { today: shanghaiToday(), decisions: {} }
+  const today = queryRows<{ d: string | null }>(dbPath,
+    'SELECT MAX(order_date) AS d FROM fund_bot_orders '
+    + "WHERE status = 'pending' AND order_run_id LIKE 'live-%'")[0]?.d ?? shanghaiToday()
   const rows = queryRows<{ order_run_id: string; bot_id: string; fund_code: string; fund_name: string | null; order_type: string; order_amount: number | null; action_reason: string | null }>(dbPath,
     'SELECT o.order_run_id, o.bot_id, o.fund_code, ' +
     "COALESCE(i.fund_name, o.fund_code) AS fund_name, o.order_type, o.order_amount, o.action_reason " +
@@ -2045,13 +2076,13 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         sendJson(res, 200, await loadRunEvals(dbPath))
         return
       }
-      // 侧栏「末日决策」标识：每个 (run,bot) 末日当天动作方向（add/reduce/clear），
+      // 侧栏「最新交易日盘中决策」标识：每个 (run,bot) 最新 live 交易日订单方向（add/reduce/clear），
       // 前端据此在指数目录项上打三色标（仅合格 run 计入，聚合在前端做）。
       if (req.method === 'GET' && url.pathname === '/api/backtest/latest-decisions') {
         sendJson(res, 200, await loadLatestDecisions(dbPath))
         return
       }
-      // 今日盘中决策：今天的 pending 挂单（方向/标的/金额/理由），供一级页「今日决策」列。
+      // 最新盘中决策：最新 pending 订单日的挂单（方向/标的/金额/理由），供一级页「今日决策」列。
       if (req.method === 'GET' && url.pathname === '/api/backtest/today-decisions') {
         sendJson(res, 200, await loadTodayDecisions(dbPath))
         return

@@ -67,20 +67,20 @@ export interface DailyMessageContext {
   // - deepResearchEnabled：run 级开关。research-loop 的工具集是进程级静态的——rl_config_base 放开
   //   deny 后 start_research 等工具**每天**都挂在工具列表里，只能靠 message 措辞门控使用时机。
   //   开了 → fullRules/briefRules 的"研究模式全部禁用"措辞换成"以尾部调度块为准"
-  //   （【深度研究日 · 强制】必须调 / 【深研触发提示 · 授权可选】自主判断 / 都没有则禁止）。
+  //   （【深度研究日 · 强制】必须调；没有该标注则禁止）。
   // - deepResearchDay：本决策日是否深度研究日（第 N/2N/3N 个决策日）→ 注入【深度研究日】块。
   deepResearchEnabled?: boolean
   /** 老字段：ordinal 模式的日历强制日。等价于 deepResearchForced（老 caller 保持兼容）。 */
   deepResearchDay?: boolean
-  /** 深研调度模式。'ordinal' 保持历史；'agent-triggered' 走 bot 自主 + 硬上限双档。 */
+  /** 深研调度模式。'ordinal' 保持历史；'agent-triggered' 走固定间隔 + 崩盘提前触发。 */
   deepResearchMode?: 'ordinal' | 'agent-triggered'
   /** 系统强制：本决策日必须 start_research，跳过 = 违反调度纪律。 */
   deepResearchForced?: boolean
-  /** 系统授权：本决策日允许 start_research（forced=true 时同时授权）。agent-triggered 下几乎恒 true。 */
+  /** 系统授权：仅达到固定间隔或崩盘强制时允许 start_research。 */
   deepResearchAuthorized?: boolean
   /** 距上次深研的交易日 gap（含今日的偏移；MAX_SAFE_INTEGER = 从未深研过）。 */
   deepResearchGapDays?: number
-  /** agent-triggered 模式硬上限，用于渲染 gap 剩余提示。 */
+  /** agent-triggered 模式固定交易日间隔。 */
   deepResearchMaxGapDays?: number
   /** 上次深研日期（ISO），null/undefined = 从未。 */
   deepResearchLastDate?: string
@@ -124,7 +124,7 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
 【决策框架】请参考你的 **AGENTS.md**（已注入到 system prompt 的 \`## AGENTS.md\` section）——这是你的角色定位、决策风格和操作边界的总纲；再参考 **METHODOLOGY.md**（\`## METHODOLOGY.md\` section）——这是本轮 assignment 绑定的 active 产品策略，定义当前产品看什么信号、按什么规则下单。
 
 【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。注意：mem0_search / mem0_add / list_skills / load_skill 是裸名工具，**不带 mcp__ 前缀**（\`mcp__simworld_data__mem0_search\` 这种名字不存在，调了必报错）。${deepResearchEnabled
-    ? '文件读写、web_fetch、bash、子代理（spawn_skill_agent）全部禁用——调用会被直接拒。研究模式工具（start_research 等）虽在工具列表里，但使用时机以 message 尾部的调度块为准：标注【深度研究日 · 强制】= 今天必须调用一次；标注【深研触发提示 · 授权可选】= 允许调用、是否触发由你自主判断；两个标注都没有 = 今天禁止调用。'
+    ? '文件读写、web_fetch、bash、子代理（spawn_skill_agent）全部禁用——调用会被直接拒。研究模式工具（start_research 等）虽在工具列表里，但使用时机以 message 尾部的调度块为准：标注【深度研究日 · 强制】= 今天必须调用一次；没有该标注 = 今天禁止调用。'
     : '文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。'}
 
 【skill 体系】list_skills 看本 bot 装了哪些可加载的研究/判断框架，load_skill <name>（参数名 \`skill_id\`，传 skill 目录名）把 skill 内容直接载入当前对话当思考脚手架。**如果你的 METHODOLOGY 顶部标了「技能驱动」判断管线，每个决策日必须先按它列的顺序 load_skill 把那几个 skill 读进来照做，再做判断和下单——没 load 就凭印象决策 = 没按流程。** 不确定本 bot 装了哪些就先 list_skills 确认。
@@ -140,7 +140,7 @@ function briefRules(date: string, weekday: string, botId: string, deepResearchEn
   return `当前世界日期：${date}（${weekday}）。
 牢记：你的终极目标是追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
 你的 bot_id = **${botId}**——所有 portfolio_* / mcp__strategy_mcp__update_my_strategy 工具的 \`bot_id\` 参数都按字面量传 \`"${botId}"\`（proxy 不会自动注入，传 "me" / "self" / 空串都会被服务端按字符串匹配判成"无账户"）。
-可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。${deepResearchEnabled ? '研究模式工具（start_research 等）使用时机以 message 尾部调度块为准：【深度研究日 · 强制】= 必须调用一次；【深研触发提示 · 授权可选】= 允许调用、由你自主判断；都没有 = 禁止调用。' : ''}
+可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。${deepResearchEnabled ? '研究模式工具（start_research 等）使用时机以 message 尾部调度块为准：【深度研究日 · 强制】= 必须调用一次；没有该标注 = 禁止调用。' : ''}
 
 今天的节奏（按顺序）：
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。

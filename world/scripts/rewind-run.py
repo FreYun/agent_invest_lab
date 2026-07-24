@@ -10,6 +10,9 @@ Behavior:
     - Reverts holdings that exited on/after cutoff (exit_date=NULL, status='active')
     - Deletes per-day dirs under the run dir on/after cutoff
     - Deletes workspace research notes on/after cutoff (keeps earlier ones)
+    - Prunes run memory/store.jsonl entries whose created_at date is on/after
+      cutoff (malformed or undated entries are conservatively kept)
+    - Prunes prediction tracker sections dated on/after cutoff
     - Cleans rl-openclaw sessions dir: removes sessions.json entries with
       trailing YYYY-MM-DD >= cutoff and deletes the matching {UUID}.jsonl /
       {UUID}.state.json files
@@ -31,6 +34,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -97,16 +101,126 @@ def backup(paths: dict, apply: bool) -> int:
     db_backup = DB_PATH.parent / f"fund-backup-pre-rewind-{paths['run_id']}-{paths['cutoff']}-{ts}.db"
     log_backup = paths['log_file'].parent / f"{paths['log_file'].name}.pre-rewind-{ts}"
     state_backup = paths['state_file'].parent / f"state.json.pre-rewind-{ts}"
+    memory_backup = paths['memory_store'].parent / f"store.jsonl.pre-rewind-{ts}"
+    tracker_backup = paths['prediction_tracker'].parent / f"tracker.md.pre-rewind-{ts}"
     print(f"\n=== backup ===")
     print(f"  fund.db  -> {db_backup}")
     print(f"  log      -> {log_backup}  (exists={paths['log_file'].exists()})")
     print(f"  state    -> {state_backup}")
+    print(f"  memory   -> {memory_backup}  (exists={paths['memory_store'].exists()})")
+    print(f"  tracker  -> {tracker_backup}  (exists={paths['prediction_tracker'].exists()})")
     if apply:
         shutil.copy2(DB_PATH, db_backup)
         if paths['log_file'].exists():
             shutil.copy2(paths['log_file'], log_backup)
         shutil.copy2(paths['state_file'], state_backup)
+        if paths['memory_store'].exists():
+            shutil.copy2(paths['memory_store'], memory_backup)
+        if paths['prediction_tracker'].exists():
+            shutil.copy2(paths['prediction_tracker'], tracker_backup)
     return ts
+
+
+def prune_memory_store(memory_store: Path, cutoff: str, apply: bool):
+    """Remove JSONL memories dated on/after cutoff, preserving unsafe lines."""
+    print(f"\n=== memory store cleanup ===")
+    if not memory_store.exists():
+        print(f"  no store.jsonl at {memory_store} — skipping")
+        return
+
+    lines = memory_store.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = []
+    remove_count = 0
+    unsafe_count = 0
+    date_re = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:$|[T ])")
+
+    for line in lines:
+        try:
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError("memory record is not a JSON object")
+            created_at = record.get("created_at")
+            match = date_re.match(created_at) if isinstance(created_at, str) else None
+            if not match:
+                raise ValueError("missing or unsupported created_at")
+            # Reject impossible calendar dates instead of comparing them as strings.
+            time.strptime(match.group(1), "%Y-%m-%d")
+        except (json.JSONDecodeError, TypeError, ValueError):
+            kept.append(line)
+            unsafe_count += 1
+            continue
+
+        if match.group(1) >= cutoff:
+            remove_count += 1
+        else:
+            kept.append(line)
+
+    print(f"  entries to remove: {remove_count}  (kept: {len(kept)})")
+    if unsafe_count:
+        print(f"  WARNING: kept {unsafe_count} malformed/undated entries")
+    if not apply:
+        return
+
+    # Write beside the store and atomically replace it so readers never see a
+    # partially-written JSONL file.
+    mode = memory_store.stat().st_mode
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=memory_store.parent,
+                prefix=".store.jsonl.rewind-", delete=False) as temp:
+            temp_name = temp.name
+            temp.writelines(kept)
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.chmod(temp_name, mode)
+        os.replace(temp_name, memory_store)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
+    print("  memory store cleanup applied")
+
+
+def prune_prediction_tracker(tracker: Path, cutoff: str, apply: bool):
+    """Remove markdown prediction sections whose heading date is >= cutoff."""
+    print(f"\n=== prediction tracker cleanup ===")
+    if not tracker.exists():
+        print(f"  no tracker at {tracker} — skipping")
+        return
+
+    kept = []
+    keep_section = True
+    removed_sections = 0
+    heading_re = re.compile(r"^## (\d{4}-\d{2}-\d{2})(?:\s|$)")
+    for line in tracker.read_text(encoding="utf-8").splitlines(keepends=True):
+        match = heading_re.match(line)
+        if match:
+            keep_section = match.group(1) < cutoff
+            if not keep_section:
+                removed_sections += 1
+        if keep_section:
+            kept.append(line)
+
+    print(f"  prediction sections to remove: {removed_sections}")
+    if not apply:
+        return
+
+    mode = tracker.stat().st_mode
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=tracker.parent,
+                prefix=".tracker.md.rewind-", delete=False) as temp:
+            temp_name = temp.name
+            temp.writelines(kept)
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.chmod(temp_name, mode)
+        os.replace(temp_name, tracker)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
+    print("  prediction tracker cleanup applied")
 
 
 def db_cleanup(bot_id: str, run_id: str, cutoff: str, last_keep: str, apply: bool):
@@ -410,11 +524,56 @@ def rl_openclaw_cleanup(run_dir: Path, bot_id: str, cutoff: str, apply: bool):
     print(f"  sessions.json entries to remove: {len(to_remove_keys)}  "
           f"(kept: {len(data) - len(to_remove_keys)})")
     file_count = 0
+    deep_run_ids = set()
     for sid in to_delete_uuids:
         for ext in ("jsonl", "state.json"):
-            if (sess_dir / f"{sid}.{ext}").exists():
+            session_file = sess_dir / f"{sid}.{ext}"
+            if session_file.exists():
                 file_count += 1
+                if ext == "jsonl":
+                    raw = session_file.read_text(encoding="utf-8", errors="replace")
+                    deep_run_ids.update(re.findall(
+                        r"(?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f])", raw))
+    deep_session_files = []
+    deep_tmp_dirs = []
+    deep_tmp_root = run_dir / "workspaces" / bot_id / "tmp" / "research-loop" / "runs"
+    for rid in sorted(deep_run_ids):
+        for ext in ("jsonl", "state.json"):
+            p = sess_dir / f"{rid}.{ext}"
+            if p.exists():
+                deep_session_files.append(p)
+        p = deep_tmp_root / rid
+        if p.exists():
+            deep_tmp_dirs.append(p)
+    # Remove stale deep-research runs not referenced by any session that will
+    # remain after the rewind. These are commonly left by an earlier rewind and
+    # can otherwise resurface through run ids cached in old artifacts.
+    kept_session_ids = {
+        entry.get("sessionId") for key, entry in data.items()
+        if key not in to_remove_keys and entry.get("sessionId")
+    }
+    kept_deep_ids = set()
+    for sid in kept_session_ids:
+        p = sess_dir / f"{sid}.jsonl"
+        if p.exists():
+            raw = p.read_text(encoding="utf-8", errors="replace")
+            kept_deep_ids.update(re.findall(
+                r"(?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f])", raw))
+    orphan_deep_session_files = [
+        p for p in sess_dir.glob("*.jsonl")
+        if re.fullmatch(r"[0-9a-f]{12}\.jsonl", p.name)
+        and p.stem not in kept_deep_ids
+        and p not in deep_session_files
+    ]
+    orphan_deep_tmp_dirs = [
+        p for p in deep_tmp_root.iterdir()
+        if p.is_dir() and p.name not in kept_deep_ids and p not in deep_tmp_dirs
+    ] if deep_tmp_root.exists() else []
     print(f"  session files to delete: {file_count}")
+    print(f"  linked deep-research session files to delete: {len(deep_session_files)}")
+    print(f"  linked deep-research tmp dirs to delete: {len(deep_tmp_dirs)}")
+    print(f"  orphan deep-research session files to delete: {len(orphan_deep_session_files)}")
+    print(f"  orphan deep-research tmp dirs to delete: {len(orphan_deep_tmp_dirs)}")
 
     if not apply:
         return
@@ -427,6 +586,14 @@ def rl_openclaw_cleanup(run_dir: Path, bot_id: str, cutoff: str, apply: bool):
             p = sess_dir / f"{sid}.{ext}"
             if p.exists():
                 p.unlink()
+    for p in deep_session_files:
+        p.unlink()
+    for p in deep_tmp_dirs:
+        shutil.rmtree(p)
+    for p in orphan_deep_session_files:
+        p.unlink()
+    for p in orphan_deep_tmp_dirs:
+        shutil.rmtree(p)
     print("  rl-openclaw sessions cleanup applied")
 
 
@@ -503,6 +670,7 @@ def main():
     run_dir = WORLD_ROOT / "runtime" / "runs" / run_id
     log_file = WORLD_ROOT / "runtime" / "runs" / f"{run_id}.log"
     state_file = run_dir / "state.json"
+    memory_store = run_dir / "memory" / "store.jsonl"
     if not state_file.exists():
         raise SystemExit(f"state.json not found: {state_file}")
 
@@ -510,6 +678,7 @@ def main():
     bots = state.get("bots") or []
     if not bots:
         raise SystemExit(f"state.json has no 'bots' entries")
+    prediction_tracker = run_dir / "workspaces" / bots[0] / "memory" / "predictions" / "tracker.md"
     trading_dates = state.get("trading_dates") or []
     if not trading_dates:
         raise SystemExit(f"state.json has no 'trading_dates'")
@@ -532,8 +701,12 @@ def main():
         "cutoff": cutoff,
         "log_file": log_file,
         "state_file": state_file,
+        "memory_store": memory_store,
+        "prediction_tracker": prediction_tracker,
     }
     backup(paths, apply)
+    prune_memory_store(memory_store, cutoff, apply)
+    prune_prediction_tracker(prediction_tracker, cutoff, apply)
 
     # process each bot in the run (usually one)
     last_deep_research_overall = None
