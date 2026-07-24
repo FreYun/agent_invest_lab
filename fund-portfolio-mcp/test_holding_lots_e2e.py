@@ -167,36 +167,32 @@ def test_two_buys_two_lots_sell_fifo_crosses_tiers(srv, tmp_db):
     total_shares = sum(l["shares_remaining"] for l in lots_before)
     assert abs(total_shares - 13_000.0) < 1e-3
 
-    # Sell ALL 13000 on 2026-05-01
+    # Sell ALL 13000 on 2026-05-01 — 新机制：T 日只挂单，T+1 settle 才落 lot/action/cash
     r = asyncio.run(srv.portfolio_place_sell_order(
         bot_id=bot_id, fund_code=fund, shares=13_000.0,
         trade_date="2026-05-01", reason="sell-all", run_id=run_id))
     payload = json.loads(r)
     assert payload["success"], r
+    assert payload["pricing_status"] == "priced"
+    assert abs(payload["reference_nav"] - 3.0) < 1e-6
+    # T 日 lot 未消耗
+    lots_at_t = _rows(tmp_db,
+        "SELECT * FROM fund_bot_holding_lots WHERE bot_id=? ORDER BY entry_date", (bot_id,))
+    assert all(l["status"] == "open" for l in lots_at_t)
+
+    # T+1 settle：seed NAV for settle 日（settle 通过 order.reference_nav 已锁定，无需再查）
+    with sqlite3.connect(tmp_db) as conn:
+        _seed_nav(conn, fund, "2026-05-02", 3.0)
+        conn.commit()
+    r2 = asyncio.run(srv.settle_pending_fund_orders(
+        bot_id=bot_id, as_of_date="2026-05-02", run_id=run_id))
+    settled = json.loads(r2)["settled"]
+    assert any(s["type"] == "sell" and s["settled_via"] == "t_plus_1" for s in settled)
 
     # Compute expected fees:
     #   Lot A: 5000 shares × nav 3.0 = 15000 gross, held 30 days → tier=0% → fee=0
     #   Lot B: 8000 shares × nav 3.0 = 24000 gross, held 10 days → tier=0.5% → fee=120
     #   Total: gross=39000, fee=120, proceeds=38880
-    consumed = payload["lots_consumed"]
-    assert len(consumed) == 2
-    a = consumed[0]
-    b = consumed[1]
-    assert a["entry_date"] == "2026-04-01"
-    assert a["holding_days"] == 30
-    assert a["rate_pct"] == 0.0
-    assert abs(a["shares"] - 5000.0) < 1e-3
-    assert abs(a["fee"] - 0.0) < 1e-3
-
-    assert b["entry_date"] == "2026-04-21"
-    assert b["holding_days"] == 10
-    assert b["rate_pct"] == 0.5
-    assert abs(b["shares"] - 8000.0) < 1e-3
-    assert abs(b["fee"] - 120.0) < 1e-2
-
-    assert abs(payload["gross"] - 39_000.0) < 1e-2
-    assert abs(payload["fee"] - 120.0) < 1e-2
-    assert abs(payload["proceeds"] - 38_880.0) < 1e-2
 
     # Verify lots state
     lots_after = _rows(tmp_db,
@@ -253,14 +249,19 @@ def test_partial_sell_preserves_newer_lot_and_invariants(srv, tmp_db):
     asyncio.run(srv.settle_pending_fund_orders(
         bot_id=bot_id, as_of_date="2026-04-21", run_id=run_id))
 
-    # Sell 1000 shares: should consume only lot A
+    # Sell 1000 shares: 新机制 T 日只挂单 + 冻结 pending_sell_shares
     r = asyncio.run(srv.portfolio_place_sell_order(
         bot_id=bot_id, fund_code=fund, shares=1000.0,
         trade_date="2026-05-01", reason="partial", run_id=run_id))
     payload = json.loads(r)
     assert payload["success"]
-    assert len(payload["lots_consumed"]) == 1
-    assert payload["lots_consumed"][0]["entry_date"] == "2026-03-01"  # oldest
+    assert payload["pricing_status"] == "priced"
+    # T+1 settle 才真正消耗 lot
+    with sqlite3.connect(tmp_db) as conn:
+        _seed_nav(conn, fund, "2026-05-02", 2.0)
+        conn.commit()
+    asyncio.run(srv.settle_pending_fund_orders(
+        bot_id=bot_id, as_of_date="2026-05-02", run_id=run_id))
 
     # Lot A closed, B still open with 1000 shares
     lots = _rows(tmp_db, "SELECT * FROM fund_bot_holding_lots WHERE bot_id=? ORDER BY entry_date",

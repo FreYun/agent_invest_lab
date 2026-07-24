@@ -1324,7 +1324,7 @@ async def get_fund_holdings(bot_id: str, run_id: str = "") -> str:
         for h in holdings:
             mv = h["market_value"] or 0
             h["actual_weight"] = _r(mv / total_value * 100 if total_value else 0)
-            ac = h.get("asset_class", "")
+            ac = h.get("asset_class") or _fund_info_defaults(conn, h["fund_code"]).get("asset_class") or ""
             if ac in asset_weights:
                 asset_weights[ac] += mv
 
@@ -1505,8 +1505,11 @@ def _bot_run_cash_view(conn, bot_id: str, run_id: str, as_of_date: str = "") -> 
     口径推导：
       - place_buy_order: 写 pending order；BUY 的 ADD action 在 settle 时才写
         → replay 未感知 → cash_total 没扣 → 用 in_transit 补扣
-      - place_sell_order: T 日就写 REDUCE action（amount=gross）+ pending order
-        → replay 把 cash 直接加上 → 实际仍在 receivable → 用 receivable 补扣
+      - place_sell_order（新机制，与 buy 对称）: 写 pending order（confirmed_amount=NULL）；
+        REDUCE action 在 settle 时才写 → replay 未感知 → cash_total 未加 → 新 sell 不产生 receivable，
+        cash_available 不受影响（sellable 由 holdings.pending_sell_shares 单独管）。
+      - place_sell_order（老机制存量单，confirmed_amount NOT NULL）: T 日已写 REDUCE + 扣 shares，
+        replay 把 cash 直接加上 → 实际仍在 receivable → 用 receivable 补扣（confirmed_amount 求和）。
     """
     as_of_date = as_of_date or datetime.now().strftime("%Y-%m-%d")
     state = _replay_fund_account_state(conn, bot_id, as_of_date, run_id=run_id)
@@ -1678,25 +1681,26 @@ async def portfolio_place_sell_order(
     reason: str = "",
     run_id: str = "",
 ) -> str:
-    """Bot 在 T 日自助下卖出单（T+0 份额变动 / T+1 资金到账）。
+    """Bot 在 T 日自助下卖出单（T+1 结算，与 BUY 对称）。
 
-    新机制（与 BUY 的"T 日扣现金、T+1 加份额"对称）：
-      - 用 trade_date 当日 NAV 锁定 reference_nav
-      - 按 order_date 那天的真实持有天数算赎回费（T 日就锁死，settle 不再重算）
-      - T 日：扣 holding.shares、按比例扣 amount_invested；全部卖出 → status='closed', exit_date=T
-              cash_receivable += (gross - fee)（在途赎回款，T+1 才转入 cash，下买单不能用）
-              fund_bot_actions 同步插入 REDUCE 一条（action_date=trade_date）
-              order 写入：reference_nav / fee / confirmed_shares / confirmed_amount 都是最终值
-              status='pending'、confirm_date=NULL（settle 时再填）
-      - T+1：settle 仅做 cash_receivable→cash 的转账 + 收口 order，不再动 holdings / actions
+    时序（与 BUY 的"T 日冻结现金、T+1 加份额"完全对称）：
+      - T 日：只挂 pending 单 + 冻结 holding.pending_sell_shares（避免重复卖）；
+              若 T 日 NAV 已在库 → 锁定 reference_nav / pricing_status='priced'；
+              若 T 日 NAV 未出（live 14:00 常态）→ pricing_status='awaiting_nav'，
+              等 settle 时按 order_date 那天的 NAV 定价。
+              不动 holdings.shares、不动 amount_invested、不写 REDUCE action、不动 cash_receivable。
+      - T+1：settle_pending_fund_orders 走 confirmed_amount IS NULL 分支——按 reference_nav 与
+              order_date 的持有天数从阶梯费率表算赎回费，FIFO 消耗 lot，扣 holding.shares、
+              close 或 update holding、逐 lot 插 REDUCE action（action_date=order_date），
+              cash += (gross - fee)，订单翻 confirmed。
 
     校验：
       - 账户存在；持仓存在且 active
-      - shares > 0 且 ≤ holding.shares（新机制 shares 实时反映可卖额，pending_sell_shares 保持 0）
-      - trade_date 可暂缺 T 日 NAV；缺失时只冻结 pending_sell_shares，等待净值刷新后定价成交
+      - shares > 0 且 ≤ (holding.shares - pending_sell_shares)（防重复卖）
       - reason 必填：写明为什么现在卖这只基金（缺失直接报错让你补写，进审计日志）
 
-    pending_sell_shares 字段保留只是兼容存量旧路径订单，新订单不再用份额冻结。
+    历史存量：老 T+0 sell 代码（本次改动前）创建的 pending 单 confirmed_amount NOT NULL，
+    settle 时仍走 cash_receivable → cash 的兼容分支，不受影响。
     """
     err = _require_run_id(run_id)
     if err:
@@ -1742,92 +1746,26 @@ async def portfolio_place_sell_order(
                 "note": "盘中卖出订单已受理并冻结份额；T 日净值入库后按 T 日 NAV 定价成交",
             }, ensure_ascii=False)
 
-        # 赎回费按 lot 自有持有天数算：每个 lot 各自一档费率，T 日就锁死，settle 不重算。
-        # FIFO 消耗最老 lot 优先，等价于"优先赎回持有期更长的份额"。
-        _, redeem_tiers = _fund_fee_rates(conn, fund_code)
-        try:
-            consumptions = _consume_lots_fifo(
-                conn, bot_id=bot_id, fund_code=fund_code, run_id=run_id,
-                sell_shares=shares, as_of_date=trade_date, nav=nav,
-                redeem_tiers=redeem_tiers,
-            )
-        except ValueError as e:
-            return json.dumps(
-                {"success": False, "message": f"lot 余量校验失败：{e}"},
-                ensure_ascii=False,
-            )
-
-        gross = sum(c["gross"] for c in consumptions)
-        fee = sum(c["fee"] for c in consumptions)
-        proceeds = gross - fee
-        cost_consumed = sum(c["cost_consumed"] for c in consumptions)
-
-        # T 日扣 holding.shares + amount_invested 按 lot 累计实际成本扣减
-        new_shares = total_shares - shares
-        if new_shares <= 1e-6:
-            conn.execute(
-                "UPDATE fund_bot_holdings SET status='closed', exit_date=?, shares=0, "
-                "amount_invested=0, market_value=0, latest_nav=?, run_id=? WHERE holding_id=?",
-                (trade_date, _r(nav, 6), run_id, holding["holding_id"])
-            )
-        else:
-            # 按 lot 实际消耗成本（不再用 ratio_left 近似）。同时把 entry_date 推到剩余最老 lot 的日期。
-            new_cost = float(holding["amount_invested"] or 0.0) - cost_consumed
-            if new_cost < 0:
-                new_cost = 0.0
-            new_mv = new_shares * nav
-            new_entry_row = conn.execute(
-                "SELECT MIN(entry_date) AS d FROM fund_bot_holding_lots "
-                "WHERE holding_id=? AND status='open'",
-                (holding["holding_id"],),
-            ).fetchone()
-            new_entry_date = (new_entry_row["d"] if new_entry_row and new_entry_row["d"]
-                              else holding["entry_date"])
-            conn.execute(
-                "UPDATE fund_bot_holdings SET shares=?, amount_invested=?, latest_nav=?, "
-                "market_value=?, unrealized_pnl=?, unrealized_pnl_pct=?, entry_date=?, run_id=? "
-                "WHERE holding_id=?",
-                (_r(new_shares, 6), _r(new_cost), _r(nav, 6), _r(new_mv),
-                 _r(new_mv - new_cost),
-                 _r((new_mv - new_cost) / new_cost * 100 if new_cost else 0, 4),
-                 new_entry_date, run_id, holding["holding_id"])
-            )
-
-        # account.cash_receivable += proceeds；cash 不动（T+1 settle 时再划转）
-        new_receivable = float(account["cash_receivable"] or 0.0) + proceeds
+        # nav 已在库：只挂 pending 单 + 冻结 pending_sell_shares；不动 holdings/actions/cash。
+        # T+1 由 settle_pending_fund_orders 走 confirmed_amount IS NULL 分支完成实际结算——
+        # 按 order.reference_nav（此处锁定的 T 日 NAV）与 order_date 的持有天数从阶梯费率表算赎回费，
+        # FIFO 消耗 lot、扣 shares、写 REDUCE action（action_date=order_date）、cash += proceeds。
+        # 好处：与 place_buy_order 完全对称（buy 也是 T 日只冻结现金、T+1 settle 才加 shares），
+        # 快照在 T 日不再出现"卖单已扣仓、买单未加仓"的错位；也贴合真实 A 股 T+1 确认份额。
+        new_pending = already_pending + shares
         conn.execute(
-            "UPDATE fund_bot_accounts SET cash_receivable=?, run_id=?, updated_at=datetime('now') "
-            "WHERE bot_id=?",
-            (_r(new_receivable), run_id, bot_id)
+            "UPDATE fund_bot_holdings SET pending_sell_shares=?, run_id=? WHERE holding_id=?",
+            (_r(new_pending, 6), run_id, holding["holding_id"])
         )
-
-        # 每个被消耗的 lot 写一条 REDUCE action：可追溯每批的费率/天数；orders.fee 是总和。
-        # 若 caller 传了 reason，第一条 action 用它；后续 lot 用机器生成的明细，避免覆盖业务原因。
-        for idx, c in enumerate(consumptions):
-            auto_reason = (
-                f"T 日赎回 lot#{c['lot_id']} (entry={c['entry_date']} "
-                f"持有 {c['holding_days']} 天 nav={nav:.4f} 赎回费 {c['rate']*100:.2f}%)"
-            )
-            row_reason = (reason + " | " + auto_reason) if (reason and idx == 0) else auto_reason
-            conn.execute(
-                "INSERT INTO fund_bot_actions "
-                "(review_id, bot_id, fund_code, action_type, before_weight, after_weight, "
-                "nav_used, amount, shares, fee, reason, action_date, run_id) "
-                "VALUES (NULL, ?, ?, 'REDUCE', NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
-                (bot_id, fund_code, _r(nav, 6), _r(c["gross"]), _r(c["shares"], 6),
-                 _r(c["fee"]), row_reason, trade_date, run_id)
-            )
-
-        # 插入 order：confirmed_shares / confirmed_amount / fee 在 T 日就是最终值；settle 只补 confirm_date
         cur = conn.execute(
             "INSERT INTO fund_bot_orders "
             "(review_id, bot_id, fund_code, fund_name, order_type, order_date, confirm_date, "
-            " order_amount, reference_nav, confirm_nav, confirmed_shares, confirmed_amount, "
-            " fee, action_reason, status, order_run_id) "
-            "VALUES (NULL, ?, ?, ?, 'sell', ?, NULL, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?)",
+            " order_amount, reference_nav, action_reason, status, pricing_status, "
+            " pricing_nav_date, priced_at, order_run_id) "
+            "VALUES (NULL, ?, ?, ?, 'sell', ?, NULL, ?, ?, ?, 'pending', 'priced', ?, ?, ?)",
             (bot_id, fund_code, holding["fund_name"], trade_date,
-             _r(shares, 6), _r(nav, 6), _r(shares, 6), _r(proceeds), _r(fee),
-             reason or "", run_id)
+             _r(shares, 6), _r(nav, 6), reason or "",
+             trade_date, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), run_id)
         )
         order_id = cur.lastrowid
 
@@ -1840,18 +1778,10 @@ async def portfolio_place_sell_order(
         "reference_nav": _r(nav, 6),
         "pricing_status": "priced",
         "shares": _r(shares, 6),
-        "gross": _r(gross),
-        "fee": _r(fee),
-        "proceeds": _r(proceeds),
-        "lots_consumed": [
-            {"lot_id": c["lot_id"], "entry_date": c["entry_date"],
-             "holding_days": c["holding_days"], "rate_pct": round(c["rate"]*100, 4),
-             "shares": _r(c["shares"], 6), "fee": _r(c["fee"])}
-            for c in consumptions
-        ],
+        "estimated_gross": _r(shares * nav),
         "status": "pending",
-        "cash_receivable_after": _r(new_receivable),
-        "note": "T 日已按 FIFO 消耗 lot；proceeds 已锁定 cash_receivable，T+1 settle 后转入 cash",
+        "pending_sell_shares_after": _r(new_pending, 6),
+        "note": "已按 T 日 NAV 锁定 reference_nav；T+1 settle 才扣份额、写 REDUCE action、现金入账（与 BUY 对称）",
     }, ensure_ascii=False)
 
 
@@ -2915,12 +2845,13 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
       - holdings：已存在则加仓；不存在则新建（entry_date=order_date）
 
     赎回（sell）：
-      - 净值用 order.reference_nav
-      - sell_shares = min(order.order_amount, holding.shares)（防御性兜底）
-      - 赎回费率按 settle 当天的真实持有天数从阶梯表取
-      - cash += gross − fee
-      - holding.shares -= sell_shares; holding.pending_sell_shares -= sell_shares
-      - shares→0 → status='closed', exit_date=as_of_date
+      - 净值用 order.reference_nav（T 日下单时锁定的 T 日 NAV）
+      - 新机制主路径（confirmed_amount IS NULL）：按 lot FIFO 消耗，赎回费按 order_date 那天的
+        真实持有天数从阶梯表取；扣 holding.shares、写 REDUCE action（action_date=order_date），
+        cash += (gross - fee)。与 buy 完全对称（T 日只挂 pending、T+1 才动持仓/写 action/加现金）。
+      - 历史兼容路径（confirmed_amount NOT NULL，老 T+0 sell 代码遗留的 pending 单）：
+        holdings/actions 在 T 日已写，settle 只做 cash_receivable → cash 划账 + 订单 confirmed。
+      - shares→0 → status='closed', exit_date=as_of_date（新机制路径由 legacy 分支统一处理）
 
     待定价订单：
       - pricing_status='awaiting_nav' 且 reference_nav 为 null 时，settle 会严格读取 order_date 的 T 日 NAV
@@ -3054,9 +2985,10 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                                 "shares_added": _r(add_shares, 4), "fee": _r(fee), "nav": _r(nav, 6)})
 
             elif o["order_type"] == "sell":
-                # 新机制：T 日下单时 confirmed_amount 就已锁定 → settle 只做 cash_receivable→cash 转账，
-                # 不再动 holdings / actions（T 日已动过）。
-                # 老机制（存量订单）：confirmed_amount IS NULL → 老路径扣 shares + 加 cash + 释放冻结。
+                # 老机制（存量遗留订单，confirmed_amount NOT NULL）：holdings/actions 在 T 日已扣，
+                # settle 只做 cash_receivable → cash 划账 + 订单收口。
+                # 新机制（本次改动后的订单，confirmed_amount IS NULL）：走下面的主路径——
+                # 按 lot FIFO 扣 shares、写 REDUCE action、cash += proceeds。与 buy 对称。
                 if o["confirmed_amount"] is not None:
                     proceeds = float(o["confirmed_amount"] or 0.0)
                     sell_shares = float(o["confirmed_shares"] or 0.0)
@@ -3074,8 +3006,9 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                                     "settled_via": "cash_receivable->cash"})
                     continue
 
-                # ↓↓↓ 老机制兼容路径（confirmed_amount IS NULL）：按 lot FIFO 扣 + 加 cash + 释放冻结。
-                # 跟 place_sell_order 同一份 lot 消耗逻辑；as_of_date 用 order_date 以保持"按申请日算"的语义。
+                # ↓↓↓ 新机制主路径 + awaiting_nav 兼容路径（confirmed_amount IS NULL）：
+                # 按 lot FIFO 扣 + 加 cash + 释放冻结。跟 place_sell_order 走同一份 lot 消耗逻辑；
+                # as_of_date 用 order_date 以保持"按申请日算持有天数/费率"的语义（与 T 日下单口径一致）。
                 if not holding:
                     skipped.append({"order_id": oid, "reason": "无持仓可卖 (legacy)"})
                     continue
@@ -3132,7 +3065,7 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 base_reason = (o["action_reason"] or "").strip()
                 for idx, c in enumerate(consumptions):
                     auto_reason = (
-                        f"legacy settle 赎回 lot#{c['lot_id']} (entry={c['entry_date']} "
+                        f"T+1 结算赎回 lot#{c['lot_id']} (entry={c['entry_date']} "
                         f"申请日持有 {c['holding_days']} 天 nav={nav:.4f} 赎回费 {c['rate']*100:.2f}%)"
                     )
                     row_reason = (base_reason + " | " + auto_reason) if (base_reason and idx == 0) else auto_reason
@@ -3152,7 +3085,7 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 settled.append({"order_id": oid, "fund_code": fc, "type": "sell",
                                 "shares_sold": _r(sell_shares, 4), "gross": _r(gross),
                                 "proceeds": _r(gross - fee), "fee": _r(fee), "nav": _r(nav, 6),
-                                "settled_via": "legacy"})
+                                "settled_via": "t_plus_1"})
 
         conn.execute(
             "UPDATE fund_bot_accounts SET cash=?, cash_in_transit=?, cash_receivable=?, "
@@ -3918,7 +3851,7 @@ def _compute_fund_snapshot(conn, bot_id: str, trade_date: str, run_id: str = "")
         high_nav = max(float((meta or {}).get("high_nav") or 0.0), nav)
         daily_pnl = mv - prev_mv
         invested_value += mv
-        ac = current.get("asset_class") or meta.get("asset_class") or ""
+        ac = current.get("asset_class") or meta.get("asset_class") or _fund_info_defaults(conn, fc).get("asset_class") or ""
         # 清仓残值（市值 < DUST_MV_THRESHOLD 的零碎份额）：市值已计入 invested_value 保持
         # 账户/净值口径不变，但不计入资产权重、不写持仓快照——否则「最新持仓」会被一堆
         # 几分钱的尘埃仓刷屏。

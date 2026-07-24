@@ -1,8 +1,8 @@
 [Unit]
-Description=Trigger live settle at 18:30 on weekdays
+Description=Trigger live settle at 07:00 on weekdays (after NAV refresh)
 
 [Timer]
-OnCalendar=Mon..Fri 18:30
+OnCalendar=Mon..Fri 07:00
 Persistent=false
 
 [Install]

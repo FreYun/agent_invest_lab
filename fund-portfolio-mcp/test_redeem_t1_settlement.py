@@ -1,18 +1,19 @@
-"""SELL T+0 份额变动 / T+1 资金到账机制的回归测试。
+"""SELL T+1 结算（与 BUY 对称）机制的回归测试。
 
-新机制（与旧 settle-时扣 shares 的实现对比）：
+新机制（本次改造后，与 BUY 时序完全对称）：
   T 日 place_sell_order：
-    - 用 T 日 NAV
-    - 立即扣 holding.shares、按比例扣 amount_invested
-    - 立即在 fund_bot_accounts.cash_receivable += (gross - fee)
-    - 立即插入 fund_bot_actions（REDUCE，action_date=order_date）
-    - order.confirmed_shares / confirmed_amount / fee 在 T 日就已锁定
-    - account.cash 不变
-    - holding.pending_sell_shares 仍保持 0（新机制不再用份额冻结）
+    - 若 T 日 NAV 已在库：锁 order.reference_nav / pricing_status='priced'
+      若 T 日 NAV 未出：pricing_status='awaiting_nav'，settle 时按 order_date 定价
+    - 立即 holding.pending_sell_shares += want（防重复卖）
+    - 不动 holding.shares、不动 amount_invested、不写 REDUCE action、不动 cash_receivable/cash
+    - order.status='pending', confirmed_shares/confirmed_amount/fee 均为 NULL
   T+1 settle_pending_fund_orders：
-    - 仅做 cash_receivable -> cash 的转账 + order 状态收口
-    - 不再动 holdings、不再插 actions
-  老机制兼容：confirmed_amount IS NULL 的存量 pending 卖单仍走旧 settle 路径
+    - 按 reference_nav 与 order_date 的持有天数从阶梯表算赎回费
+    - FIFO 消耗 lot、扣 holding.shares、close 或 update holding、释放 pending_sell_shares
+    - 逐 lot 插 REDUCE action（action_date=order_date）
+    - cash += (gross - fee)，订单翻 confirmed（confirm_date=as_of_date）
+  老机制兼容：老 T+0 sell 代码遗留的 pending 单（confirmed_amount NOT NULL）在 settle 时
+              仍走 cash_receivable → cash 的兼容分支。
 """
 import asyncio
 import importlib
@@ -85,13 +86,24 @@ def _seed_account(conn, bot_id, cash, initial=None, run_id="seed"):
 
 
 def _seed_holding(conn, bot_id, fund_code, shares, cost, entry_date, entry_nav, run_id="seed"):
-    conn.execute(
+    """seed holding + 对应单 lot（配合 FIFO settle 使用）。"""
+    cur = conn.execute(
         "INSERT INTO fund_bot_holdings "
         "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
         " shares, pending_sell_shares, amount_invested, market_value, status, run_id) "
         "VALUES (?, ?, '测试基金', '股票类', 'core', ?, ?, ?, ?, 0, ?, ?, 'active', ?)",
         (bot_id, fund_code, entry_date, entry_nav, entry_nav, shares, shares * entry_nav,
          cost, run_id),
+    )
+    holding_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO fund_bot_holding_lots "
+        "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, "
+        " shares_initial, shares_remaining, cost_initial, cost_remaining, "
+        " source_order_id, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'open')",
+        (bot_id, fund_code, run_id, holding_id, entry_date, entry_nav,
+         shares, shares, cost, cost),
     )
 
 
@@ -107,7 +119,8 @@ def _rows(conn, sql, args=()):
 def _setup_standard(reload_server, bot_id="botT", fund="000001",
                     entry_date="2026-04-10", entry_nav=1.0, shares=10_000.0,
                     cost=10_000.0, sell_date="2026-05-11", sell_nav=1.20,
-                    initial_cash=10_000.0, account_cash=0.0):
+                    initial_cash=10_000.0, account_cash=0.0,
+                    settle_date="2026-05-12", run_id="run-T"):
     """造一个 bot 有一只持仓的标准场景。返回 (server, db_path)。
 
     持有 31 个自然日（4-10 → 5-11）→ 跨过 30 天阈值 → 赎回费 = 0%
@@ -119,18 +132,19 @@ def _setup_standard(reload_server, bot_id="botT", fund="000001",
         _seed_fund(conn, fund)
         _seed_nav(conn, fund, entry_date, entry_nav)
         _seed_nav(conn, fund, sell_date, sell_nav)
-        _seed_account(conn, bot_id, account_cash, initial=initial_cash)
-        _seed_holding(conn, bot_id, fund, shares, cost, entry_date, entry_nav)
+        _seed_nav(conn, fund, settle_date, sell_nav)
+        _seed_account(conn, bot_id, account_cash, initial=initial_cash, run_id=run_id)
+        _seed_holding(conn, bot_id, fund, shares, cost, entry_date, entry_nav, run_id=run_id)
         conn.commit()
     return s, db_mod.DB_PATH
 
 
 # =============================================================================
-#  T 日 place_sell_order 行为
+#  T 日 place_sell_order 行为（新机制：只挂单 + 冻结 pending_sell_shares，不动实仓）
 # =============================================================================
 
-def test_sell_T_day_extracts_shares_immediately_for_partial(reload_server):
-    """部分赎回：T 日 holding.shares 立刻减少，pending_sell_shares 保持 0。"""
+def test_sell_T_day_locks_pending_sell_shares_only(reload_server):
+    """T 日 shares 不变、pending_sell_shares += want、status 仍 active。"""
     s, db_path = _setup_standard(reload_server)
     resp = asyncio.run(s.portfolio_place_sell_order(
         bot_id="botT", fund_code="000001", shares=3000.0,
@@ -138,101 +152,47 @@ def test_sell_T_day_extracts_shares_immediately_for_partial(reload_server):
     ))
     payload = json.loads(resp)
     assert payload["success"], payload
+    assert payload["pricing_status"] == "priced"
+    assert payload["reference_nav"] == 1.2
+    assert abs(payload["pending_sell_shares_after"] - 3000.0) < 1e-6
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
-    assert abs(h["shares"] - 7000.0) < 1e-6, f"shares 应在 T 日就扣到 7000，得到 {h['shares']}"
-    assert abs(h["pending_sell_shares"]) < 1e-6, "新机制不再使用 pending_sell_shares 冻结"
-    assert h["status"] == "active", "部分卖出后持仓应仍 active"
+    assert abs(h["shares"] - 10000.0) < 1e-6, "T 日 shares 不动（等 T+1 settle 才扣）"
+    assert abs(h["pending_sell_shares"] - 3000.0) < 1e-6
+    assert h["status"] == "active"
 
 
-def test_sell_T_day_extracts_amount_invested_proportionally(reload_server):
-    """部分赎回：amount_invested 按 sell/shares_before 比例扣减。"""
-    s, db_path = _setup_standard(reload_server)  # cost=10000, shares=10000
-    asyncio.run(s.portfolio_place_sell_order(
-        bot_id="botT", fund_code="000001", shares=2500.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
-    ))
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
-    # 卖 25% → 成本保留 75%
-    assert abs(h["amount_invested"] - 7500.0) < 1e-3, h["amount_invested"]
-
-
-def test_sell_T_day_full_redeem_closes_holding(reload_server):
-    """全部赎回：T 日 status='closed', exit_date=order_date, shares=0."""
+def test_sell_T_day_amount_invested_unchanged(reload_server):
+    """T 日 amount_invested 不动，settle 时才按 lot 消耗扣减。"""
     s, db_path = _setup_standard(reload_server)
     asyncio.run(s.portfolio_place_sell_order(
-        bot_id="botT", fund_code="000001", shares=10000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
+        bot_id="botT", fund_code="000001", shares=2500.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
     ))
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
-    assert h["status"] == "closed"
-    assert h["exit_date"] == "2026-05-11"
-    assert abs(h["shares"]) < 1e-6
+    assert abs(h["amount_invested"] - 10000.0) < 1e-3, h["amount_invested"]
 
 
-def test_sell_T_day_credits_cash_receivable_net_amount(reload_server):
-    """T 日 cash_receivable += (gross - fee)。持有 31 天 → fee 为 0 → receivable = shares * nav。"""
-    s, db_path = _setup_standard(reload_server)  # nav=1.20, fee=0%
+def test_sell_T_day_cash_receivable_unchanged(reload_server):
+    """T 日 cash_receivable 不动，也不动 cash。钱要到 T+1 settle 才落进 cash。"""
+    s, db_path = _setup_standard(reload_server, account_cash=1234.0)
     asyncio.run(s.portfolio_place_sell_order(
         bot_id="botT", fund_code="000001", shares=4000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
     ))
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
-    assert abs(a["cash_receivable"] - 4800.0) < 1e-3, a["cash_receivable"]
-    assert abs(a["cash"]) < 1e-6, "T 日 cash 不动"
+    assert abs((a["cash_receivable"] or 0.0)) < 1e-6
+    assert abs(a["cash"] - 1234.0) < 1e-6
 
 
-def test_sell_T_day_cash_remains_untouched(reload_server):
-    """T 日 cash 不变 — 钱要到 T+1 才到账。"""
-    s, db_path = _setup_standard(reload_server, account_cash=1234.0)
-    asyncio.run(s.portfolio_place_sell_order(
-        bot_id="botT", fund_code="000001", shares=1000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
-    ))
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        a = _row(conn, "SELECT cash FROM fund_bot_accounts WHERE bot_id='botT'")
-    assert abs(a["cash"] - 1234.0) < 1e-6, "T 日 SELL 不能动 cash"
-
-
-def test_sell_T_day_locks_fee_at_order_date_holding_days(reload_server):
-    """赎回费按 order_date 那天的真实持有天数锁定，并写入 order.fee/confirmed_amount。
-
-    持有 5 天（< 7 天）→ 1.5% 赎回费。
-    """
-    bot_id, fund = "botT", "000001"
-    # 持有 5 天：2026-05-06 → 2026-05-11
-    s, db_path = _setup_standard(
-        reload_server, entry_date="2026-05-06", sell_date="2026-05-11",
-        sell_nav=1.00,
-    )
-    asyncio.run(s.portfolio_place_sell_order(
-        bot_id=bot_id, fund_code=fund, shares=1000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
-    ))
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        order = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id=?", (bot_id,))
-        acc = _row(conn, "SELECT cash_receivable FROM fund_bot_accounts WHERE bot_id=?", (bot_id,))
-    # gross=1000, fee=15 (1.5%), net=985
-    assert abs(order["fee"] - 15.0) < 1e-3, order["fee"]
-    assert abs(order["confirmed_amount"] - 985.0) < 1e-3, order["confirmed_amount"]
-    assert abs(order["confirmed_shares"] - 1000.0) < 1e-3
-    assert order["status"] == "pending"
-    assert order["confirm_date"] is None, "T 日 confirm_date 还是 NULL"
-    assert abs(acc["cash_receivable"] - 985.0) < 1e-3
-
-
-def test_sell_T_day_inserts_REDUCE_action_at_order_date(reload_server):
-    """T 日就要插入 fund_bot_actions 一条 REDUCE，action_date = order_date。"""
+def test_sell_T_day_no_action_inserted(reload_server):
+    """T 日不写 REDUCE action（等 T+1 settle 才逐 lot 写）。"""
     s, db_path = _setup_standard(reload_server)
     asyncio.run(s.portfolio_place_sell_order(
         bot_id="botT", fund_code="000001", shares=2000.0,
@@ -240,48 +200,76 @@ def test_sell_T_day_inserts_REDUCE_action_at_order_date(reload_server):
     ))
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT' ORDER BY action_id")
-    assert len(actions) == 1, "应在 T 日插入一条 REDUCE action"
-    a = actions[0]
-    assert a["action_type"] == "REDUCE"
-    assert a["action_date"] == "2026-05-11"
-    assert a["run_id"] == "run-T"
-    assert abs(float(a["shares"]) - 2000.0) < 1e-3
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT'")
+    assert actions == []
 
 
-def test_sell_T_day_multiple_partials_same_day(reload_server):
-    """同日多次部分赎回累加：每次基于当前 shares 算可卖、cash_receivable 累加。"""
+def test_sell_T_day_order_status_and_fields(reload_server):
+    """T 日 order.status=pending, confirmed_* 全 NULL, reference_nav 已锁 T 日 NAV。"""
+    s, db_path = _setup_standard(reload_server)
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botT", fund_code="000001", shares=1000.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
+    ))
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        o = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id='botT'")
+    assert o["status"] == "pending"
+    assert o["pricing_status"] == "priced"
+    assert o["reference_nav"] == 1.2
+    assert o["pricing_nav_date"] == "2026-05-11"
+    assert o["confirmed_shares"] is None
+    assert o["confirmed_amount"] is None
+    assert o["fee"] is None
+    assert o["confirm_date"] is None
+
+
+def test_sell_T_day_multiple_partials_accumulate_pending(reload_server):
+    """同日多次部分赎回累加：pending_sell_shares 累加，shares 仍不变，两条 pending 单。"""
     s, db_path = _setup_standard(reload_server)
     for amt in (1000.0, 2000.0):
         asyncio.run(s.portfolio_place_sell_order(
             bot_id="botT", fund_code="000001", shares=amt,
-            trade_date="2026-05-11", reason="", run_id="run-T",
+            trade_date="2026-05-11", reason="trim", run_id="run-T",
         ))
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
-        a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
         orders = _rows(conn, "SELECT * FROM fund_bot_orders WHERE bot_id='botT' ORDER BY order_id")
-        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT' ORDER BY action_id")
-    assert abs(h["shares"] - 7000.0) < 1e-6
-    # 持有 31 天 fee=0% → receivable = 3000*1.20 = 3600
-    assert abs(a["cash_receivable"] - 3600.0) < 1e-3
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT'")
+    assert abs(h["shares"] - 10000.0) < 1e-6
+    assert abs(h["pending_sell_shares"] - 3000.0) < 1e-6
     assert len(orders) == 2
-    assert len(actions) == 2
+    assert all(o["status"] == "pending" for o in orders)
+    assert actions == []
+
+
+def test_sell_T_day_rejects_when_pending_exceeds_available(reload_server):
+    """已冻结 8000，再卖 3000（合计 11000 > 持仓 10000）→ 应拒绝。"""
+    s, _ = _setup_standard(reload_server)
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botT", fund_code="000001", shares=8000.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
+    ))
+    resp = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botT", fund_code="000001", shares=3000.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
+    )))
+    assert not resp["success"], "超出可卖份额应拒绝"
+    assert "可卖份额不足" in resp["message"]
 
 
 # =============================================================================
-#  T+1 settle 行为
+#  T+1 settle：新机制 sell 走 legacy 路径完成扣仓 + 加现金 + 写 action
 # =============================================================================
 
-def test_settle_converts_receivable_to_cash_for_new_sell(reload_server):
-    """T+1 settle 把新机制 SELL 订单的 cash_receivable 转成 cash，不动 holdings。"""
+def test_settle_new_mechanism_extracts_shares_and_credits_cash(reload_server):
+    """T+1 settle：扣 shares、cash += proceeds、订单 confirmed、pending_sell_shares 释放。"""
     s, db_path = _setup_standard(reload_server)
     asyncio.run(s.portfolio_place_sell_order(
         bot_id="botT", fund_code="000001", shares=5000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
     ))
-    # T+1 settle
     asyncio.run(s.settle_pending_fund_orders(
         bot_id="botT", as_of_date="2026-05-12", run_id="run-T1",
     ))
@@ -290,55 +278,212 @@ def test_settle_converts_receivable_to_cash_for_new_sell(reload_server):
         a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
         o = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id='botT'")
         h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
-        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT'")
-    # holding 在 T 日就动了，settle 不应再动 shares
-    assert abs(h["shares"] - 5000.0) < 1e-6
-    assert abs(a["cash_receivable"]) < 1e-6
-    assert abs(a["cash"] - 6000.0) < 1e-3, f"5000*1.20*(1-0)=6000, got {a['cash']}"
+    # 持有 31 天 → fee=0% → proceeds = 5000 * 1.20 = 6000
+    assert abs(h["shares"] - 5000.0) < 1e-6, "T+1 才扣 shares"
+    assert abs(h["pending_sell_shares"]) < 1e-6, "pending 应释放"
+    assert abs(a["cash"] - 6000.0) < 1e-3
+    assert abs((a["cash_receivable"] or 0.0)) < 1e-6
     assert o["status"] == "confirmed"
     assert o["confirm_date"] == "2026-05-12"
     assert o["settle_run_id"] == "run-T1"
-    # actions 只有 T 日那一条
-    assert len(actions) == 1, "settle 不应再插 action"
+    assert abs(o["confirmed_shares"] - 5000.0) < 1e-3
+    assert abs(o["confirmed_amount"] - 6000.0) < 1e-3
 
 
-def test_settle_for_new_sell_does_not_double_extract_shares(reload_server):
-    """settle 处理新机制 SELL 时绝对不能再次扣 shares。"""
+def test_settle_full_redeem_closes_holding(reload_server):
+    """全部赎回：T+1 settle 后 status='closed', exit_date=as_of_date, shares=0。"""
     s, db_path = _setup_standard(reload_server)
     asyncio.run(s.portfolio_place_sell_order(
-        bot_id="botT", fund_code="000001", shares=10000.0,  # 全部
-        trade_date="2026-05-11", reason="", run_id="run-T",
+        bot_id="botT", fund_code="000001", shares=10000.0,
+        trade_date="2026-05-11", reason="clear", run_id="run-T",
     ))
-    # T 日已 closed，shares=0
+    # T 日 holding 仍 active（关键）
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        before_h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
-    assert before_h["status"] == "closed"
+        before = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
+    assert before["status"] == "active"
+    assert abs(before["shares"] - 10000.0) < 1e-6
 
     asyncio.run(s.settle_pending_fund_orders(
         bot_id="botT", as_of_date="2026-05-12", run_id="run-T1",
     ))
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        after_h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
+        h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
         a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
-    assert after_h["status"] == "closed"
-    assert abs(after_h["shares"]) < 1e-6
-    # cash receivable -> cash
-    assert abs(a["cash"] - 12000.0) < 1e-3, a["cash"]
-    assert abs(a["cash_receivable"]) < 1e-6
+    assert h["status"] == "closed"
+    # pricing_status=='priced' 分支 → exit_date=as_of_date
+    assert h["exit_date"] == "2026-05-12"
+    assert abs(h["shares"]) < 1e-6
+    assert abs(a["cash"] - 12000.0) < 1e-3
+
+
+def test_settle_uses_order_date_holding_days_for_fee(reload_server):
+    """赎回费按 order_date 那天的持有天数（不是 settle 日）：持有 5 天 → 1.5%。"""
+    s, db_path = _setup_standard(
+        reload_server, entry_date="2026-05-06",
+        sell_date="2026-05-11", sell_nav=1.00, settle_date="2026-05-12",
+    )
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botT", fund_code="000001", shares=1000.0,
+        trade_date="2026-05-11", reason="quick sell", run_id="run-T",
+    ))
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botT", as_of_date="2026-05-12", run_id="run-T1",
+    ))
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        order = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id='botT'")
+        acc = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
+    # gross=1000, fee=15 (1.5%), net=985
+    assert abs(order["fee"] - 15.0) < 1e-3
+    assert abs(order["confirmed_amount"] - 985.0) < 1e-3
+    assert abs(order["confirmed_shares"] - 1000.0) < 1e-3
+    assert order["status"] == "confirmed"
+    assert abs(acc["cash"] - 985.0) < 1e-3
+
+
+def test_settle_inserts_REDUCE_action_with_order_date(reload_server):
+    """settle 时写 REDUCE action，action_date 用 order_date（T 日），非 settle 日。"""
+    s, db_path = _setup_standard(reload_server)
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botT", fund_code="000001", shares=2000.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
+    ))
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botT", as_of_date="2026-05-12", run_id="run-T1",
+    ))
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT' ORDER BY action_id")
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["action_type"] == "REDUCE"
+    assert a["action_date"] == "2026-05-11", "action_date 必须是 order_date（T 日）"
+    # settle 时 action 归属 order_run_id（= run-T），不是 settle 的 run-T1
+    assert a["run_id"] == "run-T"
+    assert abs(float(a["shares"]) - 2000.0) < 1e-3
+
+
+def test_multiple_partials_same_day_all_settle_at_t_plus_1(reload_server):
+    """T 日两笔 pending sell，T+1 settle 后应逐个应用，两条 REDUCE action。"""
+    s, db_path = _setup_standard(reload_server)
+    for amt in (1000.0, 2000.0):
+        asyncio.run(s.portfolio_place_sell_order(
+            bot_id="botT", fund_code="000001", shares=amt,
+            trade_date="2026-05-11", reason="trim", run_id="run-T",
+        ))
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botT", as_of_date="2026-05-12", run_id="run-T1",
+    ))
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
+        a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
+        orders = _rows(conn, "SELECT * FROM fund_bot_orders WHERE bot_id='botT' ORDER BY order_id")
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT' ORDER BY action_id")
+    assert abs(h["shares"] - 7000.0) < 1e-6
+    assert abs(h["pending_sell_shares"]) < 1e-6
+    # 31 天 fee=0% → cash = 3000 * 1.20 = 3600
+    assert abs(a["cash"] - 3600.0) < 1e-3
+    assert len(orders) == 2
+    assert all(o["status"] == "confirmed" for o in orders)
+    assert len(actions) == 2
+
+
+def test_settle_idempotent_no_double_extract(reload_server):
+    """重复调用 settle：已 confirmed 的订单不会被再次处理，shares/cash 不动。"""
+    s, db_path = _setup_standard(reload_server)
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botT", fund_code="000001", shares=3000.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
+    ))
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botT", as_of_date="2026-05-12", run_id="run-T1",
+    ))
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h1 = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
+        a1 = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
+    # 再跑一遍 settle
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botT", as_of_date="2026-05-13", run_id="run-T2",
+    ))
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h2 = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT'")
+        a2 = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id='botT'")
+    assert abs(h1["shares"] - h2["shares"]) < 1e-6
+    assert abs(a1["cash"] - a2["cash"]) < 1e-3
+    assert len(actions) == 1
 
 
 # =============================================================================
-#  存量老订单兼容
+#  存量老订单兼容路径（confirmed_amount NOT NULL）
 # =============================================================================
 
-def test_legacy_pending_sell_still_settles_via_old_path(reload_server):
-    """旧机制 pending SELL（confirmed_amount IS NULL、pending_sell_shares 冻结）在 settle 时仍走老路径。
+def test_legacy_receivable_path_preserved(reload_server):
+    """老机制遗留 pending SELL（confirmed_amount NOT NULL、shares 已在 T 日扣）：
+    settle 只做 cash_receivable → cash 划账，不再动 holdings/actions。"""
+    bot_id, fund = "botLegacy", "000001"
+    import db as db_mod
+    s = reload_server
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        _seed_fund(conn, fund)
+        _seed_nav(conn, fund, "2026-04-10", 1.00)
+        _seed_nav(conn, fund, "2026-05-11", 1.20)
+        # 账户：cash=0, cash_receivable=985（老代码 T 日已划入）
+        conn.execute(
+            "INSERT OR REPLACE INTO fund_bot_accounts "
+            "(bot_id, initial_capital, cash, cash_in_transit, cash_receivable, run_id) "
+            "VALUES (?, 10000, 0, 0, 985, 'legacy')",
+            (bot_id,),
+        )
+        # 持仓：老代码 T 日已扣 shares（10000→9000）
+        conn.execute(
+            "INSERT INTO fund_bot_holdings "
+            "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
+            " shares, pending_sell_shares, amount_invested, market_value, status, run_id) "
+            "VALUES (?, ?, '测试', '股票类', 'core', '2026-04-10', 1.00, 1.20, "
+            " 9000, 0, 9000, 10800, 'active', 'legacy')",
+            (bot_id, fund),
+        )
+        # 老 pending 卖单：confirmed_amount / confirmed_shares / fee 都已锁死
+        conn.execute(
+            "INSERT INTO fund_bot_orders "
+            "(bot_id, fund_code, fund_name, order_type, order_date, confirm_date, "
+            " order_amount, reference_nav, confirm_nav, confirmed_shares, confirmed_amount, "
+            " fee, status, pricing_status, order_run_id) "
+            "VALUES (?, ?, '测试', 'sell', '2026-05-11', NULL, 1000, 1.20, "
+            " NULL, 1000, 985, 15, 'pending', 'priced', 'legacy')",
+            (bot_id, fund),
+        )
+        conn.commit()
 
-    NOTE: 现在 legacy 路径也走 FIFO lot 消耗——前提是 migration 已为持仓建好 lot 行。
-    本测试模拟"迁移完成后存留的老订单"的状态：seed holding + seed 对应 lot。
-    """
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id=bot_id, as_of_date="2026-05-12", run_id="run-T1",
+    ))
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        h = _row(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id=?", (bot_id,))
+        a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id=?", (bot_id,))
+        o = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id=?", (bot_id,))
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id=?", (bot_id,))
+    # 老路径不再动 holdings
+    assert abs(h["shares"] - 9000.0) < 1e-3
+    # cash_receivable → cash
+    assert abs(a["cash"] - 985.0) < 1e-3
+    assert abs((a["cash_receivable"] or 0.0)) < 1e-6
+    assert o["status"] == "confirmed"
+    # 老路径 settle 不插新 action
+    assert actions == []
+
+
+def test_legacy_awaiting_nav_still_settles_via_lot_fifo_path(reload_server):
+    """老 awaiting_nav 兼容路径（无 confirmed_amount、pending_sell_shares 冻结）
+    仍走 lot FIFO 消耗路径——本次改造保持向后兼容。"""
     bot_id, fund = "botL", "000001"
     import db as db_mod
     s = reload_server
@@ -347,8 +492,7 @@ def test_legacy_pending_sell_still_settles_via_old_path(reload_server):
         _seed_fund(conn, fund)
         _seed_nav(conn, fund, "2026-04-10", 1.00)
         _seed_nav(conn, fund, "2026-05-11", 1.20)
-        _seed_account(conn, bot_id, 0.0, initial=10_000.0)
-        # 老机制持仓：pending_sell_shares 冻结
+        _seed_account(conn, bot_id, 0.0, initial=10_000.0, run_id="legacy")
         cur = conn.execute(
             "INSERT INTO fund_bot_holdings "
             "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
@@ -358,7 +502,6 @@ def test_legacy_pending_sell_still_settles_via_old_path(reload_server):
             (bot_id, fund),
         )
         holding_id = cur.lastrowid
-        # 模拟 migration 产物：单 lot 对应整个 holding（10000 份，成本 10000）
         conn.execute(
             "INSERT INTO fund_bot_holding_lots "
             "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, "
@@ -367,7 +510,6 @@ def test_legacy_pending_sell_still_settles_via_old_path(reload_server):
             "VALUES (?, ?, 'legacy', ?, '2026-04-10', 1.00, 10000, 10000, 10000, 10000, NULL, 'open')",
             (bot_id, fund, holding_id),
         )
-        # 老 pending 卖单：confirmed_amount IS NULL，order_amount 是申报份额
         conn.execute(
             "INSERT INTO fund_bot_orders "
             "(bot_id, fund_code, fund_name, order_type, order_date, confirm_date, "
@@ -388,111 +530,178 @@ def test_legacy_pending_sell_still_settles_via_old_path(reload_server):
         a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id=?", (bot_id,))
         o = _row(conn, "SELECT * FROM fund_bot_orders WHERE bot_id=?", (bot_id,))
         actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id=?", (bot_id,))
-    # 老路径在 settle 时扣 shares + 释放冻结
-    assert abs(h["shares"] - 7000.0) < 1e-3, h["shares"]
+    assert abs(h["shares"] - 7000.0) < 1e-3
     assert abs(h["pending_sell_shares"]) < 1e-3
-    # 31 天持有 → fee=0% → cash += 3000*1.20 = 3600
-    assert abs(a["cash"] - 3600.0) < 1e-3, a["cash"]
+    assert abs(a["cash"] - 3600.0) < 1e-3
     assert o["status"] == "confirmed"
-    assert len(actions) == 1, "老路径在 settle 时插 action"
+    assert len(actions) == 1
 
 
 # =============================================================================
-#  接口层：portfolio_get_my_history 暴露 cash_receivable
+#  接口层与快照连续性
 # =============================================================================
 
-def test_get_my_history_exposes_cash_receivable(reload_server):
-    """portfolio_get_my_history 的 account 块新增 cash_receivable 字段。"""
+def test_get_my_history_shows_pending_sell_via_orders_and_holding(reload_server):
+    """T 日下卖单后，portfolio_get_my_history 应能透过 orders 列表 + holding.pending_sell_shares
+    让 bot 看到"卖单已挂但未生效"。"""
     s, _ = _setup_standard(reload_server)
     asyncio.run(s.portfolio_place_sell_order(
         bot_id="botT", fund_code="000001", shares=4000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
     ))
-    resp = json.loads(asyncio.run(s.portfolio_get_my_history(bot_id="botT")))
-    assert "cash_receivable" in resp["account"]
-    assert abs(float(resp["account"]["cash_receivable"]) - 4800.0) < 1e-3
-    # total = cash + in_transit + receivable + market_value
-    total = float(resp["account"]["total_value"])
-    expected = 0.0 + 0.0 + 4800.0 + 6000.0 * 1.20  # cash=0, in_transit=0, rec=4800, mv=6000*1.20=7200
-    assert abs(total - expected) < 1e-3, f"expected {expected}, got {total}"
+    resp = json.loads(asyncio.run(s.portfolio_get_my_history(bot_id="botT", run_id="run-T")))
+    assert resp["success"], resp
+    # holding 的 pending_sell_shares 反映冻结
+    hs = [h for h in resp["holdings"] if h["fund_code"] == "000001"]
+    assert hs and abs(hs[0]["pending_sell_shares"] - 4000.0) < 1e-6
+    # orders 里能看到这条 pending sell
+    pending_sells = [o for o in resp["orders"] if o["order_type"] == "sell" and o["status"] == "pending"]
+    assert len(pending_sells) == 1
+    # summary.pending_sell_shares 汇总
+    assert abs(resp["summary"]["pending_sell_shares"] - 4000.0) < 1e-6
 
 
 def test_total_value_continuity_T_to_T_plus_1(reload_server):
-    """T 日卖出与 T+1 settle 之间，bot 视角的总资产必须连续（NAV 不变前提下）。
-    通过 portfolio_close_my_day.assets.total_value（直接用 account 字段拼）验证，
-    避开 _replay_fund_account_state 的 run-isolation 行为（既有设计）。
-
-    场景：initial=12000，已建仓 10000 元（10000 shares @1.0），cash=2000。
-         T 日 NAV=1.20，卖前总资产 = 2000 + 12000 = 14000。
+    """T 日卖出与 T+1 settle 之间总资产连续（NAV 不变前提下）。
+    直接查 fund_bot_accounts + fund_bot_holdings 校验，避开 replay/close_my_day 的复杂路径。
     """
-    bot_id, fund = "botC", "000001"
+    s, db_path = _setup_standard(reload_server, account_cash=2_000.0, initial_cash=12_000.0)
+
+    def _snapshot():
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            a = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id='botT'")
+            hs = _rows(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id='botT' AND status='active'")
+        cash = float(a["cash"] or 0.0)
+        in_transit = float(a["cash_in_transit"] or 0.0)
+        receivable = float(a["cash_receivable"] or 0.0)
+        # 用当日 nav 1.20 计市值
+        mv = sum(float(h["shares"] or 0.0) * 1.20 for h in hs)
+        return cash, in_transit, receivable, mv, cash + in_transit + receivable + mv
+
+    # T 日卖前基准：cash=2000 + mv=10000*1.2=12000 → 14000
+    _, _, _, _, base = _snapshot()
+    assert abs(base - 14000.0) < 1e-6
+
+    # T 日卖 5000 → 新机制不改 shares/cash/receivable → 总值不变
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botT", fund_code="000001", shares=5000.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-T",
+    ))
+    cash1, it1, rec1, mv1, total1 = _snapshot()
+    assert abs(cash1 - 2000.0) < 1e-6
+    assert abs(rec1) < 1e-6
+    assert abs(mv1 - 12000.0) < 1e-6  # shares 未减
+    assert abs(total1 - 14000.0) < 1e-2
+
+    # T+1 settle → shares 减 5000、cash += 6000 (fee=0) → 总值仍 14000
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botT", as_of_date="2026-05-12", run_id="run-T1",
+    ))
+    cash2, it2, rec2, mv2, total2 = _snapshot()
+    assert abs(cash2 - 8000.0) < 1e-3
+    assert abs(mv2 - 6000.0) < 1e-3  # 5000 shares × 1.20
+    assert abs(rec2) < 1e-6
+    assert abs(total2 - 14000.0) < 1e-2
+
+
+def test_place_buy_cannot_use_pending_sell_proceeds(reload_server):
+    """T 日下的卖单未 settle 前，钱不算 available cash——即使有 pending sell，超过 cash 的买也不能。
+
+    用 place_buy_order + settle 建立真实 holding（否则 _bot_run_cash_view 的 replay 看不到直接 seed）。
+    """
+    bot_id, fund, run_id = "botT", "000001", "run-T"
     s = reload_server
     import db as db_mod
     with sqlite3.connect(db_mod.DB_PATH) as conn:
         _seed_fund(conn, fund)
         _seed_nav(conn, fund, "2026-04-10", 1.00)
-        for d in ("2026-05-11", "2026-05-12"):
-            _seed_nav(conn, fund, d, 1.20)
-        _seed_account(conn, bot_id, cash=2_000.0, initial=12_000.0)
-        _seed_holding(conn, bot_id, fund, shares=10_000.0, cost=10_000.0,
-                      entry_date="2026-04-10", entry_nav=1.0)
+        _seed_nav(conn, fund, "2026-04-11", 1.00)
+        _seed_nav(conn, fund, "2026-05-11", 1.20)
+        _seed_nav(conn, fund, "2026-05-12", 1.20)
+        _seed_account(conn, bot_id, cash=10_000.0, initial=10_000.0, run_id=run_id)
         conn.commit()
-
-    # 注：_compute_fund_snapshot 的 replay 走 run-isolation，看不到我们直接 seed 的 holding。
-    # 但本测试关心的是 place_sell_order 已用 nav=1.20 更新了 holding.market_value，
-    # close_my_day.assets.total_value 从 account/holdings 直接拼，与 NAV 同步。
-
-    # T 日卖一半 → T 日 shares 已扣，cash_receivable=6000
-    asyncio.run(s.portfolio_place_sell_order(
-        bot_id=bot_id, fund_code=fund, shares=5000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
+    # 建仓：10000 全买
+    asyncio.run(s.portfolio_place_buy_order(
+        bot_id=bot_id, fund_code=fund, amount=10_000.0,
+        trade_date="2026-04-10", reason="init", run_id=run_id,
     ))
-    r1 = json.loads(asyncio.run(s.portfolio_close_my_day(
-        bot_id=bot_id, trade_date="2026-05-11", run_id="run-T",
-    )))
-    # cash=2000 + in_transit=0 + receivable=6000 + mv=6000 → 14000 ✓
-    assert abs(r1["assets"]["total_value"] - 14000.0) < 1e-2, r1["assets"]
-    assert abs(r1["assets"]["cash_available"] - 2000.0) < 1e-2
-    assert abs(r1["assets"]["cash_receivable"] - 6000.0) < 1e-2
-    assert abs(r1["assets"]["market_value"] - 6000.0) < 1e-2
-
-    # T+1 settle → cash_receivable 清零、cash += 6000
     asyncio.run(s.settle_pending_fund_orders(
-        bot_id=bot_id, as_of_date="2026-05-12", run_id="run-T1",
+        bot_id=bot_id, as_of_date="2026-04-11", run_id=run_id,
     ))
-    r2 = json.loads(asyncio.run(s.portfolio_close_my_day(
-        bot_id=bot_id, trade_date="2026-05-12", run_id="run-T1",
-    )))
-    # cash=8000 + receivable=0 + mv=6000 → 14000 ✓
-    assert abs(r2["assets"]["total_value"] - 14000.0) < 1e-2, r2["assets"]
-    assert abs(r2["assets"]["cash_available"] - 8000.0) < 1e-2
-    assert abs(r2["assets"]["cash_receivable"]) < 1e-6
-
-
-def test_place_buy_cannot_use_cash_receivable(reload_server):
-    """receivable 不算可用现金 — 即使 cash=0、receivable 充足，买单也应失败。"""
-    s, _ = _setup_standard(reload_server, account_cash=0.0)  # cash=0
-    # 卖一部分制造 receivable
+    # 卖一部分制造 pending sell
     asyncio.run(s.portfolio_place_sell_order(
-        bot_id="botT", fund_code="000001", shares=4000.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
+        bot_id=bot_id, fund_code=fund, shares=4000.0,
+        trade_date="2026-05-11", reason="trim", run_id=run_id,
     ))
-    # 再造一只 buyable 基金
-    import db as db_mod
+    # 造 buyable
     with sqlite3.connect(db_mod.DB_PATH) as conn:
         _seed_fund(conn, "000002", name="基金B")
         _seed_nav(conn, "000002", "2026-05-11", 1.00)
         conn.commit()
-    # 尝试买 — 应失败，cash=0
+    # 尝试买 100 → cash=0（已全部投入建仓），pending sell 不算可用现金
     resp = json.loads(asyncio.run(s.portfolio_place_buy_order(
-        bot_id="botT", fund_code="000002", amount=100.0,
-        trade_date="2026-05-11", reason="", run_id="run-T",
+        bot_id=bot_id, fund_code="000002", amount=100.0,
+        trade_date="2026-05-11", reason="test", run_id=run_id,
     )))
-    assert not resp["success"], "cash=0 时即使有 receivable 也不能买"
+    assert not resp["success"], "cash=0 时即使有 pending sell 也不能买"
+
+
+def test_sell_and_buy_at_same_t_day_both_defer_to_settle(reload_server):
+    """同 T 日 buy + sell：两者都在 T 日只挂单、T+1 settle 才落到持仓。
+    快照上 T 日：卖出基金 shares 不减、买入基金未出现，只 cash_in_transit / pending_sell_shares 变。
+    """
+    bot_id, fund, run_id = "botT", "000001", "run-T"
+    s = reload_server
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_fund(conn, fund)
+        _seed_nav(conn, fund, "2026-04-10", 1.00)
+        _seed_nav(conn, fund, "2026-04-11", 1.00)
+        _seed_nav(conn, fund, "2026-05-11", 1.20)
+        _seed_nav(conn, fund, "2026-05-12", 1.20)
+        _seed_fund(conn, "000002", name="基金B")
+        _seed_nav(conn, "000002", "2026-05-11", 2.00)
+        _seed_nav(conn, "000002", "2026-05-12", 2.00)
+        _seed_account(conn, bot_id, cash=13_000.0, initial=13_000.0, run_id=run_id)
+        conn.commit()
+    # 先建仓 A：10000 元
+    asyncio.run(s.portfolio_place_buy_order(
+        bot_id=bot_id, fund_code=fund, amount=10_000.0,
+        trade_date="2026-04-10", reason="init A", run_id=run_id,
+    ))
+    asyncio.run(s.settle_pending_fund_orders(
+        bot_id=bot_id, as_of_date="2026-04-11", run_id=run_id,
+    ))
+    # 同 T 日：卖 A 3000 shares + 买 B 1000 元
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id=bot_id, fund_code=fund, shares=3000.0,
+        trade_date="2026-05-11", reason="trim A", run_id=run_id,
+    ))
+    asyncio.run(s.portfolio_place_buy_order(
+        bot_id=bot_id, fund_code="000002", amount=1000.0,
+        trade_date="2026-05-11", reason="add B", run_id=run_id,
+    ))
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        hs = _rows(conn, "SELECT * FROM fund_bot_holdings WHERE bot_id=? ORDER BY fund_code", (bot_id,))
+        acc = _row(conn, "SELECT * FROM fund_bot_accounts WHERE bot_id=?", (bot_id,))
+        actions = _rows(conn, "SELECT * FROM fund_bot_actions WHERE bot_id=? AND action_date='2026-05-11'", (bot_id,))
+    # A 持仓 shares 未减（10000）、B 尚未出现在 holdings（buy T+1 才建仓）
+    a_row = [h for h in hs if h["fund_code"] == fund][0]
+    assert abs(a_row["shares"] - 10000.0) < 1e-6
+    assert abs(a_row["pending_sell_shares"] - 3000.0) < 1e-6
+    assert not any(h["fund_code"] == "000002" for h in hs)
+    # cash 已扣 1000（buy 立即扣现金），cash_in_transit=1000
+    assert abs(acc["cash"] - 2000.0) < 1e-3  # 建仓后 3000, buy B 又扣 1000
+    assert abs(acc["cash_in_transit"] - 1000.0) < 1e-3
+    assert abs((acc["cash_receivable"] or 0.0)) < 1e-6
+    # 当日无 REDUCE/ADD action（都在 settle 时写）
+    assert actions == []
 
 
 # =============================================================================
-#  盘中无 T 日 NAV：先接单，NAV 入库后按 T 日净值定价
+#  盘中无 T 日 NAV：先接单，NAV 入库后按 T 日净值定价（原有兼容路径）
 # =============================================================================
 
 def test_intraday_buy_without_t_nav_prices_after_nav_arrives(reload_server):
@@ -551,6 +760,8 @@ def test_intraday_buy_without_t_nav_prices_after_nav_arrives(reload_server):
 
 
 def test_intraday_sell_without_t_nav_freezes_then_prices_after_nav_arrives(reload_server):
+    """盘中卖出（T 日 NAV 未出）：走 awaiting_nav 分支，与新机制"nav 已在库"分支行为一致
+    （T 日只冻结 pending_sell_shares，settle 时按 order_date NAV 完成扣仓+加现金）。"""
     bot_id, fund, run_id = "botIS", "000889", "run-T"
     s = reload_server
     import db as db_mod
@@ -601,7 +812,7 @@ def test_intraday_sell_without_t_nav_freezes_then_prices_after_nav_arrives(reloa
         bot_id=bot_id, as_of_date="2026-05-12", run_id="run-T1",
     )))
     assert settled["success"], settled
-    assert settled["settled"][0]["settled_via"] == "legacy"
+    assert settled["settled"][0]["settled_via"] == "t_plus_1"
 
     with sqlite3.connect(db_mod.DB_PATH) as conn:
         conn.row_factory = sqlite3.Row

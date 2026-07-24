@@ -76,6 +76,8 @@ export interface WorldConfig {
   // monthly 模式下决策落在每月第几个交易日。正数=从月初数（1=月初）；负数=从月末倒数（-1=月末）。
   // 越界自动夹到当月首/末交易日。缺省=1（月初，历史行为）。
   chatMonthlyNth?: number
+  // 单指数 daily briefing 中研究报告注入开关。缺省=总开关开，market_reports 全量、res1/2/4/5 全开，保持历史行为。
+  singleFundBriefingRes?: SingleFundBriefingResConfig
   // reporter 模式（market-reports pre-pass 专用）：bot 不是投资者而是「市场研究员」，每个决策日
   // 只产出一份研报并 submit_market_report，不交易、无账户。开启后 daily message 换成精简的
   // 「产出本期研报」提示（不注入持仓/buyable/交易规则/belief schema），其余 plumbing（PIT 日期注入、
@@ -137,6 +139,66 @@ export interface WorldConfig {
 export interface BotAssignment {
   strategyId: string
   buyableFundCodes?: string[]
+}
+
+export const SINGLE_FUND_BRIEFING_RES_REPORTS = [
+  'market_context',
+  'macro_news',
+  'market_mainline',
+  'mainline_rotation',
+  'market_strategy',
+  'policy_analysis',
+  'intl_relations',
+  'cross_market_linkage',
+] as const
+export type SingleFundBriefingResReport = typeof SINGLE_FUND_BRIEFING_RES_REPORTS[number]
+export interface SingleFundBriefingResConfig {
+  enabled: boolean
+  reports: Record<SingleFundBriefingResReport, boolean>
+}
+
+const DEFAULT_SINGLE_FUND_BRIEFING_RES_REPORTS: Record<SingleFundBriefingResReport, boolean> = {
+  market_context: true,
+  macro_news: true,
+  market_mainline: true,
+  mainline_rotation: true,
+  market_strategy: true,
+  policy_analysis: true,
+  intl_relations: true,
+  cross_market_linkage: true,
+}
+
+function parseSingleFundBriefingRes(raw: unknown): SingleFundBriefingResConfig | undefined {
+  if (raw === undefined) return undefined
+  const reports: Record<SingleFundBriefingResReport, boolean> = { ...DEFAULT_SINGLE_FUND_BRIEFING_RES_REPORTS }
+  if (typeof raw === 'boolean') return { enabled: raw, reports }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('world config: "single_fund_briefing_res" must be a boolean or object')
+  }
+  const obj = raw as Record<string, unknown>
+  let enabled = true
+  if (obj.enabled !== undefined) {
+    if (typeof obj.enabled !== 'boolean') throw new Error('world config: "single_fund_briefing_res.enabled" must be boolean')
+    enabled = obj.enabled
+  }
+  const reportRaw = obj.reports !== undefined ? obj.reports : obj
+  if (!reportRaw || typeof reportRaw !== 'object' || Array.isArray(reportRaw)) {
+    throw new Error('world config: "single_fund_briefing_res.reports" must be an object')
+  }
+  const valid = new Set<string>(SINGLE_FUND_BRIEFING_RES_REPORTS)
+  const marketReportKeys: SingleFundBriefingResReport[] = ['market_context', 'macro_news', 'market_mainline', 'mainline_rotation']
+  const reportObj = reportRaw as Record<string, unknown>
+  if (reportObj.market_reports !== undefined) {
+    if (typeof reportObj.market_reports !== 'boolean') throw new Error('world config: single_fund_briefing_res.market_reports must be boolean')
+    for (const k of marketReportKeys) reports[k] = reportObj.market_reports
+  }
+  for (const [key, value] of Object.entries(reportObj)) {
+    if (key === 'enabled' || key === 'reports' || key === 'market_reports') continue
+    if (!valid.has(key)) throw new Error('world config: unknown single_fund_briefing_res report "' + key + '"')
+    if (typeof value !== 'boolean') throw new Error('world config: single_fund_briefing_res.' + key + ' must be boolean')
+    reports[key as SingleFundBriefingResReport] = value
+  }
+  return { enabled, reports }
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -272,6 +334,7 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const chatWeekday = typeof raw.chat_weekday === 'number' && raw.chat_weekday >= 1 && raw.chat_weekday <= 5 ? Math.floor(raw.chat_weekday) : undefined
   // monthly：第 N 个交易日（正=从月初、负=从月末倒数，不能为 0）；非法/缺省 → undefined（回落到月初）。
   const chatMonthlyNth = typeof raw.chat_monthly_nth === 'number' && Number.isFinite(raw.chat_monthly_nth) && Math.trunc(raw.chat_monthly_nth) !== 0 ? Math.trunc(raw.chat_monthly_nth) : undefined
+  const singleFundBriefingRes = parseSingleFundBriefingRes(raw.single_fund_briefing_res)
   const reporterMode = raw.reporter_mode === true
   const rlConfigBase = typeof raw.rl_config_base === 'string' && raw.rl_config_base.trim()
     ? resolveMaybe(resolvedBaseDir, raw.rl_config_base)
@@ -400,7 +463,7 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const skipClose = typeof raw.skip_close === 'boolean' ? raw.skip_close : undefined
   const skipChat = typeof raw.skip_chat === 'boolean' ? raw.skip_chat : undefined
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, crashTriggerDrawdownPct, crashTriggerBenchmark, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, crashTriggerDrawdownPct, crashTriggerBenchmark, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, singleFundBriefingRes, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
 }
 
 export function loadWorldConfig(path: string): WorldConfig {

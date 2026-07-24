@@ -73,6 +73,8 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .status-pill{display:inline-block;border-radius:999px;padding:2px 8px;font-size:11px;border:1px solid var(--border);color:var(--dim)}
 .status-pill.done{color:var(--loss);border-color:rgba(101,217,165,.3)}
 .status-pill.broken{color:var(--accent2);border-color:rgba(255,184,107,.3)}
+.status-pill.running{color:var(--accent);border-color:rgba(102,217,232,.3)}
+.status-pill.paused{color:var(--accent2);border-color:rgba(255,184,107,.3)}
 .comment{max-width:340px;white-space:normal;color:var(--dim);font-size:11px;line-height:1.5;text-align:left}
 /* 合格/不合格 标记按钮 */
 .mark-btn{border-radius:6px;padding:5px 12px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;border:1px solid var(--border);transition:transform .08s,filter .12s;min-width:64px}
@@ -81,6 +83,19 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .mark-btn.fail{background:rgba(255,107,138,.12);border-color:var(--fail);color:var(--fail)}
 .mark-btn:hover{filter:brightness(1.25)}
 .mark-edited{display:inline-block;margin-left:5px;font-size:10px;color:var(--accent2);vertical-align:middle}
+.live-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:11px;color:var(--dim);background:rgba(255,255,255,.03)}
+.live-pill.on{color:var(--pass);border-color:rgba(101,217,165,.35);background:rgba(101,217,165,.07)}
+.live-pill.wait{color:var(--accent2);border-color:rgba(255,184,107,.3);background:rgba(255,184,107,.06)}
+.live-pill.paused{color:var(--fail);border-color:rgba(255,107,138,.35);background:rgba(255,107,138,.07)}
+.live-actions{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.live-action-btn{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);color:var(--dim);border-radius:6px;padding:3px 7px;font-size:11px;font-family:inherit;cursor:pointer}
+.live-action-btn:hover{color:var(--text);border-color:rgba(255,255,255,.28)}
+.live-action-btn.pause{color:var(--accent2);border-color:rgba(255,184,107,.35);background:rgba(255,184,107,.06)}
+.live-action-btn.resume{color:var(--pass);border-color:rgba(101,217,165,.35);background:rgba(101,217,165,.07)}
+.live-action-btn:disabled{cursor:wait;opacity:.65}
+.live-seed-btn{border:1px solid rgba(102,217,232,.45);background:rgba(102,217,232,.08);color:var(--accent);border-radius:6px;padding:4px 9px;font-size:11px;font-family:inherit;cursor:pointer;white-space:nowrap}
+.live-seed-btn:hover{background:rgba(102,217,232,.16)}
+.live-seed-btn:disabled{cursor:not-allowed;opacity:.65}
 .empty{border:1px dashed var(--border);border-radius:var(--radius);padding:32px;color:var(--dim);text-align:center}
 .reset-link{background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline;font-family:inherit;padding:0}
 
@@ -127,6 +142,22 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 /* pending=未结算：灰边虚线 + 小字标注 */
 .today-dec.pending{ border:1px dashed #999; opacity:.85; }
 .today-dec .td-pend{ margin-left:4px; font-size:10px; color:#999; }
+/* 今日决策行内展开：小箭头 + 该行下方定高窗（360px，上今日决策正文 / 下决策流水表，超出内部滚动） */
+.dec-toggle{ margin-left:6px; background:none; border:1px solid var(--border); border-radius:4px; color:var(--dim); font-size:11px; line-height:1; padding:1px 5px; cursor:pointer; }
+.dec-toggle:hover{ color:#fff; border-color:var(--accent2); }
+.dec-toggle.on{ color:#fff; border-color:var(--accent2); }
+.dec-exp-row > td{ padding:0 !important; background:rgba(255,255,255,.015); }
+.dec-exp-pane{ height:360px; overflow:auto; padding:10px 14px; border-top:1px solid rgba(255,255,255,.06); border-left:2px solid var(--accent2); text-align:left; white-space:normal; }
+.dec-exp-head{ font-size:12px; font-weight:600; color:var(--dim); margin-bottom:6px; position:sticky; top:-10px; background:var(--panel); padding:2px 0; }
+.dec-exp-dir{ font-weight:700; }
+.dec-exp-dir.buy{ color:var(--gain,#e5484d); } .dec-exp-dir.sell{ color:var(--loss,#30a46c); } .dec-exp-dir.hold{ color:var(--dim); }
+.dec-exp-body{ font-size:12px; line-height:1.65; }
+.dec-exp-body .rfl-h2{ font-size:12px; font-weight:700; color:#fff; margin:8px 0 3px; }
+.dec-exp-body .rfl-h3{ font-size:12px; font-weight:700; color:var(--accent2); margin:8px 0 3px; }
+.dec-exp-body .rfl-quote{ border-left:2px solid var(--accent2); margin:3px 0; padding-left:8px; color:var(--dim); }
+.dec-exp-body .rfl-li,.dec-exp-body .rfl-p{ color:rgba(255,255,255,.84); margin:2px 0; }
+.dec-exp-body .rfl-sp{ height:6px; }
+.dec-exp-body strong{ color:#fff; font-weight:700; }
 /* ---- 每个指数一个区块：左表格 + 右净值图，左右对齐 ---- */
 .index-block{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:16px;align-items:start;margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid rgba(255,255,255,.06)}
 .index-block:last-child{border-bottom:none}
@@ -249,6 +280,8 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
 .dec-title{ font-weight:600; margin:6px 0; }
 .dec-table{ width:100%; border-collapse:collapse; font-size:12px; }
 .dec-table th,.dec-table td{ padding:3px 6px; border-bottom:1px solid var(--border,#333); text-align:left; }
+.dec-table th.dec-date-sort{ cursor:pointer; user-select:none; white-space:nowrap; }
+.dec-table th.dec-date-sort:hover{ color:var(--accent2); }
 .dec-table td.buy{ color:var(--gain,#e5484d); } .dec-table td.sell{ color:var(--loss,#30a46c); }
 .dec-table tr.dec-pending{ opacity:.7; } .dec-tag{ font-size:10px; color:#999; border:1px dashed #999; border-radius:3px; padding:0 3px; }
 .dec-reason{ max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -280,7 +313,7 @@ table.runs{width:100%;border-collapse:collapse;min-width:540px}
       <span class="filter-label">搜索 run_id</span>
       <input type="search" id="runSearch" placeholder="输入 run_id 片段，如 2026-06-15T06-22 …">
       <span class="filter-label" style="margin-left:8px">状态</span>
-      <select id="statusSel"><option value="">全部</option><option value="完成">完成</option><option value="中断">中断</option></select>
+      <select id="statusSel"><option value="">全部</option><option value="完成">完成</option><option value="运行中">运行中</option><option value="暂停">暂停</option><option value="中断">中断</option></select>
       <button class="filter-clear" id="clearBtn">清除筛选</button>
       <span class="filter-count" id="filterCount"></span>
     </div>
@@ -409,6 +442,8 @@ function computeDefaultPass(r){
 }
 
 const records = []
+let liveLinksBySource = new Map()   // sourceRunId|bot -> live summary
+let liveLinksByLive = new Map()     // liveRunId|bot -> live summary
 // 把一条评测原始对象（中文列名 key，来自 /api/backtest/run-evals）补全为内部记录；汇总/空行返回 null。
 function buildEvalRecord(raw){
   const r = {}; COLS.forEach(c => r[c] = String(raw[c] ?? '').trim())
@@ -437,12 +472,78 @@ async function loadEvalRecords(){
   catch { rows = [] }
   for (const raw of rows){ const rec = buildEvalRecord(raw); if (rec) evalByKey.set(rec._key, rec) }
 }
+function runStatusLabel(status){
+  const s = String(status || "").trim()
+  if (s === "completed" || s === "done") return "完成"
+  if (s === "running") return "运行中"
+  if (s === "paused") return "暂停"
+  if (s === "failed" || s === "error" || s === "aborted" || s === "stopped" || s === "cancelled" || s === "canceled") return "中断"
+  return s
+}
+
+function applyAllRunSummary(r, h){
+  const runId = String(h.runId || "").trim()
+  const botId = String(h.botId || "").trim()
+  r["run_id"] = runId
+  r["bot"] = botId
+  r._key = runId + "|" + botId
+  r._launch = launchDate(runId)
+  r._sourceStatus = String(h.sourceStatus || "")
+  r._sourceBots = Array.isArray(h.sourceBots) ? h.sourceBots : []
+  if (h.fund != null && String(h.fund).trim()) r["可买基金"] = String(h.fund).trim()
+  if (h.index != null && String(h.index).trim()) r["对标指数"] = String(h.index).trim()
+  if (h.indexName != null && String(h.indexName).trim()) r["策略"] = String(h.indexName).trim()
+  const st = runStatusLabel(h.sourceStatus)
+  if (st) r["状态"] = st
+  if (h.absReturnPct != null) r["绝对收益%"] = h.absReturnPct
+  if (h.annReturnPct != null) r["年化收益%"] = h.annReturnPct
+  if (h.maxDrawdownPct != null) r["最大回撤%"] = h.maxDrawdownPct
+  r._fund = r["可买基金"] || ""
+  const ixSrc = r._fund ? (FUND_IX[r._fund] || r["对标指数"]) : r["对标指数"]
+  r._ixRaw = ixCode(ixSrc)
+  r._ix = normCode(ixSrc)
+  { const m = MASTER_BY_KEY.get(r._ix)
+    r._ixName = m ? m.name : (r._ix === UNCLASSED ? UNCLASSED : indexName(r["策略"]))
+    r._ixCode = m ? m.code : r._ixRaw }
+  { const ann = num(r["年化收益%"]), dd = num(r["最大回撤%"])
+    r._calmar = (ann != null && ann > 0 && dd != null && dd < 0) ? ann / Math.abs(dd) : null }
+}
+
+async function ingestHistory(){
+  let data
+  try { const r = await fetch("/api/backtest/all-runs", { cache: "no-store" }); if (!r.ok) return 0; data = await r.json() }
+  catch { return 0 }
+  const have = new Set(records.map(r => r._key))
+  let added = 0
+  for (const h of (data.runs || [])){
+    const runId = String(h.runId || "").trim()
+    const botId = String(h.botId || "").trim()
+    if (!runId || !botId || runId.startsWith("live-")) continue
+    const key = runId + "|" + botId
+    if (have.has(key)) continue
+    const src = evalByKey.get(key)
+    const r = src ? { ...src } : Object.fromEntries(COLS.map(c => [c, ""]))
+    r._source = "history"
+    applyAllRunSummary(r, h)
+    r._defaultPass = src ? src._defaultPass : computeDefaultPass(r)
+    records.push(r); have.add(key); added++
+  }
+  if (added){ buildIndexSidebar(); render() }
+  return added
+}
+
 // 只纳入 live run（/api/backtest/live-runs）。每个 live run 克隆其 source dash 的评测记录（评级/点评/
 // 指数归类），覆盖 run_id、bot、指标（按拼接序列重算）与合格判定（继承源 dash 的 isPass）。
 async function ingestLive(){
   let data
   try { const r = await fetch('/api/backtest/live-runs', { cache: 'no-store' }); if (!r.ok) return; data = await r.json() }
   catch { return }
+  liveLinksBySource = new Map()
+  liveLinksByLive = new Map()
+  for (const h of (data.runs || [])) {
+    liveLinksBySource.set(h.sourceRunId + "|" + h.botId, h)
+    liveLinksByLive.set(h.liveRunId + "|" + h.botId, h)
+  }
   // 源 dash 的指数归类锚点：评测表（run-evals）只覆盖部分 run；其余 live run 用其 source dash 在
   // all-runs 里的 fund/index 归类（照搬 7.21 ingestHistory 的 `FUND_IX[fund] || index` 口径），
   // 否则会全部掉进「未分类」，指数覆盖数虚降。
@@ -479,8 +580,8 @@ async function ingestLive(){
     // 覆盖为 live 行身份 + 拼接指标。
     r._source = 'live'
     r._key = key
-    r.run_id = h.liveRunId
-    r.bot = h.botId
+    r["run_id"] = h.liveRunId
+    r["bot"] = h.botId
     r._sourceRunId = h.sourceRunId
     r['状态'] = h.status || r['状态'] || ''
     r['绝对收益%'] = h.absReturnPct ?? ''
@@ -494,7 +595,7 @@ async function ingestLive(){
     r._launch = src ? src._launch : null
     records.push(r); have.add(key); added++
   }
-  if (added){ buildIndexSidebar(); render() }
+  if (added || (data.runs || []).length){ buildIndexSidebar(); render() }
 }
 
 // ---- 覆盖（用户手动标记，全员共享）----
@@ -528,10 +629,13 @@ const state = {
   pass: 'all', q: '', status: '', sortKey: null, sortDir: -1,
   failOpen: new Set(),   // 展开了「不合格」折叠区的指数代码
   groupSel: {}, groupShown: {},  // groupSel: 用户点选的 run; groupShown: 实际展示的 run（含回退）
+  decExpanded: new Set(),  // 行内展开了「今日决策」定高窗的 run（`${run_id}|${bot}`）
+  decSortDir: 'desc',      // 决策流水表日期排序：desc=最新在上（默认），asc=最早在上
 }
 const WORLD_BASE = '/world'   // 同源相对路径：经 :18888 代理；外部访问即 http://172.31.43.30:18888/world
 const botCache = new Map()    // `${run_id}|${bot}` -> /api/backtest/bot 响应（避免切换重复拉）
 const decCache = new Map()   // `${run_id}|${bot}` -> run-decisions rows
+const rflCache = new Map()   // `${run_id}|${bot}|${date}` -> bot-reflection 响应（行内窗复用）
 async function loadRunDecisionsFE(runId, bot){
   const k = `${runId}|${bot}`
   if (decCache.has(k)) return decCache.get(k)
@@ -541,9 +645,14 @@ async function loadRunDecisionsFE(runId, bot){
   decCache.set(k, rows); return rows
 }
 function pctW(v){ return v == null ? '—' : (Number(v) * 100).toFixed(1) + '%' }
-function decTableHtml(rows){
+function decTableHtml(rows, sortDir){
   if (!rows.length) return '<div class="dec-empty">暂无决策记录</div>'
-  const body = rows.map(p => {
+  const dir = sortDir === 'asc' ? 'asc' : 'desc'
+  const sorted = [...rows].sort((a, b) => dir === 'asc'
+    ? String(a.date).localeCompare(String(b.date))
+    : String(b.date).localeCompare(String(a.date)))
+  const arrow = dir === 'asc' ? '▲' : '▼'
+  const body = sorted.map(p => {
     const sideCls = p.side === 'sell' ? 'sell' : 'buy'
     const sideTxt = p.side === 'sell' ? '▼ 卖' : '▲ 买'
     const pend = p.status === 'pending' ? ' dec-pending' : ''
@@ -552,7 +661,7 @@ function decTableHtml(rows){
     return `<tr class="${pend.trim()}"><td>${esc(p.date)}${p.status==='pending'?' <span class="dec-tag">待确认</span>':''}</td>`
       + `<td class="${sideCls}">${sideTxt}</td><td>${esc(p.fund)}</td><td>${w}</td><td>¥${amt}</td><td class="dec-reason" title="${esc(p.reason)}">${esc(String(p.reason).slice(0,60))}</td></tr>`
   }).join('')
-  return `<div class="dec-panel"><div class="dec-title">决策流水</div><table class="dec-table"><thead><tr><th>日期</th><th>方向</th><th>标的</th><th>仓位</th><th>金额</th><th>理由</th></tr></thead><tbody>${body}</tbody></table></div>`
+  return `<div class="dec-panel"><div class="dec-title">决策流水</div><table class="dec-table"><thead><tr><th class="dec-date-sort" data-decsort="1" title="点击切换日期升/降序">日期 ${arrow}</th><th>方向</th><th>标的</th><th>仓位</th><th>金额</th><th>理由</th></tr></thead><tbody>${body}</tbody></table></div>`
 }
 
 // ---- 左侧指数筛选栏（多选，默认全选）----
@@ -703,36 +812,79 @@ function todayDecHtml(key){
   return `<span class="today-dec ${cls} pending" title="${esc(title)}">${sym}<span class="td-pend">待确认</span></span>`
 }
 
+function liveManageHtml(link){
+  if (!link || !link.liveRunId) return ""
+  const paused = link.paused === true || link.status === "已暂停"
+  const action = paused ? "resume" : "pause"
+  const label = paused ? "恢复" : "暂停"
+  const title = paused ? "恢复后，下一个 live timer 会重新纳入此 run" : "暂停后，14:00 decide 和 settle 会跳过此 live run"
+  return `<button class="live-action-btn ` + action + `" data-live-action="` + action + `" data-live-run="` + esc(link.liveRunId) + `" title="` + esc(title) + `">` + label + `</button>`
+}
+
+function liveStatusPillHtml(link, titlePrefix){
+  const status = link.status || "已建 live"
+  const cls = status === "实盘中" ? "on" : status === "已暂停" ? "paused" : "wait"
+  const days = Number(link.liveDays || 0)
+  const suffix = days > 0 && status !== "已暂停" ? (" " + days + "d") : ""
+  const title = (titlePrefix ? titlePrefix + " " : "") + (link.liveRunId || "")
+  return `<span class="live-pill ` + cls + `" title="` + esc(title) + `">` + esc(status + suffix) + `</span>`
+}
+
+function liveCellHtml(r){
+  if (r._source === "live"){
+    const link = liveLinksByLive.get(r["run_id"] + "|" + r["bot"]) || { liveRunId: r["run_id"], botId: r["bot"], sourceRunId: r._sourceRunId || "", status: r["状态"] || "live", paused: r["状态"] === "已暂停" }
+    return `<span class="live-actions">` + liveStatusPillHtml(link, r._sourceRunId ? ("source: " + r._sourceRunId) : "") + liveManageHtml(link) + `</span>`
+  }
+  const link = liveLinksBySource.get(r["run_id"] + "|" + r["bot"])
+  if (link) return `<span class="live-actions">` + liveStatusPillHtml(link, "") + liveManageHtml(link) + `</span>`
+  if (!isPass(r)) return `<span class="live-pill">—</span>`
+  const rawStatus = String(r._sourceStatus || "")
+  const bots = Array.isArray(r._sourceBots) ? r._sourceBots : []
+  let disabled = ""
+  let title = "创建 live run；会复制源 run 的持仓/lot/pending order，现有 live timer 自动扫描 live-*"
+  if (!rawStatus){ disabled = " disabled"; title = "缺 runtime state，不能自动创建 live" }
+  else if (rawStatus !== "completed" && rawStatus !== "done"){ disabled = " disabled"; title = "source run 未完成: " + rawStatus }
+  else if (bots.length > 1){ disabled = " disabled"; title = "多 bot 源 run 不能在这里自动创建 live" }
+  return `<button class="live-seed-btn" data-seed-live="1" data-key="` + esc(r._key) + `"` + disabled + ` title="` + esc(title) + `">创建 live</button>`
+}
+
 function rowHtml(r, opts = {}){
   const pass = isPass(r)
   const edited = isEdited(r)
   const rating = r['普通投资者评级'] || '—'
-  const statusCls = r['状态'] === '完成' ? 'done' : r['状态'] === '中断' ? 'broken' : ''
+  const statusText = r["状态"] || "—"
+  const statusCls = statusText === "完成" ? "done" : statusText === "中断" ? "broken" : statusText === "运行中" ? "running" : statusText === "暂停" ? "paused" : ""
   const mark = `<button class="mark-btn ${pass?'pass':'fail'}" data-key="${esc(r._key)}" title="点击切换 合格/不合格（全员共享，所有人可见）">${pass?'✓ 合格':'✕ 不合格'}</button>${edited?'<span class="mark-edited" title="已偏离 CSV 默认判定">●改</span>':''}`
   const sel = r._key === state.groupShown[r._ix] ? ' selected' : ''
   const cls = `${sel}${opts.failRow ? ' fail-row' : ''}`.trim()
-  return `<tr data-key="${esc(r._key)}" class="${cls}"${opts.hidden ? ' hidden' : ''} title="点击查看该 run 的净值图">
+  const expanded = state.decExpanded.has(r._key)
+  const toggle = `<button class="dec-toggle${expanded ? ' on' : ''}" data-dectoggle="${esc(r._key)}" title="展开/收起该 run 最新日的决策正文（定高窗）">${expanded ? '▾' : '▸'}</button>`
+  const mainRow = `<tr data-key="${esc(r._key)}" class="${cls}"${opts.hidden ? ' hidden' : ''} title="点击查看该 run 的净值图">
     <td class="l">${mark}</td>
     <td class="l"><span class="run-id">${esc(r['run_id'])}</span></td>
     <td class="l"><span class="run-bot">${esc(r['bot'])}</span></td>
-    <td class="l"><span class="status-pill ${statusCls}">${esc(r['状态']||'—')}</span></td>
-    <td class="l">${todayDecHtml(r._key)}</td>
+    <td class="l"><span class="status-pill ${statusCls}">${esc(statusText)}</span></td>
+    <td class="l">${liveCellHtml(r)}</td>
+    <td class="l">${todayDecHtml(r._key)}${toggle}</td>
     ${pctCell(r['绝对收益%'])}
     ${pctCell(r['最大回撤%'])}
     ${calmarCell(r._calmar)}
     <td class="l"><span class="rating r${esc(rating)}">${esc(rating)}</span></td>
   </tr>`
+  if (!expanded) return mainRow
+  const expRow = `<tr class="dec-exp-row"${opts.hidden ? ' hidden' : ''}><td colspan="${TH.length}"><div class="dec-exp-pane" data-decpane="${esc(r._key)}"><div class="mdl-empty">加载中…</div></div></td></tr>`
+  return mainRow + expRow
 }
 
 const TH = [
-  ['pass','合格','l'],['run_id','run_id','l'],['bot','bot','l'],['状态','状态','l'],
+  ['pass','合格','l'],['run_id','run_id','l'],['bot','bot','l'],['状态','状态','l'],['_live','Live','l'],
   ['_today','今日决策','l'],
   ['绝对收益%','收益%',''],['最大回撤%','回撤%',''],['_calmar','卡玛',''],['普通投资者评级','评级','l'],
 ]
 // 合格行始终展示；不合格行默认折叠在一个可展开的提示行下面（每个指数独立记展开态）。
 function tableHtml(rows, ix){
   const head = TH.map(([k,label,cls]) => {
-    if (k === '_today') return `<th class="${cls}">${label}</th>`  // 今日决策非排序列
+    if (k === "_today" || k === "_live") return `<th class="${cls}">${label}</th>`  // 今日决策/Live 非排序列
     const arrow = state.sortKey === k ? (state.sortDir > 0 ? ' ▲' : ' ▼') : ''
     return `<th class="${cls}" data-sort="${k}">${label}${arrow}</th>`
   }).join('')
@@ -803,13 +955,99 @@ function render(){
     const panel = [...groups.querySelectorAll('.chart-panel')].find(el => el.dataset.ix === ix)
     void renderGroupChart(panel, grp, ix)
   })
+  fillDecPanes()   // 行内「今日决策」定高窗：render 后异步回填（缓存去重，重复 render 便宜）
   syncBlockHeights()
 }
 
+// 行内「今日决策」定高窗内容：取该 run 最新决策日的 reply.json 正文（经 stripBeliefYaml 去 belief），
+// 方向从 bot.actions 最新日的买/卖聚合（无动作=持仓不动）。缓存 bot + reflection，避免重复 render 重拉。
+async function getRfl(bot, date){
+  const k = `${bot.runId}|${bot.botId}|${date}`
+  if (rflCache.has(k)) return rflCache.get(k)
+  let data = { decision: '', memoryWindow: '' }
+  try {
+    const r = await fetch(`/api/backtest/bot-reflection?bot_id=${encodeURIComponent(bot.botId)}&run_id=${encodeURIComponent(bot.runId)}&trade_date=${encodeURIComponent(date)}`, { cache: 'no-store' })
+    if (r.ok) data = await r.json()
+  } catch { /* 留空 */ }
+  rflCache.set(k, data); return data
+}
+function fillDecPanes(){
+  // 遍历已渲染的 pane，按 dataset 比对——避开 key 里 `|` 的选择器转义坑。
+  document.querySelectorAll('.dec-exp-pane').forEach(pane => { void fillOneDecPane(pane.dataset.decpane, pane) })
+}
+async function fillOneDecPane(key, pane){
+  if (!pane || !key) return
+  const rec = records.find(r => r._key === key)
+  if (!rec){ pane.innerHTML = '<div class="mdl-empty">找不到该 run 记录</div>'; return }
+  const bot = await fetchBot(rec)
+  if (!bot){ pane.innerHTML = '<div class="mdl-empty">拉不到该 run 数据</div>'; return }
+  const latest = rflLatestOf(bot)
+  const acts = (bot.actions || []).filter(a => a.action_date === latest)
+  const hasBuy = acts.some(a => a.side === 'buy'), hasSell = acts.some(a => a.side === 'sell')
+  const dir = hasBuy && hasSell ? '⇅ 调仓' : hasBuy ? '▲ 买入' : hasSell ? '▼ 卖出' : '持仓不动'
+  const dirCls = hasBuy && !hasSell ? 'buy' : hasSell && !hasBuy ? 'sell' : hasBuy && hasSell ? 'buy' : 'hold'
+  const rfl = await getRfl(bot, latest)
+  const txt = stripBeliefYaml(rfl.decision || '')
+  const decRows = await loadRunDecisionsFE(rec['run_id'], rec['bot'])   // 决策流水（与原右侧同数据源，缓存共享）
+  pane.innerHTML = `<div class="dec-exp-head">今日决策 · ${esc(latest || '--')} · <span class="dec-exp-dir ${dirCls}">${dir}</span></div>`
+    + `<div class="dec-exp-body">${txt.trim() ? mdLite(txt) : '<div class="mdl-empty">当日无决策回复记录</div>'}</div>`
+    + decTableHtml(decRows, state.decSortDir)
+}
+
 // 左侧表格：事件委托（容器常驻，render 只换内部 HTML）。标记按钮 / 排序表头 / 选中某行 → 切本组图。
-document.getElementById('groups').addEventListener('click', e => {
+document.getElementById('groups').addEventListener('click', async e => {
   const mb = e.target.closest('.mark-btn')
   if (mb){ const rec = records.find(r => r._key === mb.dataset.key); setMark(mb.dataset.key, isPass(rec) ? 'fail' : 'pass'); render(); return }
+  const lb = e.target.closest(".live-action-btn[data-live-action]")
+  if (lb){
+    e.preventDefault(); e.stopPropagation()
+    if (lb.disabled) return
+    const liveRunId = lb.dataset.liveRun || ""
+    const action = lb.dataset.liveAction === "resume" ? "resume" : "pause"
+    if (action === "pause" && !confirm("确认暂停 live run「" + liveRunId + "」？\n暂停后 14:00 decide 和 settle 都会跳过它，可再恢复。")) return
+    const oldText = lb.textContent
+    lb.disabled = true; lb.textContent = action === "resume" ? "恢复中" : "暂停中"
+    try {
+      const resp = await fetch("/api/backtest/live-runs/" + action, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ liveRunId }),
+      })
+      let payload = {}
+      try { payload = await resp.json() } catch {}
+      if (!resp.ok || payload.ok === false) throw new Error(payload.error || ("HTTP " + resp.status))
+      await ingestLive()
+      render()
+    } catch (err) {
+      lb.disabled = false; lb.textContent = oldText
+      alert((action === "resume" ? "恢复" : "暂停") + " live 失败：" + ((err && err.message) || err))
+    }
+    return
+  }
+  const sb = e.target.closest(".live-seed-btn[data-seed-live]")
+  if (sb){
+    e.preventDefault(); e.stopPropagation()
+    if (sb.disabled) return
+    const rec = records.find(r => r._key === sb.dataset.key)
+    if (!rec) return
+    const oldText = sb.textContent
+    sb.disabled = true; sb.textContent = "创建中"
+    try {
+      const resp = await fetch("/api/backtest/live-runs/seed", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceRunId: rec["run_id"], botId: rec["bot"] }),
+      })
+      let payload = {}
+      try { payload = await resp.json() } catch {}
+      if (!resp.ok || payload.ok === false) throw new Error(payload.error || ("HTTP " + resp.status))
+      sb.textContent = payload.existed ? "已存在" : "已创建"
+      await ingestLive()
+      render()
+    } catch (err) {
+      sb.disabled = false; sb.textContent = oldText
+      alert("创建 live 失败：" + ((err && err.message) || err))
+    }
+    return
+  }
   const th = e.target.closest('th[data-sort]')
   if (th){ const k = th.dataset.sort
     if (state.sortKey === k) state.sortDir *= -1
@@ -817,6 +1055,10 @@ document.getElementById('groups').addEventListener('click', e => {
     render(); return }
   const ft = e.target.closest('.fail-toggle[data-failtoggle]')
   if (ft){ const ix = ft.dataset.failtoggle; if (state.failOpen.has(ix)) state.failOpen.delete(ix); else state.failOpen.add(ix); render(); return }
+  const dt = e.target.closest('.dec-toggle')
+  if (dt){ const k = dt.dataset.dectoggle; if (state.decExpanded.has(k)) state.decExpanded.delete(k); else state.decExpanded.add(k); render(); return }
+  const ds = e.target.closest('.dec-date-sort')
+  if (ds){ state.decSortDir = state.decSortDir === 'asc' ? 'desc' : 'asc'; fillDecPanes(); return }  // 只重填已展开的窗，不重建整表
   const tr = e.target.closest('tr[data-key]')
   if (tr){ const rec = records.find(r => r._key === tr.dataset.key); if (rec){ state.groupSel[rec._ix] = rec._key; render() } return }
 })
@@ -1071,9 +1313,7 @@ function renderChartInto(panel, rec, bot, win){
   const { html, geom } = renderChartBody(bot, win)
   panel.innerHTML = chartHead(rec, bot, html)
   wireChart(panel, rec, bot, geom)
-  const holder = document.createElement('div'); holder.className = 'dec-holder'
-  panel.appendChild(holder)
-  loadRunDecisionsFE(rec['run_id'], rec['bot']).then(rows => { holder.innerHTML = decTableHtml(rows) })
+  // 决策流水表已挪到左侧「今日决策」定高窗内（fillOneDecPane），右侧只留净值图+指标。
 }
 // 绑定：① 窗口按钮点击→切窗重绘；② 图上 mousemove→吸附最近交易日、移动准星、更新浮层
 function wireChart(panel, rec, bot, geom){
@@ -1265,9 +1505,10 @@ async function loadLatestDecisions(){
 
 void (async () => {
   await Promise.all([loadVerdicts(), loadEvalRecords(), loadLatestDecisions(), loadTodayDecisions()])  // +「今日决策」
+  await ingestHistory()      // 先纳入 /world 新跑出的源 run；没有评测 CSV 的 run 也能在这里创建 live
   buildIndexSidebar()
-  render()                 // 用评测表的 run + 服务器覆盖渲染（每个指数区块默认展示该组卡玛最高的合格 run 的净值图）
-  void ingestLive()        // 再异步纳入所有 live run（继承源 dash 评测、拼接指标），完成后重渲染
+  render()
+  void ingestLive()          // 再异步纳入所有 live run（继承源 dash 评测、拼接指标），完成后重渲染
 })()
 
 // ---- 方法论 + 反思 弹窗 ----

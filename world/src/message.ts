@@ -55,9 +55,9 @@ export interface DailyMessageContext {
   // 系统在 chat 前预取的盘中实时行情块。仅同一天 14:30 一类实盘 OOS 决策注入；
   // 历史回测 / T+1 早盘跑昨日时为空，避免把 host 当天实时行情污染历史世界日。
   intradayMarketBlock?: string
-  // 「当日研究室简报」：单指数 run 按 strategy_id 路由到 res 研究室（宏观 res1 + 指数技术面 res14 常驻
-  // + 对口板块室）取每室规范主报最新一份拼成的 markdown，由 run.ts 的 assembleBriefing() 填充。
-  // 定位＝**参考信号（昨日盘面/regime/板块资金流解读）不是指令**。空/缺省 → 跳过整块。仅单指数 bot 注入。
+  // 「当日研究室简报」：单指数 run 从 fund.db 按 PIT 取 res 四研判室 + macro_news + market_context
+  // 拼成的 markdown，由 run.ts 的 assembleBriefing() 填充。定位＝**参考信号（宏观策略/政策/国际/
+  // 跨市场/regime 研判）不是指令**。空/缺省 → 跳过整块。仅单指数 bot 注入。
   briefing?: string
   // 末条 standing belief 的关键 horizon 上涨概率（t+5 / t+20 的 p_up），由 caller 从
   // buildBeliefContext 一并取出（同一次扫盘，不二次 IO）。用于「belief ↔ 仓位 言行一致」核对块：
@@ -846,15 +846,15 @@ function deepResearchTriggerBlock(ctx: {
 - **强度选择**：真触发就按【深度研究日】的四点纪律执行（只研究一个命题、数据边界、结论落地、不挤掉决策）。**单日硬上限=1 次**——第 2 次 \`start_research\` 会被系统拒绝，值得研究的第二个命题请留到下个交易日。`
 }
 
-// 「当日研究室简报」块：单指数 run 用。内容由 run.ts 的 assembleBriefing() 按 strategy_id 路由拼好
-// 传进来（res1 宏观 + res14 指数技术面 + 对口板块室）。定位＝参考信号，不覆盖 METHODOLOGY 的仓位/闸门
-// 决策。空串 → 跳过整块（宽基/缺失时也可能非空，只是少一个板块室）。
+// 「当日研究室简报」块：单指数 run 用。内容由 run.ts 的 assembleBriefing() 从 fund.db PIT 拼好传进来
+// （res 四研判室 + macro_news + market_context）。定位＝参考信号，不覆盖 METHODOLOGY 的仓位/闸门决策。
+// 空串 → 跳过整块（世界日早于全部报告日时为空）。
 function briefingBlock(briefing?: string): string {
   if (!briefing || !briefing.trim()) return ''
-  return `\n\n【当日研究室简报（系统预读 · 昨日盘面/宏观/板块解读）】
-下面是各研究室对**最近盘面、宏观 regime 与对口板块资金流**的当期解读，作为你今天择时的**参考信号**：
+  return `\n\n【当日研究室简报（系统预读 · PIT · 宏观策略/政策/国际/跨市场 + regime）】
+下面是研究室对**市场策略、政策面、国际地缘、跨市场联动与市场 regime / 风险状态**的当期研判，作为你今天择时的**参考信号**：
 - 这是**参考信号，不是指令**——仓位/风险闸门/配置纪律仍以你的 METHODOLOGY 为准，简报只帮你校准方向与力度；
-- 段头标「报告日 X · 距今 N 天」；标了「已过期」的（如中美室停更）**自行判断时效**，别把旧结论当当日事实；
+- 段头标「报告日 X · 距今 N 天」，是截至世界当日 PIT 可得的最新一份；标了「已过期」的**自行判断时效**，别把旧结论当当日事实；
 - 结合你自己的 PIT 行情与持仓做决策，简报与你的判断冲突时，写清理由后按你的方法论执行。
 
 ${briefing.trim()}

@@ -31,6 +31,8 @@ def discover_live_runs(runs_dir: str) -> list:
             continue
         rid = os.path.basename(os.path.dirname(f))
         bots = s.get("bots", [])
+        if s.get("live_paused") is True or s.get("status") == "paused":
+            continue
         if len(bots) == 1:
             out.append((rid, bots[0]))
     out.sort()
@@ -50,6 +52,14 @@ def ensure_calendar_has(cal_path: str, date: str) -> bool:
     with open(cal_path, "w") as fh:
         json.dump(cal, fh, ensure_ascii=False, indent=2)
     return True
+
+
+def prev_trading_day(cal_path: str, today: str):
+    """日历中严格早于 today 的最近一个交易日；无则 None。"""
+    with open(cal_path) as fh:
+        days = json.load(fh)["trading_days"]
+    prior = [d for d in days if d < today]
+    return max(prior) if prior else None
 
 
 def nav_ready(db_path: str, fund_codes: list, date: str):

@@ -17,7 +17,7 @@ import { createSimworldProxy, HIDDEN_TOOLS, type SimworldProxyHandle } from './s
 import { createFundPortfolioProxy, type FundPortfolioProxyHandle } from './fund-portfolio-proxy/server.ts'
 import { createStrategyServer, type StrategyServerHandle, runSqlite, sqlStr } from './strategy-server/server.ts'
 import { fetchIntradayQuoteBlock } from './intraday-market.ts'
-import { assembleBriefing } from './intraday-briefing.ts'
+import { assembleBriefing, type BriefingReportType } from './intraday-briefing.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
 import * as P from './paths.ts'
@@ -1298,19 +1298,20 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const marketReports = kind === "multi-fund"
           ? readMarketReportsForInjection(P.fundDbFile(worldRoot), date)
           : undefined
-        // 当日研究室简报：仅单指数 run（非 reporter、非多基金），按本 run 的 strategy_id 路由到 res 研究室，
-        // 取每室规范主报最新一份拼成参考信号。res 根 = <repoRoot>/.openclaw（worldRoot=<world>/runtime，
-        // 故 ../../.openclaw = /home/rooot/.openclaw），路由表在 config/res-routing.json。
+        // 当日研究室简报：仅单指数 run（非 reporter、非多基金）。从 fund.db 按 PIT（as_of_date<=世界日）
+        // 取 res 四研判室 + macro_news + market_context 拼成参考信号（不含 mainline/rotation 组合骨架，
+        // 那是多基金 bot 的组合指令）。与多基金 readMarketReportsForInjection 同源同表，天然无未来函数。
         let briefing = ""
         if (!config.reporterMode && kind === "single-fund") {
           const strategyId = config.botAssignments?.[b.botId]?.strategyId
           try {
-            briefing = assembleBriefing({
-              strategyId,
-              resRoot: resolve(worldRoot, "..", "..", ".openclaw"),
-              routingPath: join(worldRoot, "..", "config", "res-routing.json"),
-              asOfDate: date,
-            })
+            const resCfg = config.singleFundBriefingRes
+            const reports: BriefingReportType[] | undefined = resCfg
+              ? (resCfg.enabled
+                  ? Object.entries(resCfg.reports).filter(([, enabled]) => enabled).map(([type]) => type as BriefingReportType)
+                  : [])
+              : undefined
+            briefing = assembleBriefing({ fundDbPath: P.fundDbFile(worldRoot), asOfDate: date, ...(reports !== undefined ? { reports } : {}) })
             if (briefing) log(worldRoot, runId, "[briefing] bot " + b.botId + " " + date + ": injected (strategy=" + (strategyId ?? "?") + ", " + briefing.length + " chars)")
           } catch (e) {
             log(worldRoot, runId, "[briefing] bot " + b.botId + " " + date + ": skipped: " + (e as Error).message)

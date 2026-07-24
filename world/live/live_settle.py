@@ -1,9 +1,14 @@
 #!/usr/bin/env python3.12
-"""Phase 2：盘后纯系统结算 + 落净值（傍晚触发，NAV 就绪门闩）。
+"""Phase 2：盘后纯系统结算 + 落净值（次日早上触发，NAV 就绪门闩）。
 
-不唤醒 bot（--phase settle → skipChat）。settle catch-up 幂等 + close_my_day 按今天真实
-收盘 NAV 落净值快照。今天挂的单 order_date=today，settle as-of=today 不结算（T+1），
-留到明天 Phase 1；本阶段只保证净值快照落库。
+时间顺序：A 股基金净值当日不出，次日早上 06:17 由 lab-fund-daily-refresh 落库，
+所以本阶段安排在早上（07:00，NAV 刷新之后），结算的是 **上一个交易日**（T-1）：
+close_my_day 按 T-1 真实收盘 NAV 落净值快照。不唤醒 bot（--phase settle → skipChat）。
+
+为何只结算 T-1（而非当天）：当天挂的单 order_date=today、settle as-of=today 不结算（T+1），
+且当天 NAV 尚未落库；上一交易日的 NAV 此刻已就绪，持仓也恰好停在 T-1 收盘状态
+（今天的单仍 pending、未推进持仓），close as-of T-1 与真实 EOD 一致。settle 幂等，
+_already_closed 幂等门闩，重复跑安全。
 """
 import json, os, sqlite3, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,42 +31,46 @@ def _already_closed(rid, today) -> bool:
     return n > 0
 
 
-def run_one(rid, bot, today, logdir):
+def run_one(rid, bot, target, logdir):
     log = os.path.join(logdir, f"{rid}.log")
     with open(log, "a") as lf:
-        if _already_closed(rid, today):
-            lf.write(f"--- {today} 已 close，跳过 ---\n")
-            return (rid, bot, "SKIP", today)
+        if _already_closed(rid, target):
+            lf.write(f"--- {target} 已 close，跳过 ---\n")
+            return (rid, bot, "SKIP", target)
         codes = lc.run_fund_codes(DB_PATH, bot, rid)
-        ok, missing = lc.nav_ready(DB_PATH, codes, today)
+        ok, missing = lc.nav_ready(DB_PATH, codes, target)
         if not ok:
-            lf.write(f"--- {today} NAV 未就绪，缺 {missing}，顺延 ---\n")
-            return (rid, bot, "NAV_PENDING", today)
+            lf.write(f"--- {target} NAV 未就绪，缺 {missing}，顺延 ---\n")
+            return (rid, bot, "NAV_PENDING", target)
         cfg = f"config/world-live-{rid}.yaml"
-        lf.write(f"\n===== {rid}/{bot} settle {today} {time.strftime('%F %T')} =====\n"); lf.flush()
+        lf.write(f"\n===== {rid}/{bot} settle {target} {time.strftime('%F %T')} =====\n"); lf.flush()
         rc = subprocess.call(
             ["node", "--experimental-strip-types", "src/oos-daily-driver.ts",
-             "--date", today, "--bot-id", bot, "--run-id", rid,
+             "--date", target, "--bot-id", bot, "--run-id", rid,
              "--config", cfg, "--phase", "settle"],
             cwd=WORLD, stdout=lf, stderr=subprocess.STDOUT)
         status = "OK" if rc == 0 else "FAILED"
-        lf.write(f"--- {today} {status} rc={rc} ---\n")
-        return (rid, bot, status, today)
+        lf.write(f"--- {target} {status} rc={rc} ---\n")
+        return (rid, bot, status, target)
 
 
 def main():
     today = lc.today_str()
+    cal = os.path.join(WORLD, "runtime", "calendar.json")
+    target = lc.prev_trading_day(cal, today)
+    if not target:
+        print(f"[live-settle] {today} 之前无交易日，退出"); return
     runs = lc.discover_live_runs(os.path.join(WORLD, "runtime", "runs"))
     if not runs:
         print("[live-settle] 无 live run，退出"); return
-    logdir = f"/tmp/live-settle-{today}"; os.makedirs(logdir, exist_ok=True)
-    print(f"[live-settle] {today} 待结算 {len(runs)} run，并发 {CONC}")
+    logdir = f"/tmp/live-settle-{target}"; os.makedirs(logdir, exist_ok=True)
+    print(f"[live-settle] today={today} 结算上一交易日 {target}，待结算 {len(runs)} run，并发 {CONC}")
 
     results = []
     with ThreadPoolExecutor(max_workers=CONC) as ex:
         futs = {}
         for rid, bot in runs:
-            futs[ex.submit(run_one, rid, bot, today, logdir)] = rid
+            futs[ex.submit(run_one, rid, bot, target, logdir)] = rid
             time.sleep(3)
         for fut in as_completed(futs):
             r = fut.result(); results.append(r)

@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -18,6 +19,7 @@ const REPO_ROOT = resolve(HERE, '../../..')
 // 默认 worldRoot = <repo>/world/runtime；和 paths.ts 里其它 per-run helper 的约定一致。
 // 仅用来定位每 run 的 universe-contamination.json marker 文件，不影响 DB 查询。
 const DEFAULT_WORLD_ROOT = join(HERE, '../../runtime')
+const WORLD_DIR = resolve(HERE, '../..')
 const DEFAULT_HTML = join(HERE, 'index.html')
 const DEFAULT_MARKET_REPORTS_HTML = join(HERE, 'market-reports.html')
 const DEFAULT_OOS_BOT101_HTML = join(HERE, 'oos-bot101.html')
@@ -220,6 +222,17 @@ function quoteSql(s: string): string {
   return `'${s.replace(/'/g, "''")}'`
 }
 
+const ID_RE = /^[A-Za-z0-9._-]+$/
+
+function readRunStateMeta(worldRoot: string, runId: string): { status: string; bots: string[] } | null {
+  if (!ID_RE.test(runId)) return null
+  try {
+    const s = JSON.parse(readFileSync(join(runDir(worldRoot, runId), "state.json"), "utf8")) as Record<string, unknown>
+    const bots = Array.isArray(s.bots) ? s.bots.filter((b): b is string => typeof b === "string") : []
+    return { status: typeof s.status === "string" ? s.status : "", bots }
+  } catch { return null }
+}
+
 /** bot 每天滚动刷新、注回 prompt 的自我反思内容（来自当日 sent.md / reply.json 的真值切片）。
  *  - memoryWindow: 【交易记忆窗口】= buildHistoryWindow 产出的"最近原样 + 更早 4 维度压缩"笔记
  *  - decision:     reply.json 的 reply 字段 = bot 当日收尾的决策总结 */
@@ -399,10 +412,10 @@ function isOosRunId(runId: string): boolean {
   return OOS_RUN_ID_PREFIXES.some(prefix => runId.startsWith(prefix))
 }
 
-export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[], botId = ''): string {
+export function pickBenchmarkFund(actions: BotAction[], holdings: HoldingRow[], botId = '', buyableFundCodes: string[] = []): string {
   if (isLongEquityFundBot(botId)) return DEFAULT_BENCHMARK_FUND
   const firstBuy = actions.find(a => a.side === 'buy')
-  return firstBuy?.fund_code || holdings[0]?.fund_code || DEFAULT_BENCHMARK_FUND
+  return firstBuy?.fund_code || holdings[0]?.fund_code || buyableFundCodes[0] || DEFAULT_BENCHMARK_FUND
 }
 
 async function loadBenchmarkSeries(
@@ -439,10 +452,11 @@ async function loadBenchmark(
   botId: string,
   actions: BotAction[],
   holdings: HoldingRow[],
+  buyableFundCodes: string[],
   firstTradeDate: string,
   latestTradeDate: string,
 ): Promise<BotBenchmark | null> {
-  const fundCode = pickBenchmarkFund(actions, holdings, botId)
+  const fundCode = pickBenchmarkFund(actions, holdings, botId, buyableFundCodes)
   const anchorDate = firstTradeDate || actions.find(a => a.side === 'buy')?.action_date || ''
   if (!anchorDate || !latestTradeDate) return null
   return loadBenchmarkSeries(dbPath, fundCode, anchorDate, latestTradeDate)
@@ -572,6 +586,15 @@ async function listAllBotIds(dbPath: string): Promise<string[]> {
   return rows.map(r => r.bot_id)
 }
 
+function runIdSortTime(runId: string, latestDate: string | null): number {
+  const iso = /(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(runId)
+  if (iso) return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4]), Number(iso[5]), Number(iso[6]))
+  const compact = /(\d{4})(\d{2})(\d{2})(?:T?(\d{2})(\d{2})(\d{2}))?/.exec(runId)
+  if (compact) return Date.UTC(Number(compact[1]), Number(compact[2]) - 1, Number(compact[3]), Number(compact[4] ?? 0), Number(compact[5] ?? 0), Number(compact[6] ?? 0))
+  if (latestDate && latestDate.length === 10 && latestDate[4] === "-" && latestDate[7] === "-") return Date.parse(latestDate + "T00:00:00Z")
+  return 0
+}
+
 async function listRunsForBot(dbPath: string, worldRoot: string, botId: string): Promise<BotRunRef[]> {
   const b = quoteSql(botId)
   // ⚠️ 这里必须 UNION ALL 而非 UNION：sqlite 3.53.2（brew 2026-06-09 升级）的优化器会把
@@ -596,8 +619,8 @@ async function listRunsForBot(dbPath: string, worldRoot: string, botId: string):
     GROUP BY run_id
     ORDER BY run_id DESC
   `)
-  // 新 run 在前（run_id 含启动时间戳，字典序即时间序）；不信任 SQL 层的 ORDER BY，见上。
-  rows.sort((a, b) => (a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0))
+  // 新 run 在前：同时兼容 dash-YYYY... 和 run-YYYY... 两种前缀，不能再按纯字符串排序。
+  rows.sort((a, b) => runIdSortTime(b.run_id, b.latest_date) - runIdSortTime(a.run_id, a.latest_date) || b.run_id.localeCompare(a.run_id))
   const hidden = loadHiddenSet(worldRoot)
   return rows
     .filter(r => !isOosRunId(r.run_id))
@@ -806,10 +829,11 @@ async function loadBotForRun(dbPath: string, worldRoot: string, botId: string, r
     side: classifyAction(action.action_type, action.final_decision),
     ...computeActionWeights(holdingsByDate, action.action_date, action.fund_code),
   }))
+  const assignment = readRunStrategyAssignments(worldRoot, runId)?.[botId]
   const firstDateForBench = first?.trade_date || actions.find(a => a.side === 'buy')?.action_date || ''
   const lastDateForBench = latest?.trade_date || actions[actions.length - 1]?.action_date || ''
   const benchmark = lastDateForBench
-    ? await loadBenchmark(dbPath, botId, actions, holdings, firstDateForBench, lastDateForBench)
+    ? await loadBenchmark(dbPath, botId, actions, holdings, assignment?.buyableFundCodes ?? [], firstDateForBench, lastDateForBench)
     : null
 
   const touchedFunds = [...new Set([
@@ -885,6 +909,17 @@ async function loadLiveBotForRun(dbPath: string, worldRoot: string, liveRunId: s
     'FROM fund_bot_daily_snapshots WHERE bot_id = ' + quoteSql(botId) +
     ' AND run_id = ' + quoteSql(liveRunId) + ' ORDER BY trade_date ASC')
   const series = stitchSeriesRows(historyRows, liveRows)
+  // 基准线随净值线一起延伸到 live 段末日：源 run 的 benchmark endDate 停在源 run 末日
+  // （比拼接后的 live 末日少一天），这里用拼接序列的末日重拉一次基准，避免基准线短一截。
+  let benchmark = base.benchmark
+  const seriesEnd = series.length ? String((series[series.length - 1] as Record<string, unknown>).trade_date ?? '') : ''
+  if (benchmark && benchmark.anchorDate && seriesEnd) {
+    const benchEnd = benchmark.series.length ? benchmark.series[benchmark.series.length - 1].trade_date : ''
+    if (seriesEnd > benchEnd) {
+      const extended = await loadBenchmarkSeries(dbPath, benchmark.fundCode, benchmark.anchorDate, seriesEnd)
+      if (extended && extended.series.length) benchmark = extended
+    }
+  }
   // live 段买卖点：源 dash actions（历史段日期）保留，追加 live run 自己的动作 + 今日 pending。
   const baseActions = Array.isArray(base.actions) ? base.actions as Array<Record<string, unknown>> : []
   const liveActs = queryRows<{ action_date: string; action_type: string; final_decision: string | null; amount: number | null; fund_name: string | null; fund_code: string }>(dbPath,
@@ -904,10 +939,17 @@ async function loadLiveBotForRun(dbPath: string, worldRoot: string, liveRunId: s
     ...liveActs.map(a => ({ action_date: a.action_date, side: classifyAction(a.action_type, a.final_decision), amount: num(a.amount), fund_name: a.fund_name ?? a.fund_code, fund_code: a.fund_code, status: 'confirmed' })),
     ...pend.map(o => ({ action_date: o.order_date, side: (o.order_type === 'sell' ? 'sell' : 'buy'), amount: num(o.order_amount), fund_name: o.fund_name ?? o.fund_code, fund_code: o.fund_code, status: 'pending' })),
   ]
+  // 反思面板日期轴取自 reflectionDates。base 只带源 dash run 的日期（停在源 run 末日），
+  // live run 自己每天 decide 落在 runtime/runs/<liveRunId>/<date>/ 下——并进来，日期轴才够得到
+  // 今日/最新日的决策（即便当日净值点尚未结算）。
+  const baseReflectionDates = Array.isArray(base.reflectionDates) ? base.reflectionDates as string[] : []
+  const reflectionDates = [...new Set([...baseReflectionDates, ...listReflectionDates(worldRoot, liveRunId, botId)])].sort()
   return {
     ...base,
     runId: liveRunId,
     series,
+    benchmark,
+    reflectionDates,
     actions: [...baseActions, ...liveActions],
     availableRuns: [{ runId: liveRunId, latestDate: liveRows.length ? String(liveRows[liveRows.length - 1].trade_date) : (base.latestTradeDate ?? '') }],
   }
@@ -985,16 +1027,19 @@ async function loadAllRunsSummary(dbPath: string, worldRoot: string): Promise<{ 
                              WHERE bot_id = ${b} AND run_id = ${r})
         ORDER BY market_value DESC, fund_code ASC LIMIT 1
       `)[0]
-      const strat = readRunStrategies(worldRoot, ref.runId)?.[botId]
+      const strat = readRunStrategyAssignments(worldRoot, ref.runId)?.[botId]
+      const stateMeta = readRunStateMeta(worldRoot, ref.runId)
       runs.push({
         runId: ref.runId,
         botId,
         index: strat?.targetIndex ?? '',
         indexName: strat?.title ?? '',
-        fund: top?.fund_code ?? '',
+        fund: top?.fund_code ?? (!isLongEquityFundBot(botId) ? (strat?.buyableFundCodes[0] ?? '') : ''),
         absReturnPct,
         annReturnPct,
         maxDrawdownPct,
+        sourceStatus: stateMeta?.status ?? "",
+        sourceBots: stateMeta?.bots ?? [],
       })
     }
   }
@@ -1010,7 +1055,7 @@ export async function loadLiveRunsSummary(dbPath: string, worldRoot: string): Pr
   const fetchSeries = (botId: string, runId: string) => queryRows<Record<string, unknown>>(dbPath,
     'SELECT trade_date, net_value FROM fund_bot_daily_snapshots WHERE bot_id = ' + quoteSql(botId) +
     ' AND run_id = ' + quoteSql(runId) + ' ORDER BY trade_date ASC')
-  for (const { liveRunId, botId, sourceRunId } of links) {
+  for (const { liveRunId, botId, sourceRunId, paused, stateStatus } of links) {
     const historyRows = fetchSeries(botId, sourceRunId)
     const liveRows = fetchSeries(botId, liveRunId)
     const extended = stitchSeriesRows(historyRows, liveRows)
@@ -1020,7 +1065,7 @@ export async function loadLiveRunsSummary(dbPath: string, worldRoot: string): Pr
     runs.push({
       liveRunId, botId, sourceRunId,
       absReturnPct: m.absReturnPct, annReturnPct: m.annReturnPct, maxDrawdownPct: m.maxDrawdownPct,
-      liveDays, lastLiveDate, status: liveDays ? '实盘中' : '待启动',
+      liveDays, lastLiveDate, status: paused ? '已暂停' : (liveDays ? '实盘中' : '待启动'), stateStatus, paused,
     })
   }
   return { runs }
@@ -1324,7 +1369,7 @@ export function sourceRunIdFromLiveRunId(liveRunId: string): string {
 }
 
 /** 读单个 live run 的 state.json → { botId=bots[0], sourceRunId=source_run_id }；缺字段返回 null。 */
-export function readLiveRunLink(worldRoot: string, liveRunId: string): { botId: string; sourceRunId: string } | null {
+export function readLiveRunLink(worldRoot: string, liveRunId: string): { botId: string; sourceRunId: string; stateStatus: string; paused: boolean } | null {
   const path = join(worldRoot, 'runs', liveRunId, 'state.json')
   if (!existsSync(path)) return null
   try {
@@ -1334,23 +1379,89 @@ export function readLiveRunLink(worldRoot: string, liveRunId: string): { botId: 
     // 源映射优先取 state.json 显式字段；引擎重写丢字段时，从 liveRunId 时间戳反推兜底。
     const sourceRunId = typeof st.source_run_id === 'string' && st.source_run_id
       ? st.source_run_id : sourceRunIdFromLiveRunId(liveRunId)
+    const stateStatus = typeof st.status === "string" ? st.status : ""
+    const paused = st.live_paused === true || stateStatus === "paused"
     if (!botId || !sourceRunId) return null
-    return { botId, sourceRunId }
+    return { botId, sourceRunId, stateStatus, paused }
   } catch { return null }
 }
 
 /** 遍历 <worldRoot>/runs 下 live- 前缀目录，返回全部有效 live run 的 {liveRunId, botId, sourceRunId}。 */
-export function listLiveRuns(worldRoot: string): Array<{ liveRunId: string; botId: string; sourceRunId: string }> {
+export function listLiveRuns(worldRoot: string): Array<{ liveRunId: string; botId: string; sourceRunId: string; stateStatus: string; paused: boolean }> {
   const runsDir = join(worldRoot, 'runs')
   let names: string[]
   try { names = readdirSync(runsDir) } catch { return [] }
-  const out: Array<{ liveRunId: string; botId: string; sourceRunId: string }> = []
+  const out: Array<{ liveRunId: string; botId: string; sourceRunId: string; stateStatus: string; paused: boolean }> = []
   for (const name of names) {
     if (!isLiveRunId(name)) continue
     const link = readLiveRunLink(worldRoot, name)
     if (link) out.push({ liveRunId: name, ...link })
   }
   return out
+}
+
+function liveRunIdForSource(sourceRunId: string, botId: string): string {
+  const m = /(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(sourceRunId)
+  const stamp = m ? (m[1] + m[2] + m[3] + "T" + m[4] + m[5] + m[6]) : sourceRunId.replace(/[^0-9A-Za-z]/g, "")
+  return "live-" + botId + "-" + stamp
+}
+
+function execFileText(file: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolveP, reject) => {
+    execFile(file, args, { cwd: opts.cwd, env: opts.env, timeout: 120_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = (stderr || stdout || err.message || String(err)).toString().trim()
+        reject(new Error(msg || "execFile failed"))
+        return
+      }
+      resolveP({ stdout: stdout.toString(), stderr: stderr.toString() })
+    })
+  })
+}
+
+async function seedLiveRun(worldRoot: string, sourceRunId: string, botId: string, seedDate?: string): Promise<Record<string, unknown>> {
+  if (!ID_RE.test(sourceRunId) || !ID_RE.test(botId)) throw new Error("sourceRunId/botId contains illegal characters")
+  if (isLiveRunId(sourceRunId)) throw new Error("sourceRunId must be a historical/backtest run, not a live run")
+  const state = readRunStateMeta(worldRoot, sourceRunId)
+  if (!state) throw new Error("source run state.json not found: " + sourceRunId)
+  if (!state.bots.includes(botId)) throw new Error("bot " + botId + " is not in source run " + sourceRunId)
+  if (state.bots.length !== 1) throw new Error("only single-bot source runs can be promoted to live from this page")
+  if (state.status !== "completed" && state.status !== "done") throw new Error("source run is not completed yet (status=" + (state.status || "?") + ")")
+  const srcCfg = join(WORLD_DIR, "config", "world-tmp-" + sourceRunId + ".yaml")
+  if (!existsSync(srcCfg)) throw new Error("source tmp config not found: " + srcCfg)
+  const liveRunId = liveRunIdForSource(sourceRunId, botId)
+  const liveState = join(worldRoot, "runs", liveRunId, "state.json")
+  const liveCfg = join(WORLD_DIR, "config", "world-live-" + liveRunId + ".yaml")
+  if (existsSync(liveState) || existsSync(liveCfg)) {
+    return { ok: true, existed: true, liveRunId, sourceRunId, botId, statePath: liveState, configPath: liveCfg }
+  }
+  const args = [join(WORLD_DIR, "live", "seed_live_run.py"), "--source-run-id", sourceRunId, "--bot-id", botId]
+  if (seedDate && /^\d{4}-\d{2}-\d{2}$/.test(seedDate)) args.push("--seed-date", seedDate)
+  const r = await execFileText("/usr/bin/python3.12", args, { cwd: WORLD_DIR, env: { ...process.env, LIVE_WORLD: WORLD_DIR } })
+  return { ok: true, existed: false, liveRunId, sourceRunId, botId, statePath: liveState, configPath: liveCfg, stdout: r.stdout.trim(), stderr: r.stderr.trim() }
+}
+
+function setLiveRunPaused(worldRoot: string, liveRunId: string, paused: boolean): Record<string, unknown> {
+  if (!ID_RE.test(liveRunId) || !isLiveRunId(liveRunId)) throw new Error("liveRunId must be a live-* run")
+  const statePath = join(worldRoot, "runs", liveRunId, "state.json")
+  if (!existsSync(statePath)) throw new Error("live run state.json not found: " + liveRunId)
+  const st = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>
+  const bots = Array.isArray(st.bots) ? st.bots.filter((b): b is string => typeof b === "string") : []
+  if (bots.length !== 1) throw new Error("live run must have exactly one bot")
+  const wasPaused = st.live_paused === true || st.status === "paused"
+  if (paused) {
+    if (!wasPaused) st.live_prev_status = typeof st.status === "string" && st.status !== "paused" ? st.status : "done"
+    st.live_paused = true
+    st.status = "paused"
+    st.live_paused_at = new Date().toISOString()
+  } else {
+    st.live_paused = false
+    st.status = typeof st.live_prev_status === "string" && st.live_prev_status !== "paused" ? st.live_prev_status : "done"
+    st.live_resumed_at = new Date().toISOString()
+  }
+  st.updated_at = new Date().toISOString()
+  writeFileSync(statePath, JSON.stringify(st, null, 2) + "\n")
+  return { ok: true, liveRunId, botId: bots[0], paused, status: st.status, statePath }
 }
 
 function parseStructuredJson(raw: string | null): unknown {
@@ -1579,30 +1690,45 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html)
 }
 
+interface RunStrategyAssignment { strategyId: string; title: string; targetIndex: string; buyableFundCodes: string[] }
+
 /** 本 run 各 bot 的策略分配（runtime/runs/<runId>/strategy-assignments.json，setup 时落盘，
  *  见 run.ts）。给实时 Run 控制面板显示「这个 run 在跑什么方法论」。轻量视图：只带
  *  id/标题/标的/池大小，不带基金码全量（multi_equity 的池 1000+ 只，面板用不上）。
  *  老 run 没该文件 → undefined，前端优雅退化为只显 bot id。 */
-function readRunStrategies(
+function readRunStrategyAssignments(
   worldRoot: string,
   runId: string,
-): Record<string, { strategyId: string; title: string; targetIndex: string; fundCount: number }> | undefined {
+): Record<string, RunStrategyAssignment> | undefined {
   try {
-    const raw = JSON.parse(readFileSync(join(runDir(worldRoot, runId), 'strategy-assignments.json'), 'utf8')) as {
+    const raw = JSON.parse(readFileSync(join(runDir(worldRoot, runId), "strategy-assignments.json"), "utf8")) as {
       bots?: Record<string, { strategy_id?: string; strategy_title?: string; target_index?: string; buyable_fund_codes?: string[] }>
     }
     if (!raw?.bots) return undefined
-    const out: Record<string, { strategyId: string; title: string; targetIndex: string; fundCount: number }> = {}
+    const out: Record<string, RunStrategyAssignment> = {}
     for (const [botId, a] of Object.entries(raw.bots)) {
       out[botId] = {
-        strategyId: a.strategy_id ?? '',
-        title: a.strategy_title ?? '',
-        targetIndex: a.target_index ?? '',
-        fundCount: Array.isArray(a.buyable_fund_codes) ? a.buyable_fund_codes.length : 0,
+        strategyId: a.strategy_id ?? "",
+        title: a.strategy_title ?? "",
+        targetIndex: a.target_index ?? "",
+        buyableFundCodes: Array.isArray(a.buyable_fund_codes) ? a.buyable_fund_codes.filter((c): c is string => typeof c === "string" && c.length === 6 && /^[0-9]+/.test(c)) : [],
       }
     }
     return Object.keys(out).length ? out : undefined
   } catch { return undefined }
+}
+
+function readRunStrategies(
+  worldRoot: string,
+  runId: string,
+): Record<string, { strategyId: string; title: string; targetIndex: string; fundCount: number }> | undefined {
+  const assignments = readRunStrategyAssignments(worldRoot, runId)
+  if (!assignments) return undefined
+  const out: Record<string, { strategyId: string; title: string; targetIndex: string; fundCount: number }> = {}
+  for (const [botId, a] of Object.entries(assignments)) {
+    out[botId] = { strategyId: a.strategyId, title: a.title, targetIndex: a.targetIndex, fundCount: a.buyableFundCodes.length }
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 /** Light per-run view for /api/backtest/runs — only what the control panel renders. */
@@ -1708,6 +1834,28 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/live-runs') {
         sendJson(res, 200, await loadLiveRunsSummary(dbPath, worldRoot))
+        return
+      }
+      if (req.method === "POST" && url.pathname === "/api/backtest/live-runs/seed") {
+        let body: Record<string, unknown>
+        try { body = await readJsonBody(req) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }
+        const sourceRunId = typeof body.sourceRunId === "string" ? body.sourceRunId.trim() : ""
+        const botId = typeof body.botId === "string" ? body.botId.trim() : ""
+        const seedDate = typeof body.seedDate === "string" ? body.seedDate.trim() : undefined
+        if (!sourceRunId || !botId) { sendJson(res, 400, { ok: false, error: "sourceRunId and botId required" }); return }
+        try { sendJson(res, 200, await seedLiveRun(worldRoot, sourceRunId, botId, seedDate)) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }) }
+        return
+      }
+      if (req.method === "POST" && (url.pathname === "/api/backtest/live-runs/pause" || url.pathname === "/api/backtest/live-runs/resume")) {
+        let body: Record<string, unknown>
+        try { body = await readJsonBody(req) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }); return }
+        const liveRunId = typeof body.liveRunId === "string" ? body.liveRunId.trim() : ""
+        if (!liveRunId) { sendJson(res, 400, { ok: false, error: "liveRunId required" }); return }
+        try { sendJson(res, 200, setLiveRunPaused(worldRoot, liveRunId, url.pathname.endsWith("/pause"))) }
+        catch (err) { sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) }) }
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/market-reports') {

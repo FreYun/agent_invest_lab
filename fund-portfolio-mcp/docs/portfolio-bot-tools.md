@@ -22,9 +22,9 @@ python3 server.py --transport streamable-http --port 28173
 ## 关键不变量
 
 1. **NAV 唯一来源**：所有 portfolio_* 工具需要净值时一律按 `(fund_code, trade_date)` 严格查询 `fund_nav` 表，找不到直接报错——外部 loop 必须保证净值齐全。
-2. **T+1 结算（资金侧）**：
-   - **BUY**：T 日立即扣 cash → cash_in_transit；T+1 settle 时把 cash_in_transit 释放、加 holding.shares。
-   - **SELL**：T 日立即扣 holding.shares、`cash_receivable += (gross - fee)`；T+1 settle 时把 cash_receivable 转入 cash（不再动 holdings）。
+2. **T+1 结算（资金/份额侧）**：
+   - **BUY**：T 日立即扣 cash → cash_in_transit；T+1 settle 时把 cash_in_transit 释放、加 holding.shares、写 ADD action。
+   - **SELL**：T 日只挂 pending + 冻结 `holding.pending_sell_shares`；T+1 settle 时按 reference_nav 完成 FIFO 扣 shares、加 cash、写 REDUCE action（action_date=T 日）。**与 BUY 完全对称**。
    - 两者都用下单时锁的 `reference_nav` 收口，且赎回费按 order_date 那天的持有天数 T 日就锁死。
 3. **回测安全**：所有 `as_of_date` 入参都用**严格 `<`**——绝不暴露 `as_of_date >= trade_date` 的快照、订单、持仓数据。给定 trade_date 的当日数据在 `close_my_day` 真正调用前不会被算进任何"历史"查询。
 4. **bot 视野隔离**：每个工具都按 `bot_id` 过滤；bot A 的工具调用看不到 bot B 的任何数据。
@@ -152,16 +152,16 @@ portfolio_place_sell_order(bot_id, fund_code, shares, trade_date, reason="")
 |---|---|---|
 | `shares` | float | 申报份额（注意是份额不是金额），必须 > 0 |
 
-**行为（T+0 份额变动 / T+1 资金到账）**：
-1. 校验账户、有 active 持仓、`shares ≤ holding.shares`
-2. 用 trade_date 当日 NAV 作 reference_nav；按 order_date 持有天数算赎回费（**T 日就锁死**，settle 不再重算）
-3. **T 日**就扣 `holding.shares`、按比例扣 `amount_invested`；全部卖出 → status='closed', exit_date=T
-4. **T 日**就把净额（gross−fee）入到 `account.cash_receivable`（在途赎回款，下买单**不能**用）
-5. T+1 settle 时仅做 `cash_receivable → cash` 的转账 + 收口 order，不再动 holdings / actions
+**行为（T+1 结算，与 BUY 对称）**：
+1. 校验账户、有 active 持仓、`shares ≤ holding.shares - pending_sell_shares`
+2. 用 trade_date 当日 NAV 作 reference_nav（T 日已在库 → 锁死 `pricing_status='priced'`；T 日 NAV 未出 → `pricing_status='awaiting_nav'`，settle 时按 order_date NAV 定价）
+3. **T 日只挂 pending 单** + `holding.pending_sell_shares += shares` 冻结（防重复卖）
+4. T 日**不动** `holding.shares` / `amount_invested`、**不写** REDUCE action、**不动** cash / cash_receivable
+5. **T+1 settle** 才真正结算：按 order.reference_nav 与 order_date 持有天数从阶梯表算赎回费，FIFO 消耗 lot、扣 shares、close/update holding、释放 pending_sell_shares、逐 lot 写 REDUCE action（action_date=order_date=T 日）、`cash += (gross - fee)`、订单翻 confirmed（confirm_date=as_of_date）
 
-**返回**：`{success, order_id, reference_nav, shares, gross, fee, proceeds, fee_rate_pct, holding_days_at_order, cash_receivable_after, ...}`
+**返回**：`{success, order_id, reference_nav, pricing_status, shares, status='pending', pending_sell_shares_after, estimated_gross, ...}`（`fee` / `confirmed_amount` 等最终数值要到 T+1 settle 后才在 order 上出现）
 
-**注意**：赎回费在 T 日下单时就按 `order_date - entry_date` 的持有天数 + 阶梯表锁定，写入 `order.fee` / `order.confirmed_amount`。settle 不再重算，避免与 T 日已扣的 receivable 不一致。
+**注意**：与旧的 T+0 sell 语义不同——T 日看板上卖出基金的份额和市值不会立即减少，卖出款也不会立即进 cash_receivable；效果要 T+1 settle 完成后才可见。这与 BUY（T 日冻结现金、T+1 才加份额）完全对称，也贴合真实 A 股 T+1 确认份额的规则。
 
 **典型拒绝路径**：
 - `bot X 无 YYYYYY 的活跃持仓`
@@ -341,8 +341,8 @@ settle_pending_fund_orders(bot_id, as_of_date)
 
 把所有 `order_date < as_of_date` 的 pending 单按各自锁的 `reference_nav` 收口：
 - **BUY** → `cash_in_transit -= order_amount`，新增 `holdings.shares`、写一条 ADD action
-- **SELL（新机制）** → `cash += order.confirmed_amount`，`cash_receivable -= order.confirmed_amount`；不动 holdings、不再写 actions（T 日已完成）
-- **SELL（老机制兼容）** → `order.confirmed_amount IS NULL` 的存量订单走老路径：扣 shares + 加 cash + 释放 pending_sell_shares
+- **SELL（新机制，与 BUY 对称）** → `order.confirmed_amount IS NULL` 的订单：按 lot FIFO 扣 shares、写 REDUCE action、`cash += (gross - fee)`、释放 pending_sell_shares、close/update holding
+- **SELL（老机制兼容）** → `order.confirmed_amount NOT NULL` 的存量订单（旧 T+0 sell 代码遗留）：`cash += order.confirmed_amount`、`cash_receivable -= order.confirmed_amount`；不动 holdings、不再写 actions
 
 这一步**不是 bot 自己干**——bot 只管下单 + 关日，结算由外部 loop 触发。
 
@@ -481,5 +481,5 @@ portfolio_get_my_trades(bot_id="bot7", as_of_date="2025-12-13", limit=50)
 ## 相关文件
 
 - 工具实现：[fund-portfolio-mcp/server.py](../server.py)（搜 `^async def portfolio_`）
-- DB schema：[fund-portfolio-mcp/db.py](../db.py)（`fund_bot_*` 7 张表 + `cash_in_transit`（BUY 冻结）/ `cash_receivable`（SELL 在途）/ `pending_sell_shares`（仅老路径用）三个延迟现金/份额列）
+- DB schema：[fund-portfolio-mcp/db.py](../db.py)（`fund_bot_*` 7 张表 + `cash_in_transit`（BUY 冻结）/ `cash_receivable`（老 SELL 存量在途）/ `pending_sell_shares`（新机制 SELL T 日冻结份额）三个延迟现金/份额列）
 - BOT_ONLY 模式（老的极简模式，跟新链路不冲突，不推荐）：见 server.py 顶部 `_BOT_ONLY_ALLOWED` 注释
