@@ -66,7 +66,7 @@ mcp = FastMCP(
         "巡检调仓记录、每日快照追踪、选品漏斗追踪等工具。"
         "所有 bot 共用同一个数据库，通过 bot_id 区分。"
         + ("【当前为 READONLY 模式：写工具未注册，bot 写库请走系统层 fund_md_to_db。】" if READONLY else "")
-        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance / portfolio_get_buyable_funds / get_fund_detail / portfolio_declare_charter / portfolio_get_my_charter 暴露；其余隐藏。】" if BOT_ONLY else "")
+        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance / portfolio_get_buyable_funds / get_fund_detail / portfolio_declare_charter / portfolio_get_my_charter / portfolio_submit_satellite_review 暴露；其余隐藏。】" if BOT_ONLY else "")
     ),
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
@@ -88,6 +88,7 @@ _BOT_ONLY_ALLOWED = {
     "get_fund_detail",
     "portfolio_declare_charter",
     "portfolio_get_my_charter",
+    "portfolio_submit_satellite_review",
 }
 if BOT_ONLY:
     _orig_mcp_tool = mcp.tool
@@ -2516,6 +2517,70 @@ async def portfolio_get_my_charter(bot_id: str, run_id: str = "") -> str:
         out["declared"] = True
         out["last_satellite_review_date"] = last_review["d"]
         return json.dumps(out, ensure_ascii=False)
+
+
+def _satellite_codes(conn, bot_id: str, run_id: str, trade_date: str, charter: dict) -> set[str]:
+    state = _replay_fund_account_state(conn, bot_id, trade_date, run_id=run_id)
+    return {c for c in state["positions"] if c not in charter["core_fund_codes"]}
+
+
+@mcp.tool()
+async def portfolio_submit_satellite_review(
+    bot_id: str, review_json: str, trade_date: str, run_id: str = "",
+) -> str:
+    """提交卫星仓周期复评（宪章义务）。review_json 必填结构：
+    {"mainline_thesis": "≥30字主线判断", "holdings": [{"fund_code", "verdict": keep|rotate|exit,
+    "rationale": "≥20字"}...须覆盖全部卫星持仓], "candidates": [{"fund_code": 池内代码,
+    "comparison": "≥20字对比"} ×≥2]}。复评过期会导致核心基金买单被拒。"""
+    err = _require_run_id(run_id)
+    if err:
+        return err
+    try:
+        payload = json.loads(review_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"success": False, "message": f"review_json 不是合法 JSON: {e}"}, ensure_ascii=False)
+    trade_date = _normalize_trade_date(trade_date)
+    with get_conn() as conn:
+        charter = _load_active_charter(conn, bot_id, run_id)
+        if not charter:
+            return json.dumps({"success": False, "message": "未声明宪章，先调 portfolio_declare_charter"}, ensure_ascii=False)
+        thesis = payload.get("mainline_thesis")
+        if not isinstance(thesis, str) or len(thesis) < 30:
+            return json.dumps({"success": False, "message": "mainline_thesis 必填且 ≥30 字"}, ensure_ascii=False)
+        holdings = payload.get("holdings")
+        if not isinstance(holdings, list):
+            return json.dumps({"success": False, "message": "holdings 必须是数组"}, ensure_ascii=False)
+        for h in holdings:
+            if (not isinstance(h, dict) or h.get("verdict") not in ("keep", "rotate", "exit")
+                    or not isinstance(h.get("rationale"), str) or len(h["rationale"]) < 20):
+                return json.dumps({"success": False,
+                    "message": "holdings 每项需 {fund_code, verdict: keep|rotate|exit, rationale ≥20字}"},
+                    ensure_ascii=False)
+        need = _satellite_codes(conn, bot_id, run_id, trade_date, charter)
+        got = {h.get("fund_code") for h in holdings}
+        missing = need - got
+        if missing:
+            return json.dumps({"success": False,
+                "message": f"复评须覆盖全部卫星持仓，缺: {sorted(missing)}"}, ensure_ascii=False)
+        cands = payload.get("candidates")
+        if not isinstance(cands, list) or len(cands) < 2 or any(
+                not isinstance(c, dict) or not c.get("fund_code")
+                or not isinstance(c.get("comparison"), str) or len(c["comparison"]) < 20
+                for c in cands):
+            return json.dumps({"success": False,
+                "message": "candidates 候选对比 ≥2 项，每项 {fund_code, comparison ≥20字}"}, ensure_ascii=False)
+        curated = _load_curated_buyable_codes(run_id, bot_id)
+        if curated is not None:
+            outside = [c["fund_code"] for c in cands if c["fund_code"] not in curated]
+            if outside:
+                return json.dumps({"success": False,
+                    "message": f"候选必须来自本 bot 可买池，池外: {outside}"}, ensure_ascii=False)
+        conn.execute(
+            "INSERT INTO fund_bot_satellite_reviews (bot_id, run_id, review_date, payload) "
+            "VALUES (?,?,?,?)", (bot_id, run_id, trade_date, json.dumps(payload, ensure_ascii=False)))
+    return json.dumps({"success": True, "bot_id": bot_id, "review_date": trade_date,
+                       "covered_holdings": sorted(got & need) if need else [],
+                       "note": "卫星复评已落库；下次到期日按宪章 cadence 顺延"}, ensure_ascii=False)
 
 
 @mcp.tool()

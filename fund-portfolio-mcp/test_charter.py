@@ -116,6 +116,77 @@ def test_declare_charter_rejects_non_integer_cadence(reload_server, tmp_db):
     assert r["success"] is True
 
 
+def _seed_holding_actions(db_path, bot_id, run_id, orders):
+    """orders: [(fund_code, fund_name, action_type, amount, shares, nav, date)] 直接写 actions 表，
+    让 _replay_fund_account_state 能回放出持仓。"""
+    conn = sqlite3.connect(db_path)
+    for code, name, at, amount, shares, nav, d in orders:
+        conn.execute("INSERT OR IGNORE INTO fund_info (fund_code, fund_name) VALUES (?, ?)", (code, name))
+        conn.execute(
+            "INSERT INTO fund_bot_actions (bot_id, fund_code, action_type, amount, shares, "
+            " nav_used, fee, action_date, run_id) VALUES (?,?,?,?,?,?,0,?,?)",
+            (bot_id, code, at, amount, shares, nav, d, run_id))
+    conn.commit(); conn.close()
+
+
+VALID_REVIEW = {
+    "mainline_thesis": "通信设备主线受算力资本开支支撑，机器人板块跟随政策催化，维持双卫星结构。",
+    "holdings": [
+        {"fund_code": "007818", "verdict": "keep", "rationale": "通信设备近3月+0.98%跑赢主题均值，主线未破位"},
+        {"fund_code": "014881", "verdict": "keep", "rationale": "机器人政策催化在途，浮盈+1.69%，持有成本低"},
+    ],
+    "candidates": [
+        {"fund_code": "018135", "comparison": "大数据主题近1月弱于通信设备2.1pp，暂不切换"},
+        {"fund_code": "001617", "comparison": "电子主题波动更大且与通信设备相关性高，不增强分散"},
+    ],
+}
+
+
+def _setup_review_env(server, db_path):
+    days = ["2025-01-02", "2025-01-03"]
+    for code in ("000051", "007818", "014881", "018135", "001617"):
+        _seed_nav_days(db_path, days, code=code)
+    _seed_account(db_path)
+    _seed_holding_actions(db_path, "bot105d", "runT", [
+        ("000051", "华夏沪深300ETF联接A", "BUY", 400000, 400000, 1.0, "2025-01-02"),
+        ("007818", "国泰通信设备C", "BUY", 60000, 60000, 1.0, "2025-01-02"),
+        ("014881", "天弘机器人C", "BUY", 50000, 50000, 1.0, "2025-01-02"),
+    ])
+    ok = asyncio.run(server.portfolio_declare_charter(
+        bot_id="bot105d", charter_json=json.dumps(VALID_CHARTER),
+        trade_date="2025-01-02", reason="init", run_id="runT"))
+    assert json.loads(ok)["success"]
+
+
+def test_submit_satellite_review_ok(reload_server, tmp_db):
+    _setup_review_env(reload_server, tmp_db)
+    r = json.loads(asyncio.run(reload_server.portfolio_submit_satellite_review(
+        bot_id="bot105d", review_json=json.dumps(VALID_REVIEW),
+        trade_date="2025-01-03", run_id="runT")))
+    assert r["success"] is True
+    conn = sqlite3.connect(tmp_db)
+    n = conn.execute("SELECT COUNT(*) FROM fund_bot_satellite_reviews").fetchone()[0]
+    assert n == 1
+
+
+def test_submit_review_rejects_missing_holding(reload_server, tmp_db):
+    _setup_review_env(reload_server, tmp_db)
+    partial = dict(VALID_REVIEW, holdings=[VALID_REVIEW["holdings"][0]])  # 漏掉 014881
+    r = json.loads(asyncio.run(reload_server.portfolio_submit_satellite_review(
+        bot_id="bot105d", review_json=json.dumps(partial),
+        trade_date="2025-01-03", run_id="runT")))
+    assert r["success"] is False and "014881" in r["message"]
+
+
+def test_submit_review_rejects_few_candidates(reload_server, tmp_db):
+    _setup_review_env(reload_server, tmp_db)
+    bad = dict(VALID_REVIEW, candidates=[VALID_REVIEW["candidates"][0]])  # 只有 1 个候选
+    r = json.loads(asyncio.run(reload_server.portfolio_submit_satellite_review(
+        bot_id="bot105d", review_json=json.dumps(bad),
+        trade_date="2025-01-03", run_id="runT")))
+    assert r["success"] is False and "候选" in r["message"]
+
+
 def test_amend_charter_cooldown(reload_server, tmp_db):
     # 22 个交易日：01-02 声明；第 10 个交易日修订被拒；第 21 个交易日修订成功
     days = [f"2025-01-{d:02d}" for d in range(2, 24)]     # 22 天连续当交易日用
