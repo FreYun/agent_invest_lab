@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { createFundPortfolioProxy } from '../src/fund-portfolio-proxy/server.ts'
+import { createFundPortfolioProxy, stripFromToolSchema } from '../src/fund-portfolio-proxy/server.ts'
 
 // 镜像 simworld-proxy.test.ts 的 stub upstream，把注入键换成 run_id。
 // 支持模拟"upstream 重启"：调用 stub.restart() 清空 activeSessionIds —— 之后任何带旧 sid
@@ -308,5 +308,22 @@ test('bot-facing mcp-session-id stays stable across upstream reconnect', async (
   } finally {
     await proxy.close()
     await up.close()
+  }
+})
+
+test('charter tools get trade_date stripped from schema', () => {
+  for (const name of ['portfolio_declare_charter', 'portfolio_submit_satellite_review']) {
+    const tool = {
+      name,
+      inputSchema: {
+        properties: { bot_id: {}, trade_date: {}, run_id: {} },
+        required: ['bot_id', 'trade_date', 'run_id'],
+      },
+    } as Record<string, unknown>
+    stripFromToolSchema(tool, true)
+    const schema = tool.inputSchema as { properties: Record<string, unknown>; required: string[] }
+    assert.ok(!('trade_date' in schema.properties), name + ' trade_date should be stripped')
+    assert.ok(!('run_id' in schema.properties), name + ' run_id should be stripped')
+    assert.deepEqual(schema.required, ['bot_id'])
   }
 })

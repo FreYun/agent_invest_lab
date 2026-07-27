@@ -27,7 +27,12 @@ export interface FundPortfolioProxyHandle {
 
 const RUN_ID_KEY = 'run_id'
 const TRADE_DATE_KEY = 'trade_date'
-const TRADE_DATE_TOOLS = new Set(['portfolio_place_buy_order', 'portfolio_place_sell_order'])
+const TRADE_DATE_TOOLS = new Set([
+  'portfolio_place_buy_order',
+  'portfolio_place_sell_order',
+  'portfolio_declare_charter',
+  'portfolio_submit_satellite_review',
+])
 // PIT clamp: these read tools accept an `as_of` cutoff upstream. Force it to the
 // world date so backtest bots can't see future NAV / performance ranks (get_fund_detail
 // used to return DB-latest unconditionally — real leak observed in dash-2026-06-15 run).
@@ -47,7 +52,7 @@ function isObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x)
 }
 
-function stripFromToolSchema(tool: Record<string, unknown>, hideTradeDate: boolean): boolean {
+export function stripFromToolSchema(tool: Record<string, unknown>, hideTradeDate: boolean): boolean {
   const schema = tool.inputSchema
   if (!isObject(schema)) return false
   let hadRunId = false
