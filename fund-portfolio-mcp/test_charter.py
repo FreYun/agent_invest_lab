@@ -1,6 +1,6 @@
 """Allocation Charter（配置宪章）机制测试。
 
-覆盖：表结构、declare/amend 工具、卫星复评工具、买单结构闸门矩阵。
+覆盖：表结构、declare/amend 工具、卫星复评工具、买单结构闸门矩阵、cli 子命令。
 fixture 模式与 test_run_id_isolation.py 一致：tmp_db + reload_server。
 """
 import asyncio
@@ -8,6 +8,8 @@ import importlib
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 
 import pytest
@@ -380,3 +382,29 @@ def test_gate_review_overdue_blocks_core_buy(reload_server, tmp_db):
     assert json.loads(rv)["success"]
     r_core2 = _buy(reload_server, "000051", 50000, date="2025-01-15")
     assert r_core2["success"] is True
+
+
+# ── Task 5: cli_tools 宪章子命令测试 ─────────────────────────────────────────
+
+def _cli(tmp_db, *args):
+    env = dict(os.environ)
+    env["FUND_DB_PATH"] = tmp_db
+    cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli_tools.py")
+    out = subprocess.run(
+        ["/usr/bin/python3.12", cli_path, *args],
+        capture_output=True, text=True, env=env,
+        cwd=os.path.dirname(os.path.abspath(__file__)))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_cli_charter_require_and_status(reload_server, tmp_db):
+    _seed_nav_days(tmp_db, ["2025-01-02", "2025-01-03"])
+    _seed_account(tmp_db)
+    r1 = _cli(tmp_db, "charter_require", "--bot-id", "bot105d", "--run-id", "runT")
+    assert r1["ok"] is True and r1["existing"] is False
+    r2 = _cli(tmp_db, "charter_require", "--bot-id", "bot105d", "--run-id", "runT")
+    assert r2["existing"] is True     # 幂等
+    s = _cli(tmp_db, "charter_status", "--bot-id", "bot105d", "--run-id", "runT",
+             "--date", "2025-01-03")
+    assert s["required"] is True and s["declared"] is False

@@ -123,6 +123,15 @@ async def _amain() -> str:
     p_meta.add_argument("--as-of-date", required=True,
                         help="回测当日 YYYY-MM-DD；1y 业绩快照取 as_of_date <= 该日的最新一行")
 
+    p_creq = sub.add_parser("charter_require")
+    p_creq.add_argument("--bot-id", required=True)
+    p_creq.add_argument("--run-id", required=True)
+
+    p_cstat = sub.add_parser("charter_status")
+    p_cstat.add_argument("--bot-id", required=True)
+    p_cstat.add_argument("--run-id", required=True)
+    p_cstat.add_argument("--date", required=True)
+
     args = parser.parse_args()
     if args.cmd == "init_fund_account":
         return await portfolio_init_my_account(
@@ -147,6 +156,60 @@ async def _amain() -> str:
     if args.cmd == "get_pool_meta":
         codes = [c.strip() for c in args.fund_codes.split(",") if c.strip()]
         return _get_pool_meta(codes, args.as_of_date)
+    if args.cmd == "charter_require":
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM fund_bot_charters WHERE bot_id=? AND run_id=? "
+                "AND status IN ('required','active') LIMIT 1",
+                (args.bot_id, args.run_id)).fetchone()
+            if row:
+                print(json.dumps({"ok": True, "existing": True}))
+            else:
+                conn.execute(
+                    "INSERT INTO fund_bot_charters (bot_id, run_id, status) VALUES (?,?,'required')",
+                    (args.bot_id, args.run_id))
+                print(json.dumps({"ok": True, "existing": False}))
+        return ""
+    if args.cmd == "charter_status":
+        with get_conn() as conn:
+            active = conn.execute(
+                "SELECT declared_date, satellite_review_cadence_days FROM fund_bot_charters "
+                "WHERE bot_id=? AND run_id=? AND status='active' ORDER BY charter_id DESC LIMIT 1",
+                (args.bot_id, args.run_id)).fetchone()
+            required = conn.execute(
+                "SELECT 1 FROM fund_bot_charters WHERE bot_id=? AND run_id=? "
+                "AND status IN ('required','active') LIMIT 1",
+                (args.bot_id, args.run_id)).fetchone() is not None
+            out = {"required": required, "declared": active is not None,
+                   "cadence": None, "declared_date": None, "last_review_date": None,
+                   "review_due": False, "review_overdue": False, "satellite_holding_count": 0}
+            if active:
+                out["cadence"] = int(active["satellite_review_cadence_days"])
+                out["declared_date"] = active["declared_date"]
+                last = conn.execute(
+                    "SELECT MAX(review_date) AS d FROM fund_bot_satellite_reviews "
+                    "WHERE bot_id=? AND run_id=?", (args.bot_id, args.run_id)).fetchone()
+                out["last_review_date"] = last["d"]
+                baseline = last["d"] or active["declared_date"]
+                gap = conn.execute(
+                    "SELECT COUNT(DISTINCT nav_date) AS n FROM fund_nav "
+                    "WHERE nav_date > ? AND nav_date <= ?", (baseline, args.date)).fetchone()["n"]
+                out["review_due"] = gap >= out["cadence"]
+                out["review_overdue"] = gap > out["cadence"] + 2
+                charter_row = conn.execute(
+                    "SELECT core_fund_codes FROM fund_bot_charters WHERE bot_id=? AND run_id=? "
+                    "AND status='active' ORDER BY charter_id DESC LIMIT 1",
+                    (args.bot_id, args.run_id)).fetchone()
+                core = set(json.loads(charter_row["core_fund_codes"] or "[]"))
+                rows = conn.execute(
+                    "SELECT fund_code FROM fund_bot_holdings WHERE bot_id=? AND run_id=? "
+                    "AND status='active' AND shares > 1e-6", (args.bot_id, args.run_id)).fetchall()
+                out["satellite_holding_count"] = sum(1 for r in rows if r["fund_code"] not in core)
+                if out["satellite_holding_count"] == 0:
+                    out["review_due"] = False
+                    out["review_overdue"] = False
+            print(json.dumps(out, ensure_ascii=False))
+        return ""
     raise SystemExit(f"unknown cmd {args.cmd!r}")
 
 
