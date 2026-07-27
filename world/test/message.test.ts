@@ -606,3 +606,29 @@ test('强制深研提示准确区分账户回撤事件与固定周期', () => {
   assert.doesNotMatch(m, /达调度硬上限/)
   rmSync(w, { recursive: true, force: true })
 })
+
+test('charterBlock: 宪章未声明→声明指引注入；已声明无复评→不注入；复评到期/过期→复评提醒注入；无 charterBlock→跳过', () => {
+  const w = tmpWorldWithOverview('2024-03-18', '')
+  // 无 charterBlock：不渲染任何配置宪章块（charter_enforcement 未启用的 run 行为不变）
+  const noCharter = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json' })
+  assert.doesNotMatch(noCharter, /【配置宪章/)
+  // 未声明 → 声明指引（Day 1 和 Day N 均测试）
+  const undeclaredDay1 = renderDailyMessage({ worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot101', quotesPath: '/q.json', charterBlock: '【配置宪章：今日必须声明】\n本 run 启用了配置宪章。' })
+  assert.match(undeclaredDay1, /【配置宪章：今日必须声明】/)
+  assert.match(undeclaredDay1, /本 run 启用了配置宪章/)
+  const undeclaredDayN = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json', charterBlock: '【配置宪章：今日必须声明】\n声明前所有买入单都会被拒。' })
+  assert.match(undeclaredDayN, /【配置宪章：今日必须声明】/)
+  assert.match(undeclaredDayN, /声明前所有买入单都会被拒/)
+  // 复评到期
+  const reviewDue = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json', charterBlock: '【配置宪章：卫星复评今日到期】\n上次复评 2024-03-14，cadence=5 交易日。' })
+  assert.match(reviewDue, /【配置宪章：卫星复评今日到期】/)
+  assert.match(reviewDue, /cadence=5/)
+  // 复评过期
+  const reviewOverdue = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json', charterBlock: '【配置宪章：卫星复评已过期】\n复评过期期间核心基金买单会被拒。' })
+  assert.match(reviewOverdue, /【配置宪章：卫星复评已过期】/)
+  assert.match(reviewOverdue, /复评过期期间核心基金买单会被拒/)
+  // 已声明无复评触发：传 undefined → 不渲染
+  const declared = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json', charterBlock: undefined })
+  assert.doesNotMatch(declared, /【配置宪章/)
+  rmSync(w, { recursive: true, force: true })
+})

@@ -337,3 +337,18 @@ test('loadWorldConfig 崩盘触发字段：buyable-pool 不自动开启', () => 
   assert.deepEqual(c.crashTriggerBenchmark, { code: '000300.SH', name: '沪深300' })
   rmSync(dirname(p), { recursive: true, force: true })
 })
+
+test('loadWorldConfig charterEnforcement: 缺省 false，显式 true/false 解析正确，非 boolean 抛错', () => {
+  const base = `research_loop: /r\nbots: [bot1]\nreplay: {from: "2024-01-02", to: "2024-01-03"}\nsimworld_upstream_url: http://x/mcp`
+  // 缺省 false
+  const cDefault = loadWorldConfig(tmpYaml(base))
+  assert.equal(cDefault.charterEnforcement, false)
+  // 显式 true
+  const cTrue = loadWorldConfig(tmpYaml(base + '\ncharter_enforcement: true'))
+  assert.equal(cTrue.charterEnforcement, true)
+  // 显式 false
+  const cFalse = loadWorldConfig(tmpYaml(base + '\ncharter_enforcement: false'))
+  assert.equal(cFalse.charterEnforcement, false)
+  // 非 boolean 应抛错
+  assert.throws(() => loadWorldConfig(tmpYaml(base + '\ncharter_enforcement: "yes"')), /charter_enforcement.*boolean/)
+})

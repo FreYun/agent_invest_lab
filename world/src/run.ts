@@ -730,6 +730,15 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
       } catch (err) {
         log(worldRoot, runId, `fund init ${botId} FAILED: ${err instanceof Error ? err.message : String(err)}`)
       }
+      if (config.charterEnforcement && botKindOf(botId) === 'multi-fund') {
+        try {
+          const cr = await runFundCli(config.fundMcpCli, 'charter_require',
+            ['--bot-id', botId, '--run-id', runId], { timeoutMs: 30_000 })
+          log(worldRoot, runId, `charter_require ${botId}: ${cr.stdout.trim().slice(0, 120)}`)
+        } catch (err) {
+          log(worldRoot, runId, `charter_require ${botId} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
     }
   }
 
@@ -1396,6 +1405,37 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
             log(worldRoot, runId, "[intraday-market] bot " + b.botId + " " + date + ": skipped after fetch error: " + rt.error)
           }
         }
+        // 配置宪章：每日取状态，组装声明/复评提示块注入 daily message（仅多基金 bot + charterEnforcement 开启时）。
+        let charterBlock: string | undefined
+        if (config.charterEnforcement && config.fundMcpCli && botKindOf(b.botId) === 'multi-fund') {
+          try {
+            const raw = await runFundCli(config.fundMcpCli, 'charter_status',
+              ['--bot-id', b.botId, '--run-id', runId, '--date', date], { timeoutMs: 30_000 })
+            const st = JSON.parse(raw.stdout.trim().split('\n').at(-1) ?? '{}') as {
+              required: boolean; declared: boolean; review_due: boolean
+              review_overdue: boolean; cadence: number | null; last_review_date: string | null
+            }
+            if (st.required && !st.declared) {
+              charterBlock = [
+                '【配置宪章：今日必须声明】',
+                '本 run 启用了配置宪章。你必须先调 mcp__fund_portfolio_mcp__portfolio_declare_charter，',
+                '依据你 METHODOLOGY 的配置区间声明：core_fund_codes（核心宽基）、single_fund_max_ratio（≤0.75）、',
+                'satellite_min_ratio（≥0.15）、min_equity_threshold（≤0.50）、satellite_review_cadence_days（1~10）。',
+                '声明前所有买入单都会被拒。声明后由交易系统物理执行——这是你对自己架构的承诺。',
+              ].join('\n')
+            } else if (st.declared && (st.review_due || st.review_overdue)) {
+              charterBlock = [
+                `【配置宪章：卫星复评${st.review_overdue ? '已过期' : '今日到期'}】`,
+                `上次复评 ${st.last_review_date ?? '（从未）'}，cadence=${st.cadence} 交易日。`,
+                '调 mcp__fund_portfolio_mcp__portfolio_submit_satellite_review 提交结构化复评：每只卫星持仓给出',
+                'keep/rotate/exit 结论（≥20字理由）+ ≥2 只池内候选对比 + 主线判断（≥30字）。',
+                st.review_overdue ? '复评过期期间核心基金买单会被拒。' : '',
+              ].filter(Boolean).join('\n')
+            }
+          } catch (err) {
+            log(worldRoot, runId, `charter_status ${b.botId} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
         // reporter 模式：daily message 极简——研究员的任务（产出哪份研报、读哪些上游、怎么 submit）
         // 已全在其 AGENTS.md/METHODOLOGY.md（splice 进 system prompt）里写死。不注入持仓/buyable/
         // 交易规则/行情预取，避免把研究员当交易员。**不含日期**（PIT：reporter 不该知道世界日）。
@@ -1431,6 +1471,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           deepResearchMaxGapDays,
           deepResearchReasons: drState.reasons,
           deepResearchLastDate: lastDeepDate,
+          charterBlock,
         })
         if (brokenBots.has(b.botId)) {
           const status = writeSkippedDeadBot(worldRoot, runId, date, message, b)

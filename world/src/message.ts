@@ -86,6 +86,9 @@ export interface DailyMessageContext {
   deepResearchLastDate?: string
   /** 本次强制深研的具体原因，由 run.ts 判定。 */
   deepResearchReasons?: Array<'max-gap' | 'ordinal' | 'target-move' | 'account-drawdown'>
+  // 【配置宪章】提示块：宪章未声明（Day 1）→ 声明指引；卫星复评到期/过期 → 复评提醒。
+  // 由 run.ts 每日调 cli charter_status 组装；空/缺省 → 跳过整块（宪章未启用的 run 即此）。
+  charterBlock?: string
 }
 
 export function weekdayOf(isoDate: string): string {
@@ -894,6 +897,8 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   // Belief block 由 caller (run.ts) 先 await buildBeliefContext(...) 渲染成完整字符串塞进来；
   // 已自带 header / schema 要求 / 21d 校准反馈，本函数只前置两个换行做分隔即可。空/缺省 → 跳过。
   const beliefStr = ctx.beliefBlock && ctx.beliefBlock.trim() ? `\n\n${ctx.beliefBlock.trim()}` : ''
+  // 配置宪章块：run.ts 每日调 charter_status 组装；空/缺省 → 跳过（宪章未启用的 run 即此）。
+  const charterPart = ctx.charterBlock ? '\n\n' + ctx.charterBlock : ''
   // 强制块：forced 优先取 deepResearchForced（新 caller），回退 deepResearchDay（老 caller/ordinal）。
   const forced = ctx.deepResearchForced ?? ctx.deepResearchDay
   const deepResearch = deepResearchBlock(forced, ctx.deepResearchGapDays, ctx.deepResearchLastDate, ctx.deepResearchReasons)
@@ -908,7 +913,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${charterPart}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -921,5 +926,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${charterPart}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
 }

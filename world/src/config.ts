@@ -135,6 +135,9 @@ export interface WorldConfig {
   skipClose?: boolean
   /** Phase 2（settle）：不唤醒 bot，只跑系统侧 settle + close。 */
   skipChat?: boolean
+  // 配置宪章（allocation charter）：true 时 run init 对 multi-fund bot 写宪章义务占位，
+  // 每日注入声明/复评提示，fund-portfolio-mcp 侧执行结构闸门。缺省 false（现有 run 全部不受影响）。
+  charterEnforcement?: boolean
 }
 
 export interface BotAssignment {
@@ -481,6 +484,10 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
 
   const skipClose = typeof raw.skip_close === 'boolean' ? raw.skip_close : undefined
   const skipChat = typeof raw.skip_chat === 'boolean' ? raw.skip_chat : undefined
+  if (raw.charter_enforcement !== undefined && typeof raw.charter_enforcement !== 'boolean') {
+    throw new Error('world config: "charter_enforcement" must be boolean')
+  }
+  const charterEnforcement: boolean = raw.charter_enforcement === true
 
   const crashTriggerBenchmark = explicitCrashTriggerBenchmark
     ?? inferredCrashTriggerBenchmark
@@ -488,7 +495,7 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const crashTriggerEnabled = explicitCrashTriggerEnabled
     ?? (deepResearchMode === 'agent-triggered' && inferredCrashTriggerBenchmark !== undefined)
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, crashTriggerDrawdownPct, crashTriggerBenchmark, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, singleFundBriefingRes, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, crashTriggerDrawdownPct, crashTriggerBenchmark, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, singleFundBriefingRes, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat, charterEnforcement }
 }
 
 export function loadWorldConfig(path: string): WorldConfig {
