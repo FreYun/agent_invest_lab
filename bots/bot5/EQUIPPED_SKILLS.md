@@ -31,8 +31,3 @@
 - 研究数据库（research-mcp） — `skills/research-mcp/SKILL.md`
 - TMT全景（tmt-landscape） — `skills/tmt-landscape/SKILL.md`
 - 光伏跟踪（solar-tracker） — `skills/solar-tracker/SKILL.md`
-
-## 策略
-
-- S3首板接力战法（s3-first-board-relay） — `skills/s3-first-board-relay/SKILL.md`
-

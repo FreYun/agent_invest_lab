@@ -1,7 +1,0 @@
-{
-  "name": "市场环境",
-  "icon": "📊",
-  "slot": "portfolio",
-  "desc": "每日市场 regime 判断,输出牛/熊/震荡/危机标签 + 四类资产方向,供投顾巡检决策使用",
-  "subType": "research"
-}

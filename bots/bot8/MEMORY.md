@@ -34,7 +34,9 @@ npx mcporter call 'media-data-pack.search_weixin(query: "", user: "重远投资�
 
 ---
 
-## 投资框架沉淀
+## 内容素材沉淀（非运行时策略）
+
+> 以下内容只作为口播/选题素材来源，不作为本 bot 的回测策略、持仓指令或 strategy assignment。
 
 ### 重远投资观核心框架（2026-05-06 复盘）
 

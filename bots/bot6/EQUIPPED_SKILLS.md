@@ -44,8 +44,3 @@
 - 产业链拆解（industry-chain-breakdown） — `skills/industry-chain-breakdown/SKILL.md`
 - 存储芯片产业链（memory-chip-tracker） — `skills/memory-chip-tracker/SKILL.md`
 - 妙想模拟盘（mx-moni） — `skills/mx-moni/SKILL.md`
-
-## 策略
-
-- S5龙回头战法（s5-dragon-pullback） — `skills/s5-dragon-pullback/SKILL.md`
-
