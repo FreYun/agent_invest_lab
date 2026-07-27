@@ -48,6 +48,8 @@ satellite_review_cadence_days: 5     # 卫星复评周期，交易日（类别�
 - **修订**：仅深研日允许带理由修订，同样过底线校验；两次修订间隔 ≥ 20 个交易日（防棘轮反复收紧）。
 - **类别底线**（多基金类，写死在系统侧）：`single_fund_max_ratio ≤ 0.75`、`satellite_min_ratio ≥ 0.15`、`satellite_review_cadence_days ≤ 10`。
 
+> **实现注记（2026-07-27）**：修订不再限定"深研日"——daily-agenticdeep 管线的 deep research 为 agent-triggered（bot 会话内自触发），调度器无法预先标定深研日。改为仅以 20 交易日冷却 + reason 必填约束修订频率。防棘轮效果等价（冷却是主要约束），实现大幅简化。
+
 ## 5. 交易层硬闸门
 
 执行点：**fund-portfolio-mcp 服务端**（不放 world 的 fund-portfolio-proxy——proxy 是薄注入层；集中度校验需查当前持仓，server 端有 DB）。复用现有"池外拒单"反馈路径（bot 已被证明能对结构化报错自我修正）。
