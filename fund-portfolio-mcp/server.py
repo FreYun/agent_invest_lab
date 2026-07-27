@@ -1644,12 +1644,25 @@ def _charter_gate_buy(conn, bot_id: str, run_id: str, trade_date: str,
                        "按你的 METHODOLOGY 配置区间声明单基上限/卫星下限/复评周期，再下买单。"},
             ensure_ascii=False)
     core = charter["core_fund_codes"]
-    # ── 模拟成交后结构：replay 持仓市值（已成交 actions）+ 本单 ──
+    # ── 模拟成交后结构：replay 持仓市值 + pending buy 金额 - pending sell 份额 + 本单 ──
     state = _replay_fund_account_state(conn, bot_id, trade_date, run_id=run_id)
     mv: dict[str, float] = {}
     for code, pos in state["positions"].items():
         nav, _ = _get_nav(conn, code, trade_date)
         mv[code] = float(pos["shares"]) * nav
+    # 计入当日 pending 买单金额（同日拆单防绕过）
+    for row in conn.execute(
+            "SELECT fund_code, COALESCE(SUM(order_amount),0) AS s FROM fund_bot_orders "
+            "WHERE bot_id=? AND order_run_id=? AND order_type='buy' AND status='pending' "
+            "GROUP BY fund_code", (bot_id, run_id)):
+        mv[row["fund_code"]] = mv.get(row["fund_code"], 0.0) + float(row["s"])
+    # 扣除 pending 卖出份额（按当日 nav 折市值，下限 0）
+    for row in conn.execute(
+            "SELECT fund_code, COALESCE(SUM(pending_sell_shares),0) AS s FROM fund_bot_holdings "
+            "WHERE bot_id=? AND run_id=? AND status='active' GROUP BY fund_code",
+            (bot_id, run_id)):
+        nav, _ = _get_nav(conn, row["fund_code"], trade_date)
+        mv[row["fund_code"]] = max(mv.get(row["fund_code"], 0.0) - float(row["s"]) * nav, 0.0)
     mv[fund_code] = mv.get(fund_code, 0.0) + amount
     equity = sum(mv.values())
     if equity <= 1e-6:

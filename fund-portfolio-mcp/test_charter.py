@@ -247,12 +247,93 @@ def test_gate_single_fund_cap(reload_server, tmp_db):
 
 
 def test_gate_satellite_floor_blocks_core_buy(reload_server, tmp_db):
-    """卫星占比 21.6%，但一笔大额核心买单会把卫星稀释到 <25%-5pp → 拒；买卫星放行。"""
+    """核心大额买单稀释卫星破下限 → 拒；当日 pending 卫星买单计入结构（修结构闭环）。
+
+    环境（来自 _setup_review_env）：宪章 cap=60%、floor=25%、容忍带 ±5%（有效 cap 65%、有效 floor 20%）；
+    已成交持仓核心 000051=40w、卫星合计 11w（007818=6w+014881=5w），nav 全 1.0，账户 100w 现金。
+
+    数值推导：
+      步骤1 直接买核心 10w：
+        pending 买单：{}（无）；mv={000051:50w, sats:11w}；equity=61w
+        cap: 50w/61w=82.0% > 65% → 上限违反
+        floor: 11w/61w=18.0% < 20% → 下限违反
+        两者均触发 → 拒单，message 含 satellite_min_ratio（也含 single_fund_max_ratio）
+
+      步骤2 买卫星 018135 5w：
+        核心未 pending（步骤1 被拒未写单）；mv={000051:40w,007818:6w,014881:5w,018135:5w}；equity=56w
+        018135 cap: 5w/56w=8.9% < 65% → 卫星买单放行（不检 floor）→ 成功
+
+      步骤3 再买核心 10w（pending 卫星 5w 已计入）：
+        pending 买单：{018135:5w}；replay mv + pending → {000051:40w+10w=50w,007818:6w,014881:5w,018135:5w}
+        equity=66w；floor: 16w/66w=24.2% ≥ 20% → floor 修复
+        cap: 50w/66w=75.8% > 65% → 仍超单基上限
+        → 拒单，message 仅含 single_fund_max_ratio，不含 satellite_min_ratio
+    """
     _setup_review_env(reload_server, tmp_db)
-    r_sat = _buy(reload_server, "018135", 50000)
-    assert r_sat["success"] is True            # 买卫星永远放行结构闸（仍受单基上限约束）
+    # 步骤1：直接买核心 10w → 卫星 11w/61w=18.0% < 20%，同时 cap 82.0% > 65% → 拒（两条均报）
     r_core = _buy(reload_server, "000051", 100000)
     assert r_core["success"] is False and "satellite_min_ratio" in r_core["message"]
+    # 步骤2：买卫星 5w → 结构闸不拦卫星，自身占比远低于单基上限 → 放行
+    r_sat = _buy(reload_server, "018135", 50000)
+    assert r_sat["success"] is True
+    # 步骤3：再买核心 10w → pending 卫星计入后 floor 16w/66w=24.2% ≥ 20% 已修复；
+    # 但核心 50w/66w=75.8% > 65% 仍超单基上限 → 拒且消息只含 cap 不含 floor
+    r_core2 = _buy(reload_server, "000051", 100000)
+    assert r_core2["success"] is False
+    assert "single_fund_max_ratio" in r_core2["message"]
+    assert "satellite_min_ratio" not in r_core2["message"]
+
+
+def test_gate_pending_buy_counts_toward_cap(reload_server, tmp_db):
+    """同日拆单不能绕过单基上限：pending 核心买单计入后后续买单被拒。
+
+    环境：_setup_review_env 后账户 initial_capital=100w，replay 已扣成交 51w（000051=40w+sats=11w），
+    replay cash=49w。为支撑累计 65w 买单（30w+10w+15w+20w 中前三笔成功共 55w）需 replay cash ≥ 55w，
+    不足（49w），故在 _setup_review_env 后直接更新账户 initial_capital=150w
+    （replay cash=150w-51w=99w，支撑前三笔 55w 后剩余 44w ≥ 第四笔 20w）。
+
+    注意：server 用 (bot_id, run_id, fund_code, date, amount) 做 pending 重复检测；
+    三笔核心买单金额须各不相同（10w/15w/20w），避免误判为重复单导致绕过闸门。
+
+    数值推导（nav 全 1.0，有效 cap=65%，有效 floor=20%）：
+      步骤1 买卫星 018135 30w（pending={}）：
+        mv={000051:40w, 007818:6w, 014881:5w, 018135:30w}；equity=81w
+        018135: 30w/81w=37.0% < 65%；卫星买 → 放行 ✓
+
+      步骤2 第一笔核心 10w（pending={018135:30w}）：
+        mv={000051:50w, sats:41w}；equity=91w
+        cap: 50w/91w=54.9% < 65%；floor: 41w/91w=45.1% ≥ 20% → 放行 ✓
+        旧口径（不计 pending 卫星）：sats=11w，floor=11w/61w=18.0% < 20% → 会被 floor 误拒
+        ⟹ 步骤2 通过本身证明 pending 卫星已计入，floor 判断已修正。
+
+      步骤3 第二笔核心 15w（pending={018135:30w, 000051:10w}）：
+        mv={000051:65w, sats:41w}；equity=106w
+        cap: 65w/106w=61.3% < 65% → 放行 ✓
+
+      步骤4 第三笔核心 20w（pending={018135:30w, 000051:25w}）：
+        mv={000051:85w, sats:41w}；equity=126w
+        cap: 85w/126w=67.5% > 65% → 拒（single_fund_max_ratio）✓
+        旧口径（不计 pending）：000051=40w+20w=60w，sats=11w，equity=71w，
+        60w/71w=84.5%>65% → 旧口径也会拒，但 floor 检查会先触发（11w/71w=15.5%<20%）；
+        此测试的核心价值在于步骤2/3 在新口径下能通过（旧口径会因 floor 先拒），
+        再由步骤4 验证累积 pending 核心终止单基上限。
+    """
+    _setup_review_env(reload_server, tmp_db)
+    # 调大 initial_capital 以支撑本测试累计 55w（前三笔）买单（见推导）
+    import sqlite3 as _sqlite3
+    conn2 = _sqlite3.connect(tmp_db)
+    conn2.execute("UPDATE fund_bot_accounts SET initial_capital=1500000, cash=1500000 WHERE bot_id='bot105d'")
+    conn2.commit(); conn2.close()
+    # 步骤1：买卫星 30w → 卫星桶 41w，权益 81w，核心 49.4% < 65%，floor 50.6% ≥ 20% → 过
+    assert _buy(reload_server, "018135", 300000)["success"] is True
+    # 步骤2：第一笔核心 10w（pending 卫星 30w 计入）→ 核心 50w/91w=54.9% < 65%，floor 45.1% ≥ 20% → 过
+    # （旧口径无 pending 卫星：floor=11w/61w=18%<20% 会拒，此步通过证明修复有效）
+    assert _buy(reload_server, "000051", 100000)["success"] is True
+    # 步骤3：第二笔核心 15w → pending 计入后核心 65w/106w=61.3% < 65% → 过
+    assert _buy(reload_server, "000051", 150000)["success"] is True
+    # 步骤4：第三笔核心 20w → pending 计入后核心 85w/126w=67.5% > 65% → 拒（拆单防绕过）
+    r = _buy(reload_server, "000051", 200000)
+    assert r["success"] is False and "single_fund_max_ratio" in r["message"]
 
 
 def test_gate_exemption_below_equity_threshold(reload_server, tmp_db):
