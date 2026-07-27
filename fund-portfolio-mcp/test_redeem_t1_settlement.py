@@ -896,3 +896,128 @@ def test_close_my_day_repairs_stale_active_holding_rows(reload_server, tmp_db):
     assert abs(stale["shares"] or 0.0) < 1e-6
     assert abs(stale["market_value"] or 0.0) < 1e-6
     assert abs(stale["actual_weight"] or 0.0) < 1e-6
+
+
+def test_settle_does_not_consume_future_lots(reload_server):
+    """3/5 的卖单不能消耗 3/6 才买入的 lot；否则会产生负持有天数。"""
+    s = reload_server
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        _seed_fund(conn, "000777")
+        _seed_nav(conn, "000777", "2026-05-10", 1.0)
+        _seed_nav(conn, "000777", "2026-05-11", 1.2)
+        _seed_nav(conn, "000777", "2026-05-12", 1.2)
+        _seed_account(conn, "botFuture", cash=0.0, initial=1000.0, run_id="run-F")
+        cur = conn.execute(
+            "INSERT INTO fund_bot_holdings "
+            "(bot_id, fund_code, fund_name, asset_class, role, entry_date, entry_nav, latest_nav, "
+            " shares, pending_sell_shares, amount_invested, market_value, status, run_id) "
+            "VALUES ('botFuture', '000777', '测试基金', '股票类', 'core', '2026-05-10', 1.0, 1.2, "
+            " 150, 0, 150, 180, 'active', 'run-F')"
+        )
+        hid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO fund_bot_holding_lots "
+            "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, shares_initial, shares_remaining, "
+            " cost_initial, cost_remaining, source_order_id, status) "
+            "VALUES ('botFuture','000777','run-F',?,'2026-05-10',1.0,100,100,100,100,NULL,'open')",
+            (hid,),
+        )
+        conn.execute(
+            "INSERT INTO fund_bot_holding_lots "
+            "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, shares_initial, shares_remaining, "
+            " cost_initial, cost_remaining, source_order_id, status) "
+            "VALUES ('botFuture','000777','run-F',?,'2026-05-12',1.0,50,50,50,50,NULL,'open')",
+            (hid,),
+        )
+        conn.commit()
+
+    placed = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botFuture", fund_code="000777", shares=150.0,
+        trade_date="2026-05-11", reason="sell all", run_id="run-F",
+    )))
+    assert placed["success"], placed
+
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botFuture", as_of_date="2026-05-12", run_id="run-F",
+    )))
+    assert not settled["success"], settled
+    assert "insufficient eligible open lots" in settled["blocking_skipped"][0]["reason"]
+
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        lots = _rows(conn, "SELECT entry_date, shares_remaining, status FROM fund_bot_holding_lots WHERE bot_id='botFuture' ORDER BY entry_date")
+        order = _row(conn, "SELECT status FROM fund_bot_orders WHERE bot_id='botFuture'")
+    assert [(l["entry_date"], l["shares_remaining"], l["status"]) for l in lots] == [
+        ("2026-05-10", 100.0, "open"),
+        ("2026-05-12", 50.0, "open"),
+    ]
+    assert order["status"] == "pending"
+
+
+def test_settle_allows_dust_gap_on_full_liquidation(reload_server):
+    """全仓卖出时，order shares 与 lot shares 的亚份额舍入差不能让订单永久 pending。"""
+    s, db_path = _setup_standard(
+        reload_server, bot_id="botDust", fund="000778", shares=100.002,
+        cost=100.002, entry_date="2026-05-01", sell_date="2026-05-11",
+        sell_nav=1.2, settle_date="2026-05-12", run_id="run-D",
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE fund_bot_holding_lots SET shares_initial=100, shares_remaining=100, "
+            "cost_initial=100, cost_remaining=100 WHERE bot_id='botDust'"
+        )
+        conn.commit()
+
+    placed = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botDust", fund_code="000778", shares=100.002,
+        trade_date="2026-05-11", reason="sell all", run_id="run-D",
+    )))
+    assert placed["success"], placed
+
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botDust", as_of_date="2026-05-12", run_id="run-D",
+    )))
+    assert settled["success"], settled
+    assert settled["settled"][0]["shares_sold"] == 100.0
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h = _row(conn, "SELECT status, shares, pending_sell_shares FROM fund_bot_holdings WHERE bot_id='botDust'")
+        o = _row(conn, "SELECT status, confirmed_shares FROM fund_bot_orders WHERE bot_id='botDust'")
+    assert h["status"] == "closed"
+    assert abs(h["shares"] or 0.0) < 1e-9
+    assert abs(h["pending_sell_shares"] or 0.0) < 1e-9
+    assert o["status"] == "confirmed"
+    assert abs(o["confirmed_shares"] - 100.0) < 1e-9
+
+
+def test_settle_closes_remaining_lot_dust_on_full_liquidation(reload_server):
+    """请求份额略小于持仓时，全仓容差不能留下无 holding 的 open lot。"""
+    s, db_path = _setup_standard(
+        reload_server, bot_id="botLotDust", fund="000779", shares=100.002,
+        cost=100.002, entry_date="2026-05-01", sell_date="2026-05-11",
+        sell_nav=1.2, settle_date="2026-05-12", run_id="run-LD",
+    )
+
+    placed = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botLotDust", fund_code="000779", shares=100.0,
+        trade_date="2026-05-11", reason="sell all within dust tolerance", run_id="run-LD",
+    )))
+    assert placed["success"], placed
+
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botLotDust", as_of_date="2026-05-12", run_id="run-LD",
+    )))
+    assert settled["success"], settled
+    assert settled["settled"][0]["shares_sold"] == 100.0
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h = _row(conn, "SELECT status, shares FROM fund_bot_holdings WHERE bot_id='botLotDust'")
+        lots = _rows(conn, "SELECT status, shares_remaining, cost_remaining FROM fund_bot_holding_lots WHERE bot_id='botLotDust'")
+    assert h["status"] == "closed"
+    assert h["shares"] == 0
+    assert all(l["status"] == "closed" for l in lots)
+    assert all(l["shares_remaining"] == 0 and l["cost_remaining"] == 0 for l in lots)

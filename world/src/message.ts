@@ -84,6 +84,8 @@ export interface DailyMessageContext {
   deepResearchMaxGapDays?: number
   /** 上次深研日期（ISO），null/undefined = 从未。 */
   deepResearchLastDate?: string
+  /** 本次强制深研的具体原因，由 run.ts 判定。 */
+  deepResearchReasons?: Array<'max-gap' | 'ordinal' | 'target-move' | 'account-drawdown'>
 }
 
 export function weekdayOf(isoDate: string): string {
@@ -790,15 +792,20 @@ ${bodies}${resSection}
 // 深度研究「强制块」：run.ts 判定 forced=true 时注入（ordinal 模式的 N 倍决策日；agent-triggered
 // 模式距上次深研 ≥ maxGapDays 交易日）。放在 message 尾部（recency 高），是 bot 当天必须调
 // start_research 的硬指令。
-function deepResearchBlock(forced: boolean | undefined, gapDays?: number, lastDate?: string): string {
+function deepResearchBlock(forced: boolean | undefined, gapDays?: number, lastDate?: string, reasons: string[] = []): string {
   if (!forced) return ''
   const gapFinite = typeof gapDays === 'number' && gapDays < Number.MAX_SAFE_INTEGER
   const gapNote = lastDate
     ? (gapFinite ? `距上次深研（${lastDate}）已 ${gapDays} 交易日，达调度硬上限——` : `距上次深研（${lastDate}）已超硬上限——`)
-    : (gapFinite ? `本 run 起点至今 ${gapDays} 交易日尚未深研，达调度硬上限——` : '本 run 尚未做过深研，已达调度硬上限——')
+    : (gapFinite ? `本 run 已进入第 ${gapDays + 1} 个交易日，达到首次深研调度上限——` : '本 run 尚未做过深研，已达调度硬上限——')
+  const events = [
+    reasons.includes('target-move') ? '投资目标上一交易日出现大幅涨跌' : '',
+    reasons.includes('account-drawdown') ? '账户当前净值回撤首次跌破阈值' : '',
+  ].filter(Boolean)
+  const triggerNote = events.length > 0 ? `触发原因：${events.join('；')}。${reasons.includes('max-gap') || reasons.includes('ordinal') ? gapNote : ''}` : gapNote
   return `
 
-【深度研究日 · 强制】${gapNote}今天**必须调用 \`start_research\` 一次、且只一次完成深度研究，这不是可选项**（单日上限 1 次，第 2 次调用会被系统拒绝）。**研究要在任何下单之前完成**——先研究、后决策下单，让结论直接进今天的仓位动作。跳过 = 违反调度纪律（mem0_add 记 \`[调度违规, forced-day-skip, ${lastDate ?? 'run起点'}→今日]\`）：
+【深度研究日 · 强制】${triggerNote}今天**必须调用 \`start_research\` 一次、且只一次完成深度研究，这不是可选项**（单日上限 1 次，第 2 次调用会被系统拒绝）。**研究要在任何下单之前完成**——先研究、后决策下单，让结论直接进今天的仓位动作。跳过 = 违反调度纪律（mem0_add 记 \`[调度违规, forced-day-skip, ${lastDate ?? 'run起点'}→今日]\`）：
 - **只研究一个命题**：从近期决策里挑最有价值的一个（主线持续性 / 某指数的趋势与资金结构 / 方法论某条规则是否有效），一次讲透，不摊开多个泛泛话题。
 - **数据边界与日常一致**：研究内仍然只有 simworld（PIT）与组合工具，不假设任何实时外部数据。
 - **结论必须落地**：研究结束后把「结论 → 对后续操作的具体影响」写进当日复盘，并 mem0_add 落库，供后续决策日直接引用。
@@ -819,7 +826,7 @@ function deepResearchTriggerBlock(ctx: {
   if (!ctx.authorized || ctx.forced) return ''
   if (ctx.mode !== 'agent-triggered') return ''
   const gap = typeof ctx.gapDays === 'number' && ctx.gapDays < Number.MAX_SAFE_INTEGER ? ctx.gapDays : null
-  const max = ctx.maxGap ?? 4
+  const max = ctx.maxGap ?? 5
   const remaining = gap === null ? null : Math.max(0, max - gap)
   // forced 日不走本块，故 gap === null（日历异常）在此不可达；留兜底文案防御。
   const who = ctx.lastDate
@@ -889,7 +896,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const beliefStr = ctx.beliefBlock && ctx.beliefBlock.trim() ? `\n\n${ctx.beliefBlock.trim()}` : ''
   // 强制块：forced 优先取 deepResearchForced（新 caller），回退 deepResearchDay（老 caller/ordinal）。
   const forced = ctx.deepResearchForced ?? ctx.deepResearchDay
-  const deepResearch = deepResearchBlock(forced, ctx.deepResearchGapDays, ctx.deepResearchLastDate)
+  const deepResearch = deepResearchBlock(forced, ctx.deepResearchGapDays, ctx.deepResearchLastDate, ctx.deepResearchReasons)
   const deepResearchTrigger = deepResearchTriggerBlock({
     authorized: ctx.deepResearchAuthorized,
     forced,

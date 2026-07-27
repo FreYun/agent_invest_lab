@@ -29,6 +29,10 @@ export interface WorldState {
    *  模式使用：run.ts 用它计算 gapDays，判定今日是 forced/authorized；chat 后若 tool_trace
    *  含 start_research，则次日 writeState 时更新为当日日期。null/undefined = 从未深研。 */
   last_deep_research_date?: string
+  /** 每个 bot 最近一次实际发起深研的日期。老 run 缺失时回退 last_deep_research_date。 */
+  last_deep_research_dates?: Record<string, string>
+  /** 账户当前回撤是否已处于阈值内；用于把持续回撤电平转换成一次性的阈值穿越事件。 */
+  deep_research_drawdown_active_by_bot?: Record<string, boolean>
   /** PID of the world orchestrator process that owns this run. Stale across restarts
    *  if the process died without teardown — that's the signal external readers (e.g.
    *  the dashboard) use to detect orphan runs and self-heal them to 'aborted'. */

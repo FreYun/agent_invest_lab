@@ -591,3 +591,18 @@ test('belief↔仓位 言行一致核对：看多却空仓 / 看空却重仓 都
 
   rmSync(w, { recursive: true, force: true })
 })
+
+test('强制深研提示准确区分账户回撤事件与固定周期', () => {
+  const w = tmpWorldWithOverview('2024-03-20', '')
+  const m = renderDailyMessage({
+    worldRoot: w, date: '2024-03-20', isFirstDay: false, botId: 'bot7', quotesPath: '/q.json',
+    deepResearchEnabled: true,
+    deepResearchForced: true,
+    deepResearchReasons: ['account-drawdown'],
+    deepResearchGapDays: 2,
+    deepResearchLastDate: '2024-03-18',
+  })
+  assert.match(m, /账户当前净值回撤首次跌破阈值/)
+  assert.doesNotMatch(m, /达调度硬上限/)
+  rmSync(w, { recursive: true, force: true })
+})

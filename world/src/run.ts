@@ -78,6 +78,40 @@ export async function runFundCli(cliPath: string, cmd: string, args: string[], o
   })
 }
 
+function summarizeFundCliFailure(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return ''
+  const p = payload as Record<string, unknown>
+  const parts: string[] = []
+  for (const key of ['message', 'error', 'reason']) {
+    if (typeof p[key] === 'string' && p[key]) parts.push(`${key}=${p[key]}`)
+  }
+  for (const key of ['blocking_skipped', 'skipped']) {
+    const v = p[key]
+    if (Array.isArray(v) && v.length > 0) {
+      parts.push(`${key}=${JSON.stringify(v.slice(0, 3))}`)
+    }
+  }
+  return parts.join(' ')
+}
+
+function requireFundCliSuccess(r: { stdout: string; stderr: string; code: number }, label: string): void {
+  if (r.code !== 0) {
+    const stderr = r.stderr ? ` stderr=${r.stderr.slice(0, 500)}` : ''
+    const stdout = r.stdout ? ` stdout=${r.stdout.slice(0, 500)}` : ''
+    throw new Error(`${label}: cli exit code ${r.code}.${stderr}${stdout}`)
+  }
+  let payload: unknown
+  try {
+    payload = JSON.parse(r.stdout)
+  } catch {
+    throw new Error(`${label}: cli returned non-JSON stdout: ${r.stdout.slice(0, 500)}`)
+  }
+  if (!payload || typeof payload !== 'object' || (payload as { success?: unknown }).success !== true) {
+    const detail = summarizeFundCliFailure(payload)
+    throw new Error(`${label}: cli success=false${detail ? ` ${detail}` : ''}`)
+  }
+}
+
 /** 选 loop server 的配置文件路径：research-loop 用生成的 trading-rl-config.json；pi 直接用 rl-openclaw/openclaw.json 副本（带 mcp.mem0 patch）。 */
 export function loopConfigPath(config: WorldConfig, worldRoot: string, runId: string): string {
   if (config.loop === 'openclaw-pi') return join(P.rlOpenclawDir(worldRoot, runId), 'openclaw.json')
@@ -721,7 +755,7 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
   return p
 }
 
-interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean }
+interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean; accountDrawdownActive?: boolean }
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }, opts?: { maxToolCalls?: number }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -934,10 +968,11 @@ export interface DeepResearchStateInput {
   todayDate: string
   lastDeepDate?: string
   tradingDates: string[]
-  /** 崩盘阈值信号（可选）。任一命中 → forced。dailyMovePct/drawdownPct 为 null 时该维不触发。 */
+  /** 提前深研信号：投资目标单日大幅波动，或 bot 账户当前回撤首次跌破阈值。 */
   crashSignal?: {
-    dailyMovePct: number | null
-    drawdownPct: number | null     // <=0
+    targetDailyMovePct: number | null
+    accountDrawdownPct: number | null // <=0；账户最新净值相对历史峰值
+    accountDrawdownWasActive: boolean // 上一决策日是否已在阈值内，用于边沿触发
     dailyMoveThreshold: number     // 正数，如 3
     drawdownThreshold: number      // 正数，如 8
   }
@@ -950,14 +985,30 @@ export interface DeepResearchStateOut {
   /** 距上次深研的交易日 gap；从未深研过 = 距 run 首个交易日的 gap（Day1=0）。
    *  仅当日期不在交易日历中（数据异常）才为 MAX_SAFE_INTEGER。 */
   gapDays: number
+  /** 触发原因，用于日志和 prompt 明示，避免把事件触发误写成“达到调度上限”。 */
+  reasons: Array<'max-gap' | 'ordinal' | 'target-move' | 'account-drawdown'>
+  accountDrawdownActive: boolean
 }
 
-/** 崩盘信号是否强制深研：|单日涨跌| >= 阈值 或 回撤 <= -阈值。null 字段不触发。 */
-export function isCrashForced(s?: DeepResearchStateInput['crashSignal']): boolean {
+/** 当前账户是否处于回撤阈值内。历史最大回撤不参与此判断。 */
+export function isAccountDrawdownActive(s?: DeepResearchStateInput['crashSignal']): boolean {
   if (!s) return false
-  const moveHit = s.dailyMovePct != null && Math.abs(s.dailyMovePct) >= s.dailyMoveThreshold
-  const ddHit = s.drawdownPct != null && s.drawdownPct <= -s.drawdownThreshold
-  return moveHit || ddHit
+  if (s.accountDrawdownPct == null) return s.accountDrawdownWasActive
+  return s.accountDrawdownPct <= -s.drawdownThreshold
+}
+
+/** 事件触发原因。账户回撤只在“阈值外 → 阈值内”的穿越日触发一次。 */
+export function deepResearchEventReasons(s?: DeepResearchStateInput['crashSignal']): Array<'target-move' | 'account-drawdown'> {
+  if (!s) return []
+  const reasons: Array<'target-move' | 'account-drawdown'> = []
+  if (s.targetDailyMovePct != null && Math.abs(s.targetDailyMovePct) >= s.dailyMoveThreshold) reasons.push('target-move')
+  if (isAccountDrawdownActive(s) && !s.accountDrawdownWasActive) reasons.push('account-drawdown')
+  return reasons
+}
+
+/** 保留原导出名，供现有调用方判断是否命中任一提前触发事件。 */
+export function isCrashForced(s?: DeepResearchStateInput['crashSignal']): boolean {
+  return deepResearchEventReasons(s).length > 0
 }
 
 /** 三分支判定：
@@ -966,14 +1017,21 @@ export function isCrashForced(s?: DeepResearchStateInput['crashSignal']): boolea
  *   两分支均可被崩盘信号强制。 */
 export function computeDeepResearchState(inp: DeepResearchStateInput): DeepResearchStateOut {
   const gapDays = tradingDaysBetween(inp.tradingDates, inp.lastDeepDate, inp.todayDate)
-  const crashForced = isCrashForced(inp.crashSignal)
+  const eventReasons = deepResearchEventReasons(inp.crashSignal)
+  // 首次深研的窗口包含 run Day1：maxGapDays=5 时 Day5 到期（gap=4）。
+  // 已深研后则从该日往后数 5 个完整交易日，gap=5 时再次到期。
+  const scheduleDue = inp.lastDeepDate == null
+    ? gapDays >= Math.max(0, inp.maxGapDays - 1)
+    : gapDays >= inp.maxGapDays
   if (inp.mode === 'agent-triggered') {
-    const due = gapDays >= inp.maxGapDays || crashForced
-    return { authorized: due, forced: due, gapDays }
+    const reasons: DeepResearchStateOut['reasons'] = scheduleDue ? ['max-gap', ...eventReasons] : eventReasons
+    const forced = reasons.length > 0
+    return { authorized: forced, forced, gapDays, reasons, accountDrawdownActive: isAccountDrawdownActive(inp.crashSignal) }
   }
   const isDR = isDeepResearchDay(inp.ordinal, inp.every)
-  const forced = isDR || crashForced
-  return { authorized: forced, forced, gapDays } // 崩盘强制时同步放行 start_research
+  const reasons: DeepResearchStateOut['reasons'] = isDR ? ['ordinal', ...eventReasons] : eventReasons
+  const forced = reasons.length > 0
+  return { authorized: forced, forced, gapDays, reasons, accountDrawdownActive: isAccountDrawdownActive(inp.crashSignal) }
 }
 
 
@@ -1058,7 +1116,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   const deepResearchEvery = config.deepResearchEvery ?? 0
   const deepResearchTimeoutMs = (config.deepResearchTimeoutSeconds ?? Math.max(config.researchDayTimeoutSeconds, 2400)) * 1000
   const deepResearchMode: 'ordinal' | 'agent-triggered' = config.deepResearchMode ?? 'ordinal'
-  const deepResearchMaxGapDays = config.deepResearchMaxGapDays ?? 4
+  const deepResearchMaxGapDays = config.deepResearchMaxGapDays ?? 5
   // dead = bot server 进程已经退出，无可挽救 → 加入 brokenBots，剩余日子直接 writeSkippedDeadBot
   // 跳过。timeout 不进这个集合：当天记 timeout，但下一天循环顶部会 restartBot 重启该 bot 的
   // server（kill 老的、spawn 新的），这样后续日子能恢复正常 chat。重启的必要性：research-loop-ts
@@ -1148,9 +1206,11 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         for (const { botId } of setupRes.bots) {
           try {
             const r = await runFundCli(config.fundMcpCli, 'settle_pending_orders', ['--bot-id', botId, '--as-of-date', date, '--run-id', runId], { timeoutMs: 30_000 })
+            requireFundCliSuccess(r, `fund settle ${botId} ${date}`)
             log(worldRoot, runId, `fund settle ${botId} ${date}: code=${r.code} ${r.stdout.slice(0, 200)}`)
           } catch (err) {
             log(worldRoot, runId, `fund settle ${botId} ${date} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+            throw err
           }
         }
       }
@@ -1173,45 +1233,21 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // 并让 message.ts 注入【深度研究日】授权块。deepResearchEvery=0 时恒 false（历史行为）。
       const chatOrdinal = chatDayOrdinal(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
       const stateNow = readState(worldRoot, runId)
-      let crashSignal: Parameters<typeof computeDeepResearchState>[0]['crashSignal']
+      let targetDailyState: Awaited<ReturnType<typeof fetchBenchmarkDailyState>> = null
       if (config.crashTriggerEnabled) {
         const bench = config.crashTriggerBenchmark ?? { code: '000300.SH', name: '沪深300' }
-        const st = await fetchBenchmarkDailyState({
+        targetDailyState = await fetchBenchmarkDailyState({
           simworldUrl: config.simworldUpstreamUrl,
           code: bench.code,
           asOfDate: date,
         }).catch(() => null)
-        if (st) crashSignal = {
-          dailyMovePct: st.lastDayMovePct,
-          drawdownPct: st.drawdownFromRecentHighPct,
-          dailyMoveThreshold: config.crashTriggerDailyMovePct ?? 3,
-          drawdownThreshold: config.crashTriggerDrawdownPct ?? 8,
-        }
-        log(worldRoot, runId, `crash-check ${date} bench=${bench.code} move=${st?.lastDayMovePct?.toFixed(2) ?? 'n/a'}% dd=${st?.drawdownFromRecentHighPct?.toFixed(2) ?? 'n/a'}%`)
+        log(worldRoot, runId, `target-move-check ${date} target=${bench.code} move=${targetDailyState?.lastDayMovePct?.toFixed(2) ?? 'n/a'}%`)
       }
-      const drState = computeDeepResearchState({
-        mode: deepResearchMode,
-        ordinal: chatOrdinal,
-        every: deepResearchEvery,
-        maxGapDays: deepResearchMaxGapDays,
-        todayDate: date,
-        lastDeepDate: stateNow.last_deep_research_date,
-        tradingDates: dates,
-        crashSignal,
-      })
-      const isDeepResearch = drState.forced
-      const isDeepAuthorized = drState.authorized
-      // agent-triggered 只有达到固定间隔或命中崩盘信号才授权，授权日走完整深研预算。
-      const timeoutMs = drState.forced
-        ? deepResearchTimeoutMs
-        : (isDeepAuthorized && deepResearchMode === 'agent-triggered'
-            ? Math.max(Math.floor(deepResearchTimeoutMs / 2), perBotTimeoutMs * 2)
-            : (useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs))
       const stepTag = config.chatStepMode === 'weekly' ? `[weekly@dow${config.chatWeekday ?? 1}]`
         : config.chatStepMode === 'monthly' ? `[monthly#${config.chatMonthlyNth ?? 1}]`
         : (config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : '')
-      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', drState.forced ? `[deep-research#${isCrashForced(crashSignal) ? 'crash' : 'forced'} gap=${drState.gapDays}${isCrashForced(crashSignal) ? ` move=${crashSignal?.dailyMovePct?.toFixed(1) ?? '?'}% dd=${crashSignal?.drawdownPct?.toFixed(1) ?? '?'}%` : ''}]` : (isDeepAuthorized && deepResearchMode === 'agent-triggered' ? `[deep-research#authorized gap=${drState.gapDays}]` : ''), periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
-      log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s) (timeout=${Math.floor(timeoutMs / 1000)}s)`)
+      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
+      log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
         const botBuyableFundCodes = setupRes.buyableCodesByBot[b.botId] ?? config.buyableFundCodes
@@ -1241,6 +1277,40 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           // 费率块专用：多基金 bot 传子集，其它 bot 未传 → 回退全 buyable（daily-context.ts 内部处理）。
           relevantFundCodes,
         })
+        const lastDeepDate = stateNow.last_deep_research_dates
+          ? stateNow.last_deep_research_dates[b.botId]
+          : stateNow.last_deep_research_date
+        const previousDrawdownActive = stateNow.deep_research_drawdown_active_by_bot?.[b.botId] ?? false
+        const accountDrawdownPct = dailyContext.performance?.summary?.current_drawdown_pct ?? null
+        const crashSignal: Parameters<typeof computeDeepResearchState>[0]['crashSignal'] = config.crashTriggerEnabled
+          ? {
+              targetDailyMovePct: targetDailyState?.lastDayMovePct ?? null,
+              accountDrawdownPct,
+              accountDrawdownWasActive: previousDrawdownActive,
+              dailyMoveThreshold: config.crashTriggerDailyMovePct ?? 3,
+              drawdownThreshold: config.crashTriggerDrawdownPct ?? 8,
+            }
+          : undefined
+        const drState = computeDeepResearchState({
+          mode: deepResearchMode,
+          ordinal: chatOrdinal,
+          every: deepResearchEvery,
+          maxGapDays: deepResearchMaxGapDays,
+          todayDate: date,
+          lastDeepDate,
+          tradingDates: dates,
+          crashSignal,
+        })
+        const isDeepResearch = drState.forced
+        const isDeepAuthorized = drState.authorized
+        const timeoutMs = drState.forced
+          ? deepResearchTimeoutMs
+          : (isDeepAuthorized && deepResearchMode === 'agent-triggered'
+              ? Math.max(Math.floor(deepResearchTimeoutMs / 2), perBotTimeoutMs * 2)
+              : (useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs))
+        const reasonTag = drState.reasons.join('+') || 'none'
+        log(worldRoot, runId, `bot ${b.botId} deep-research-check ${date}: reason=${reasonTag} gap=${drState.gapDays} target_move=${crashSignal?.targetDailyMovePct?.toFixed(2) ?? 'n/a'}% account_dd=${crashSignal?.accountDrawdownPct?.toFixed(2) ?? 'n/a'}% timeout=${Math.floor(timeoutMs / 1000)}s`)
+
         // 滚动 history window：从前几个交易日的 session jsonl 抽 digest（去掉工具结果原文），
         // 按 20000 字符预算切割。超 budget 时用主模型（openclaw.json 的 default route）按 4 维度
         // 压缩老的 60%。Day 1 时 sessions.json 还没有任何记录，返回空字符串。
@@ -1359,16 +1429,23 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           deepResearchAuthorized: drState.authorized,
           deepResearchGapDays: drState.gapDays,
           deepResearchMaxGapDays,
-          deepResearchLastDate: stateNow.last_deep_research_date,
+          deepResearchReasons: drState.reasons,
+          deepResearchLastDate: lastDeepDate,
         })
-        if (brokenBots.has(b.botId)) return writeSkippedDeadBot(worldRoot, runId, date, message, b)
+        if (brokenBots.has(b.botId)) {
+          const status = writeSkippedDeadBot(worldRoot, runId, date, message, b)
+          status.accountDrawdownActive = drState.accountDrawdownActive
+          return status
+        }
         // Per-day tool-call cap（世界侧硬闸门，防跨日决策失控）：
         //   - forced 深研日：80（深研本身耗 15~30 tool + 常规日决策 15~20 tool，留一倍余量）
         //   - authorized-not-forced：60（可能触发深研，中档）
         //   - 常规日：40（无深研，纯 settle/复盘/下单，20 已够用，40 是余量）
         // 起因：r4 Day26 bot 一 session 跑 104+ tool 写 8 天 mem0 + 6 单实盘（见 postmortem）。
         const maxToolCalls = drState.forced ? 80 : drState.authorized ? 60 : 40
-        return chatOneBot(worldRoot, runId, date, message, timeoutMs, b, { maxToolCalls })
+        const status = await chatOneBot(worldRoot, runId, date, message, timeoutMs, b, { maxToolCalls })
+        status.accountDrawdownActive = drState.accountDrawdownActive
+        return status
       })
       for (const s of statuses) {
         if (s.status === 'dead') brokenBots.add(s.bot)
@@ -1404,9 +1481,11 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
             const dir = P.botDayDir(worldRoot, runId, date, botId)
             mkdirSync(dir, { recursive: true })
             writeFileSync(join(dir, 'close_my_day.json'), r.stdout + '\n')
+            requireFundCliSuccess(r, `fund close ${botId} ${date}`)
             log(worldRoot, runId, `fund close ${botId} ${date}: code=${r.code} (snapshot saved)`)
           } catch (err) {
             log(worldRoot, runId, `fund close ${botId} ${date} FAILED: ${err instanceof Error ? err.message : String(err)}`)
+            throw err
           }
         }
       }
@@ -1417,13 +1496,22 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         log(worldRoot, runId, `day ${date} done: [skip-chat] settle/close only`)
       }
       const st = readState(worldRoot, runId)
-      // 若任一 bot 当日实际调了 start_research → 更新 last_deep_research_date（gap 归零）。
-      // bot 没调（含 forced 日跳过）则不更新，gap 继续累加、次日仍 forced——调度自愈。
-      // ordinal 模式不读 gap（forced 由 ordinal 决定），该字段只作记录。
-      const fired = statuses.some(s => s.deepResearchFired === true)
-      const nextLastDeep = fired ? date : st.last_deep_research_date
-      writeState(worldRoot, runId, { ...st, cursor: cursor + 1, updated_at: new Date().toISOString(), last_deep_research_date: nextLastDeep })
-      if (fired) log(worldRoot, runId, `day ${date}: start_research fired — last_deep_research_date <- ${date}`)
+      const nextLastDeepByBot = { ...(st.last_deep_research_dates ?? {}) }
+      const nextDrawdownActiveByBot = { ...(st.deep_research_drawdown_active_by_bot ?? {}) }
+      for (const status of statuses) {
+        if (status.deepResearchFired === true) {
+          nextLastDeepByBot[status.bot] = date
+          log(worldRoot, runId, `bot ${status.bot} ${date}: start_research fired — last deep date updated`)
+        }
+        if (typeof status.accountDrawdownActive === 'boolean') nextDrawdownActiveByBot[status.bot] = status.accountDrawdownActive
+      }
+      const anyFired = statuses.some(s => s.deepResearchFired === true)
+      writeState(worldRoot, runId, {
+        ...st, cursor: cursor + 1, updated_at: new Date().toISOString(),
+        last_deep_research_date: anyFired ? date : st.last_deep_research_date,
+        last_deep_research_dates: nextLastDeepByBot,
+        deep_research_drawdown_active_by_bot: nextDrawdownActiveByBot,
+      })
     }
     await teardown(worldRoot, runId, setupRes, 'done', days)
   } catch (err) {

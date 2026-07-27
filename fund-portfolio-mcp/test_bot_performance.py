@@ -310,12 +310,13 @@ def test_portfolio_get_my_performance_includes_interval_metrics(reload_server, t
             "VALUES (?, ?, ?, ?)", ("botH", 1_000_000.0, 1_000_000.0, "test-run")
         )
         conn.commit()
-        _seed_daily_snapshots(conn, "botH", [1.0, 1.01, 1.02, 1.015, 1.025])
+        _seed_daily_snapshots(conn, "botH", [1.0, 1.01, 1.02, 1.015, 1.015])
         s._compute_bot_performance(conn, "botH", "2024-01-06", run_id="test-run")
     # 查 perf：as_of_date 必须 > 最新 perf trade_date
     payload = asyncio.run(s.portfolio_get_my_performance("botH", "2024-01-07", run_id="test-run"))
     obj = json.loads(payload)
     assert obj["success"] is True
+    assert abs(obj["summary"]["current_drawdown_pct"] - ((1.015 / 1.02 - 1) * 100)) < 1e-4
     assert "interval_metrics" in obj
     im = obj["interval_metrics"]
     assert im["rf_annual_pct"] == 1

@@ -24,7 +24,7 @@ test('tradingDaysBetween: 日期不在日历 / 次序颠倒 → MAX_SAFE_INTEGER
   assert.equal(tradingDaysBetween(DATES, '2025-01-06', '2025-01-02'), Number.MAX_SAFE_INTEGER)
 })
 
-const base = { every: 0, maxGapDays: 4, tradingDates: DATES }
+const base = { every: 0, maxGapDays: 5, tradingDates: DATES }
 
 test('agent-triggered: Day1 未到间隔，不授权也不强制', () => {
   const s = computeDeepResearchState({ ...base, mode: 'agent-triggered', ordinal: 1, todayDate: '2025-01-02', lastDeepDate: undefined })
@@ -48,17 +48,17 @@ test('agent-triggered: 从未深研时第 5 个交易日（gap=4）才强制', (
   assert.equal(s5.gapDays, 4)
 })
 
-test('agent-triggered: 深研后 gap 归零重新累积，再到 4 再强制', () => {
+test('agent-triggered: 深研后 gap 归零重新累积，再到 5 再强制', () => {
   // 01-06 深研过 → 01-07 gap=1 不强制
   const s1 = computeDeepResearchState({ ...base, mode: 'agent-triggered', ordinal: 4, todayDate: '2025-01-07', lastDeepDate: '2025-01-06' })
   assert.equal(s1.authorized, false)
   assert.equal(s1.forced, false)
   assert.equal(s1.gapDays, 1)
-  // 01-10 gap=4（06→07,08,09,10）→ 强制
-  const s2 = computeDeepResearchState({ ...base, mode: 'agent-triggered', ordinal: 7, todayDate: '2025-01-10', lastDeepDate: '2025-01-06' })
+  // 01-13 gap=5（06→07,08,09,10,13）→ 强制
+  const s2 = computeDeepResearchState({ ...base, mode: 'agent-triggered', ordinal: 8, todayDate: '2025-01-13', lastDeepDate: '2025-01-06' })
   assert.equal(s2.authorized, true)
   assert.equal(s2.forced, true)
-  assert.equal(s2.gapDays, 4)
+  assert.equal(s2.gapDays, 5)
 })
 
 test('agent-triggered: forced 日跳过后次日仍强制（gap 继续累加）', () => {

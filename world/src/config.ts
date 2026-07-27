@@ -46,16 +46,17 @@ export interface WorldConfig {
   deepResearchTimeoutSeconds?: number
   // 深度研究调度模式。
   //   ordinal（默认，向后兼容）：按 deepResearchEvery 的第 N/2N/3N 个决策日强制深研。
-  //   agent-triggered：达到 deepResearchMaxGapDays 个交易日才授权并强制深研；崩盘信号可提前触发。
+  //   agent-triggered：每 N 个交易日至少一次；目标单日大幅波动或账户回撤越线可提前触发。
   //   run.ts 侧据此计算 { authorized, forced, gapDays } 三态；message.ts 侧据此渲染
   //   固定间隔强制块。
   deepResearchMode?: 'ordinal' | 'agent-triggered'
   // agent-triggered 模式下距上次深研的固定交易日间隔，达到即授权并 forced（系统在 message
-  // 里下强制指令）。仅 agent-triggered 生效；缺省=4。
+  // 里下强制指令）。仅 agent-triggered 生效；缺省=5。
   deepResearchMaxGapDays?: number
-  // 崩盘阈值强制深研（默认关闭，开则不依赖 agent 自主判断）。基准指数出现
-  //   |单日涨跌%| >= crashTriggerDailyMovePct 或 距近高回撤 >= crashTriggerDrawdownPct
-  // 时，当日 forced 深研。基准默认沪深300，单指数 bot 应在 config 里改成自己的目标指数。
+  // 事件阈值强制深研（字段名为兼容旧配置保留 crashTrigger）：投资目标指数
+  // |上一交易日涨跌%| >= crashTriggerDailyMovePct，或 bot 账户当前净值回撤首次跌破
+  // crashTriggerDrawdownPct 时触发。账户持续位于阈值下方不会重复触发。
+  // 目标指数默认沪深300，单指数 bot 应配置成自己的投资目标指数。
   crashTriggerEnabled?: boolean
   crashTriggerDailyMovePct?: number
   crashTriggerDrawdownPct?: number
@@ -325,7 +326,7 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const deepResearchTimeoutSeconds = typeof raw.deep_research_timeout_seconds === 'number' && raw.deep_research_timeout_seconds > 0 ? Math.floor(raw.deep_research_timeout_seconds) : Math.max(researchDayTimeoutSeconds, 2400)
   const rawDrMode = typeof raw.deep_research_mode === 'string' ? raw.deep_research_mode.trim() : ''
   const deepResearchMode: 'ordinal' | 'agent-triggered' = rawDrMode === 'agent-triggered' ? 'agent-triggered' : 'ordinal'
-  const deepResearchMaxGapDays = typeof raw.deep_research_max_gap_days === 'number' && raw.deep_research_max_gap_days >= 1 ? Math.floor(raw.deep_research_max_gap_days) : 4
+  const deepResearchMaxGapDays = typeof raw.deep_research_max_gap_days === 'number' && raw.deep_research_max_gap_days >= 1 ? Math.floor(raw.deep_research_max_gap_days) : 5
   const explicitCrashTriggerEnabled = typeof raw.crash_trigger_enabled === 'boolean' ? raw.crash_trigger_enabled : undefined
   const crashTriggerDailyMovePct = typeof raw.crash_trigger_daily_move_pct === 'number' && raw.crash_trigger_daily_move_pct > 0 ? raw.crash_trigger_daily_move_pct : 3
   const crashTriggerDrawdownPct = typeof raw.crash_trigger_drawdown_pct === 'number' && raw.crash_trigger_drawdown_pct > 0 ? raw.crash_trigger_drawdown_pct : 8

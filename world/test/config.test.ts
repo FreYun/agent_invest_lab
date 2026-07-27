@@ -258,6 +258,7 @@ simworld_upstream_url: http://127.0.0.1:18078/mcp
 `)
   const c = loadWorldConfig(p)
   assert.equal(c.crashTriggerEnabled, false)
+  assert.equal(c.deepResearchMaxGapDays, 5)
   assert.equal(c.crashTriggerDailyMovePct, 3)
   assert.equal(c.crashTriggerDrawdownPct, 8)
   assert.deepEqual(c.crashTriggerBenchmark, { code: '000300.SH', name: '沪深300' })

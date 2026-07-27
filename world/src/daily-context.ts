@@ -140,6 +140,8 @@ export interface PerformanceSummary {
   annualized_return_pct: number
   max_drawdown_pct: number
   max_drawdown_date: string
+  /** 最新账户净值相对本 run 历史峰值的回撤；不同于永久保留的历史最大回撤。 */
+  current_drawdown_pct?: number
   volatility_pct_annualized: number
   sharpe_ratio_rf0: number
   win_days: number
@@ -363,6 +365,7 @@ function parseSummary(raw: unknown): PerformanceSummary | null {
     annualized_return_pct: Number(s.annualized_return_pct ?? 0),
     max_drawdown_pct: Number(s.max_drawdown_pct ?? 0),
     max_drawdown_date: String(s.max_drawdown_date ?? ''),
+    current_drawdown_pct: Number(s.current_drawdown_pct ?? 0),
     volatility_pct_annualized: Number(s.volatility_pct_annualized ?? 0),
     sharpe_ratio_rf0: Number(s.sharpe_ratio_rf0 ?? 0),
     win_days: Number(s.win_days ?? 0),

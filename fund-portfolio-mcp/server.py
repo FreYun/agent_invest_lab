@@ -906,6 +906,16 @@ def _insert_lot(conn, *, bot_id, fund_code, run_id, holding_id,
     return cur.lastrowid
 
 
+def _share_epsilon(shares: float) -> float:
+    """Tolerance for fund share roundoff.
+
+    Historical orders store requested shares rounded independently from lot
+    shares. Sub-share dust should not strand a full liquidation, but real lot
+    shortfalls must still block settlement.
+    """
+    return max(0.05, abs(float(shares or 0.0)) * 1e-7)
+
+
 def _consume_lots_fifo(conn, *, bot_id, fund_code, run_id, sell_shares,
                        as_of_date, nav, redeem_tiers):
     """SELL 时按 FIFO（entry_date ASC, lot_id ASC）消耗 open lots。
@@ -923,34 +933,43 @@ def _consume_lots_fifo(conn, *, bot_id, fund_code, run_id, sell_shares,
     返回 [{lot_id, entry_date, holding_days, rate, shares: take,
            cost_consumed, gross, fee}, ...]
 
-    若 SUM(open lots shares) < sell_shares 抛 ValueError，且**不做任何 DB 写入**
-    （先 SELECT 总额校验再开始消耗）。
+    Only lots with entry_date <= as_of_date are eligible. A sell order must
+    never consume a future lot; otherwise holding_days can go negative and
+    later sells may be stranded.
+
+    若 SUM(eligible open lots shares) < sell_shares beyond rounding tolerance
+    抛 ValueError，且**不做任何 DB 写入**（先 SELECT 总额校验再开始消耗）。
     """
     # 先校验余量：避免部分写入
     cur = conn.execute(
         "SELECT COALESCE(SUM(shares_remaining), 0) AS s "
         "FROM fund_bot_holding_lots "
-        "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open'",
-        (bot_id, fund_code, run_id),
+        "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open' "
+        "AND entry_date<=?",
+        (bot_id, fund_code, run_id, as_of_date),
     ).fetchone()
     # cur is either a Row (server's get_conn) or a tuple (raw sqlite3.connect)
     available = float(cur["s"] if hasattr(cur, "keys") else cur[0])
-    if available + 1e-6 < sell_shares:
+    eps = _share_epsilon(sell_shares)
+    if available + eps < sell_shares:
         raise ValueError(
-            f"insufficient open lots: want={sell_shares} have={available:.6f} "
+            f"insufficient eligible open lots: want={sell_shares} have={available:.6f} "
+            f"as_of={as_of_date} eps={eps:.6f} "
             f"(bot={bot_id} fund={fund_code} run={run_id})"
         )
+    target_shares = min(float(sell_shares), available)
 
     lots = conn.execute(
         "SELECT lot_id, entry_date, shares_remaining, cost_remaining "
         "FROM fund_bot_holding_lots "
         "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open' "
+        "AND entry_date<=? "
         "ORDER BY entry_date ASC, lot_id ASC",
-        (bot_id, fund_code, run_id),
+        (bot_id, fund_code, run_id, as_of_date),
     ).fetchall()
 
     consumptions = []
-    remaining = float(sell_shares)
+    remaining = target_shares
     for lot in lots:
         if remaining <= 1e-9:
             break
@@ -961,6 +980,10 @@ def _consume_lots_fifo(conn, *, bot_id, fund_code, run_id, sell_shares,
 
         take = min(lot_shares, remaining)
         holding_days = _calc_holding_days(entry_date, as_of_date)
+        if holding_days < 0:
+            raise ValueError(
+                f"future lot selected: lot_id={lot_id} entry={entry_date} as_of={as_of_date}"
+            )
         rate = _redeem_fee_rate(redeem_tiers, holding_days)
         gross = take * nav
         fee = gross * rate
@@ -2066,6 +2089,12 @@ async def portfolio_get_my_performance(
             annualized_return_pct = 0.0
         max_dd = min(float(s["max_drawdown_pct"] or 0.0) for s in snaps)
         max_dd_row = next((s for s in snaps if float(s["max_drawdown_pct"] or 0.0) == max_dd), None)
+        # 当前回撤用于事件触发：最新净值相对本 run 历史峰值的位置。
+        # 历史最大回撤一旦发生就永久保留，不能拿来做每日触发条件。
+        navs_from_start = [1.0] + [float(s["net_value"] or 1.0) for s in snaps]
+        peak_nav = max(navs_from_start)
+        current_drawdown_pct = ((float(last["net_value"] or 1.0) / peak_nav) - 1) * 100 \
+            if peak_nav > 0 else 0.0
 
         # 日收益序列 → 波动 / 夏普 (assume rf=0)
         daily_returns = [float(s["daily_return_pct"] or 0.0) for s in snaps if s["daily_return_pct"] is not None]
@@ -2263,6 +2292,7 @@ async def portfolio_get_my_performance(
             "annualized_return_pct": _r(annualized_return_pct, 4),
             "max_drawdown_pct": _r(max_dd, 4),
             "max_drawdown_date": max_dd_row["trade_date"] if max_dd_row else None,
+            "current_drawdown_pct": _r(current_drawdown_pct, 4),
             "volatility_pct_annualized": _r(volatility_pct, 4),
             "sharpe_ratio_rf0": _r(sharpe_ratio, 4),
             "win_days": win,
@@ -3028,13 +3058,36 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 except ValueError as e:
                     skipped.append({"order_id": oid, "reason": f"legacy lot 余量不足: {e}"})
                     continue
+                actual_sell_shares = sum(c["shares"] for c in consumptions)
+                if actual_sell_shares <= 1e-9:
+                    skipped.append({"order_id": oid, "reason": "eligible lot 卖出份额为 0"})
+                    continue
                 gross = sum(c["gross"] for c in consumptions)
                 fee = sum(c["fee"] for c in consumptions)
                 cost_consumed = sum(c["cost_consumed"] for c in consumptions)
                 cash += gross - fee
-                new_pending = max(0.0, cur_pending - sell_shares)
-                new_shares = cur_shares - sell_shares
-                if new_shares <= 1e-6:
+                share_eps = _share_epsilon(sell_shares)
+                full_exit = (want >= cur_shares - share_eps) or (cur_shares - actual_sell_shares <= share_eps)
+                new_pending = 0.0 if full_exit else max(0.0, cur_pending - actual_sell_shares)
+                new_shares = 0.0 if full_exit else cur_shares - actual_sell_shares
+                if full_exit:
+                    residual_row = conn.execute(
+                        "SELECT COALESCE(SUM(shares_remaining), 0) AS s "
+                        "FROM fund_bot_holding_lots "
+                        "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open'",
+                        (bot_id, fc, holding_run_id),
+                    ).fetchone()
+                    residual_shares = float(residual_row["s"] if hasattr(residual_row, "keys") else residual_row[0])
+                    if residual_shares > share_eps:
+                        raise ValueError(
+                            f"full-exit lot residue too large: remaining={residual_shares:.6f} "
+                            f"eps={share_eps:.6f} (bot={bot_id} fund={fc} run={holding_run_id})"
+                        )
+                    conn.execute(
+                        "UPDATE fund_bot_holding_lots SET shares_remaining=0, cost_remaining=0, status='closed' "
+                        "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open'",
+                        (bot_id, fc, holding_run_id),
+                    )
                     exit_date = order_date if pricing_status == "awaiting_nav" else as_of_date
                     conn.execute(
                         "UPDATE fund_bot_holdings SET status='closed', exit_date=?, shares=0, "
@@ -3080,10 +3133,10 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 conn.execute(
                     "UPDATE fund_bot_orders SET status='confirmed', confirm_date=?, confirm_nav=?, "
                     "confirmed_shares=?, confirmed_amount=?, fee=?, settle_run_id=? WHERE order_id=?",
-                    (as_of_date, _r(nav, 6), _r(sell_shares, 6), _r(gross - fee), _r(fee), run_id, oid)
+                    (as_of_date, _r(nav, 6), _r(actual_sell_shares, 6), _r(gross - fee), _r(fee), run_id, oid)
                 )
                 settled.append({"order_id": oid, "fund_code": fc, "type": "sell",
-                                "shares_sold": _r(sell_shares, 4), "gross": _r(gross),
+                                "shares_sold": _r(actual_sell_shares, 4), "gross": _r(gross),
                                 "proceeds": _r(gross - fee), "fee": _r(fee), "nav": _r(nav, 6),
                                 "settled_via": "t_plus_1"})
 
@@ -3093,9 +3146,13 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
             (_r(cash), _r(max(0.0, cash_in_transit)), _r(max(0.0, cash_receivable)), run_id, bot_id)
         )
 
+    blocking_skipped = [
+        s for s in skipped
+        if not str(s.get("reason", "")).startswith(("T+1 未到", "T 日净值未就绪"))
+    ]
     return json.dumps({
-        "success": True, "bot_id": bot_id, "as_of_date": as_of_date,
-        "settled": settled, "skipped": skipped,
+        "success": len(blocking_skipped) == 0, "bot_id": bot_id, "as_of_date": as_of_date,
+        "settled": settled, "skipped": skipped, "blocking_skipped": blocking_skipped,
         "cash_after": _r(cash), "cash_in_transit_after": _r(max(0.0, cash_in_transit)),
         "cash_receivable_after": _r(max(0.0, cash_receivable)),
     }, ensure_ascii=False)

@@ -31,6 +31,71 @@ def _copy_rows(conn, table, where_sql, params, rekey: dict):
     return n
 
 
+def _cols(conn, table):
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _share_epsilon(shares: float) -> float:
+    return max(0.05, abs(float(shares or 0.0)) * 1e-7)
+
+
+def _repair_cloned_lots(conn, bot, dst_run_id) -> dict:
+    """Make cloned live holdings sellable even when the source run's lots are stale.
+
+    Historical dash runs predate the lot ledger and some have active holdings with
+    no matching open lots. Live runs need a coherent carry lot; otherwise the
+    first sell order will remain pending forever.
+    """
+    h_cols = _cols(conn, "fund_bot_holdings")
+    l_cols = _cols(conn, "fund_bot_holding_lots")
+    required_h = {"holding_id", "bot_id", "fund_code", "run_id", "status", "shares"}
+    required_l = {"bot_id", "fund_code", "run_id", "holding_id", "entry_date", "entry_nav",
+                  "shares_initial", "shares_remaining", "cost_initial", "cost_remaining", "status"}
+    if not required_h.issubset(h_cols) or not required_l.issubset(l_cols):
+        return {"checked": 0, "rebuilt": 0, "skipped": "schema_without_lot_cost_columns"}
+
+    rows = conn.execute(
+        "SELECT * FROM fund_bot_holdings WHERE bot_id=? AND run_id=? AND status='active'",
+        (bot, dst_run_id),
+    ).fetchall()
+    cols = [d[0] for d in conn.execute("SELECT * FROM fund_bot_holdings LIMIT 0").description]
+    checked = 0
+    rebuilt = 0
+    for row in rows:
+        h = dict(zip(cols, row))
+        checked += 1
+        shares = float(h.get("shares") or 0.0)
+        if shares <= 0:
+            continue
+        cur = conn.execute(
+            "SELECT COALESCE(SUM(shares_remaining), 0) FROM fund_bot_holding_lots "
+            "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open'",
+            (bot, h["fund_code"], dst_run_id),
+        ).fetchone()
+        open_shares = float(cur[0] or 0.0)
+        if abs(shares - open_shares) <= _share_epsilon(shares):
+            continue
+
+        entry_date = h.get("entry_date") or h.get("exit_date") or "1970-01-01"
+        entry_nav = float(h.get("entry_nav") or h.get("latest_nav") or 0.0)
+        cost = float(h.get("amount_invested") or (shares * entry_nav if entry_nav else 0.0))
+        conn.execute(
+            "DELETE FROM fund_bot_holding_lots "
+            "WHERE bot_id=? AND fund_code=? AND run_id=? AND status='open'",
+            (bot, h["fund_code"], dst_run_id),
+        )
+        conn.execute(
+            "INSERT INTO fund_bot_holding_lots "
+            "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, "
+            " shares_initial, shares_remaining, cost_initial, cost_remaining, source_order_id, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'open')",
+            (bot, h["fund_code"], dst_run_id, h["holding_id"], entry_date, entry_nav,
+             shares, shares, cost, cost),
+        )
+        rebuilt += 1
+    return {"checked": checked, "rebuilt": rebuilt}
+
+
 def clone_run_rows(conn, bot, src_run_id, dst_run_id, seed_date) -> dict:
     conn.row_factory = None
     actions = _copy_rows(conn, "fund_bot_actions",
@@ -45,7 +110,9 @@ def clone_run_rows(conn, bot, src_run_id, dst_run_id, seed_date) -> dict:
     orders = _copy_rows(conn, "fund_bot_orders",
                         "bot_id=? AND order_run_id=? AND status='pending'", (bot, src_run_id),
                         {"order_run_id": dst_run_id, "settle_run_id": None})
-    return {"actions": actions, "holdings": holdings, "lots": lots, "orders": orders}
+    lot_repair = _repair_cloned_lots(conn, bot, dst_run_id)
+    return {"actions": actions, "holdings": holdings, "lots": lots, "orders": orders,
+            "lot_repair": lot_repair}
 
 
 # 实时工具白名单：解开已有 ttjj 工具（注入日期指向今天 → 返回截至今天的真实数据）。

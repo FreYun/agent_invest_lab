@@ -9,10 +9,12 @@ def _schema(conn):
     CREATE TABLE fund_bot_actions (action_id INTEGER PRIMARY KEY AUTOINCREMENT,
         bot_id TEXT, fund_code TEXT, action_type TEXT, amount REAL, action_date TEXT, run_id TEXT);
     CREATE TABLE fund_bot_holdings (holding_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        bot_id TEXT, fund_code TEXT, shares REAL, status TEXT, run_id TEXT);
+        bot_id TEXT, fund_code TEXT, shares REAL, amount_invested REAL,
+        entry_date TEXT, entry_nav REAL, latest_nav REAL, status TEXT, run_id TEXT);
     CREATE TABLE fund_bot_holding_lots (lot_id INTEGER PRIMARY KEY AUTOINCREMENT,
         bot_id TEXT, fund_code TEXT, run_id TEXT, holding_id INTEGER,
-        shares_remaining REAL, source_order_id INTEGER, status TEXT);
+        entry_date TEXT, entry_nav REAL, shares_initial REAL, shares_remaining REAL,
+        cost_initial REAL, cost_remaining REAL, source_order_id INTEGER, status TEXT);
     CREATE TABLE fund_bot_orders (order_id INTEGER PRIMARY KEY AUTOINCREMENT,
         bot_id TEXT, fund_code TEXT, order_type TEXT, order_date TEXT,
         order_amount REAL, status TEXT, order_run_id TEXT, settle_run_id TEXT);
@@ -24,12 +26,15 @@ def test_clone_run_rows_rekeys(tmp_path):
     src = "dash-2026-07-20T15-04-39"
     conn.execute("INSERT INTO fund_bot_actions (bot_id,fund_code,action_type,amount,action_date,run_id) "
                  "VALUES ('bot18','000216','BUY',1000,'2026-07-20',?)", (src,))
-    conn.execute("INSERT INTO fund_bot_holdings (bot_id,fund_code,shares,status,run_id) "
-                 "VALUES ('bot18','000216',100,'active',?)", (src,))
-    conn.execute("INSERT INTO fund_bot_holdings (bot_id,fund_code,shares,status,run_id) "
-                 "VALUES ('bot18','000216',0,'closed',?)", (src,))
-    conn.execute("INSERT INTO fund_bot_holding_lots (bot_id,fund_code,run_id,holding_id,shares_remaining,source_order_id,status) "
-                 "VALUES ('bot18','000216',?,7,100,9,'open')", (src,))
+    conn.execute("INSERT INTO fund_bot_holdings "
+                 "(bot_id,fund_code,shares,amount_invested,entry_date,entry_nav,latest_nav,status,run_id) "
+                 "VALUES ('bot18','000216',100,1000,'2026-07-20',10,10,'active',?)", (src,))
+    conn.execute("INSERT INTO fund_bot_holdings "
+                 "(bot_id,fund_code,shares,amount_invested,entry_date,entry_nav,latest_nav,status,run_id) "
+                 "VALUES ('bot18','000216',0,0,'2026-07-10',10,10,'closed',?)", (src,))
+    conn.execute("INSERT INTO fund_bot_holding_lots "
+                 "(bot_id,fund_code,run_id,holding_id,entry_date,entry_nav,shares_initial,shares_remaining,cost_initial,cost_remaining,source_order_id,status) "
+                 "VALUES ('bot18','000216',?,7,'2026-07-20',10,100,100,1000,1000,9,'open')", (src,))
     conn.execute("INSERT INTO fund_bot_orders (bot_id,fund_code,order_type,order_date,order_amount,status,order_run_id,settle_run_id) "
                  "VALUES ('bot18','000216','buy','2026-07-20',500,'pending',?,NULL)", (src,))
     conn.execute("INSERT INTO fund_bot_orders (bot_id,fund_code,order_type,order_date,order_amount,status,order_run_id,settle_run_id) "
@@ -40,7 +45,8 @@ def test_clone_run_rows_rekeys(tmp_path):
     counts = seed.clone_run_rows(conn, "bot18", src, dst, "2026-07-21")
     conn.commit()
 
-    assert counts == {"actions": 1, "holdings": 1, "lots": 1, "orders": 1}
+    assert counts == {"actions": 1, "holdings": 1, "lots": 1, "orders": 1,
+                      "lot_repair": {"checked": 1, "rebuilt": 0}}
     # 新 run_id 下能读到复制行
     assert conn.execute("SELECT COUNT(*) FROM fund_bot_actions WHERE run_id=?", (dst,)).fetchone()[0] == 1
     assert conn.execute("SELECT shares FROM fund_bot_holdings WHERE run_id=? AND status='active'", (dst,)).fetchone()[0] == 100
@@ -69,3 +75,27 @@ def test_state_stub_makes_run_discoverable(tmp_path):
     assert payload["status"] == "seeded"
     # discover_live_runs 只凭 state.json 即可发现（无需先跑引擎）
     assert lc.discover_live_runs(str(runs_dir)) == [(dst, "bot18")]
+
+
+def test_clone_run_rows_repairs_stale_open_lots(tmp_path):
+    conn = sqlite3.connect(":memory:"); _schema(conn)
+    src = "dash-2026-07-20T15-04-39"
+    conn.execute("INSERT INTO fund_bot_holdings "
+                 "(bot_id,fund_code,shares,amount_invested,entry_date,entry_nav,latest_nav,status,run_id) "
+                 "VALUES ('bot18','000216',100,1000,'2026-07-20',10,10,'active',?)", (src,))
+    conn.execute("INSERT INTO fund_bot_holding_lots "
+                 "(bot_id,fund_code,run_id,holding_id,entry_date,entry_nav,shares_initial,shares_remaining,cost_initial,cost_remaining,source_order_id,status) "
+                 "VALUES ('bot18','000216',?,7,'2026-07-20',10,10,10,100,100,9,'open')", (src,))
+    conn.commit()
+
+    dst = "live-bot18-20260720T150439"
+    counts = seed.clone_run_rows(conn, "bot18", src, dst, "2026-07-21")
+    conn.commit()
+
+    assert counts["lot_repair"] == {"checked": 1, "rebuilt": 1}
+    h = conn.execute("SELECT holding_id, shares FROM fund_bot_holdings WHERE run_id=?", (dst,)).fetchone()
+    lot = conn.execute(
+        "SELECT holding_id, shares_remaining, cost_remaining, source_order_id "
+        "FROM fund_bot_holding_lots WHERE run_id=? AND status='open'", (dst,)
+    ).fetchone()
+    assert lot == (h[0], h[1], 1000, None)
