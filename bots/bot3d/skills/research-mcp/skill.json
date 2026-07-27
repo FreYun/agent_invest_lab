@@ -1,0 +1,7 @@
+{
+  "name": "研究数据库",
+  "icon": "🗄️",
+  "slot": "research",
+  "desc": "ttjj（天天基金）研究数据，运行时经 simworld-data 提供：行情/基金/个股/板块/指数因子/择时/债券/宏观/研究",
+  "subType": "general"
+}

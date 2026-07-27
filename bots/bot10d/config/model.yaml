@@ -1,0 +1,5 @@
+# 本 bot 的模型配置（research-loop 的 model.primary）。base_url 由 provider 自动派生，不要手写。
+# api_key 用 api_key_from_openclaw 引用 openclaw.json 里的 provider，回测时由 world 注入。
+provider: openai_compatible
+model: qwen3.6-plus
+api_key_from_openclaw: zai-coding-plan
