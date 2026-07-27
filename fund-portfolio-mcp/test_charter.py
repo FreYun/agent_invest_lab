@@ -96,6 +96,26 @@ def test_declare_charter_rejects_class_bounds(reload_server, tmp_db):
     assert "satellite_min_ratio" in r["message"]
 
 
+def test_declare_charter_rejects_non_integer_cadence(reload_server, tmp_db):
+    """cadence=5.7 被拒，cadence=5.0 可成功。"""
+    _seed_nav_days(tmp_db, ["2025-01-02"])
+    _seed_account(tmp_db)
+    # 非整数浮点应被拒
+    bad_cadence = dict(VALID_CHARTER, satellite_review_cadence_days=5.7)
+    r = json.loads(asyncio.run(reload_server.portfolio_declare_charter(
+        bot_id="bot105d", charter_json=json.dumps(bad_cadence),
+        trade_date="2025-01-02", reason="x", run_id="runT")))
+    assert r["success"] is False
+    assert "satellite_review_cadence_days" in r["message"]
+
+    # 整数值的浮点应可成功
+    good_cadence = dict(VALID_CHARTER, satellite_review_cadence_days=5.0)
+    r = json.loads(asyncio.run(reload_server.portfolio_declare_charter(
+        bot_id="bot105d", charter_json=json.dumps(good_cadence),
+        trade_date="2025-01-02", reason="整数浮点声明", run_id="runT")))
+    assert r["success"] is True
+
+
 def test_amend_charter_cooldown(reload_server, tmp_db):
     # 22 个交易日：01-02 声明；第 10 个交易日修订被拒；第 21 个交易日修订成功
     days = [f"2025-01-{d:02d}" for d in range(2, 24)]     # 22 天连续当交易日用

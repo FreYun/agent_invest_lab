@@ -235,6 +235,10 @@ def _validate_charter_fields(payload: dict) -> str | None:
         v = payload.get(key)
         if not isinstance(v, (int, float)):
             return f"{key} 缺失或非数值"
+        # satellite_review_cadence_days 需要整数值
+        if key == "satellite_review_cadence_days":
+            if isinstance(v, float) and not float(v).is_integer():
+                return f"{key}={v} 必须为整数，不接受浮点数（范围 [{lo}, {hi}]）"
         if not (lo <= float(v) <= hi):
             return f"{key}={v} 超出类别底线 [{lo}, {hi}]（多基金类 bot 硬约束，不可声明豁免）"
     return None
