@@ -260,6 +260,34 @@ CREATE TABLE IF NOT EXISTS fund_bot_actions (
     run_id              TEXT  -- settle 时落 actions 用的是 settle 那一轮 run_id
 );
 
+-- 11a. 配置宪章表（Allocation Charter）
+CREATE TABLE IF NOT EXISTS fund_bot_charters (
+    charter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    declared_date TEXT NOT NULL DEFAULT '',      -- 交易日；status='required' 占位行为空
+    core_fund_codes TEXT NOT NULL DEFAULT '[]',  -- JSON array of fund_code
+    single_fund_max_ratio REAL NOT NULL DEFAULT 0,
+    satellite_min_ratio REAL NOT NULL DEFAULT 0,
+    min_equity_threshold REAL NOT NULL DEFAULT 0,
+    satellite_review_cadence_days INTEGER NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',       -- required | active | superseded
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_charters_bot_run ON fund_bot_charters(bot_id, run_id, status);
+
+-- 11b. 卫星基金复评表
+CREATE TABLE IF NOT EXISTS fund_bot_satellite_reviews (
+    sat_review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    review_date TEXT NOT NULL,
+    payload TEXT NOT NULL,                       -- 完整结构化 JSON（原样存档，离线可审计）
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sat_reviews_bot_run ON fund_bot_satellite_reviews(bot_id, run_id, review_date);
+
 -- 12. 账户级每日快照
 --    PK 含 run_id：同一 (bot,trade_date) 多次 run 各保留一份快照。读侧用「最新 run_id」视图。
 --    历史数据迁移时若 run_id 为 NULL，按 (bot,trade_date,'') 落库（SQLite NULL 不参与 UNIQUE）。
