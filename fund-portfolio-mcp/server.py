@@ -1632,6 +1632,83 @@ def _strict_nav(conn, fund_code: str, trade_date: str) -> float | None:
     return None
 
 
+def _charter_gate_buy(conn, bot_id: str, run_id: str, trade_date: str,
+                      fund_code: str, amount: float) -> str | None:
+    """宪章结构闸门（仅 BUY）。返回拒单 JSON；None=放行。卖单永不进此函数。"""
+    if not _charter_required(conn, bot_id, run_id):
+        return None                      # 本 run/bot 未启用宪章 → 完全旧行为
+    charter = _load_active_charter(conn, bot_id, run_id)
+    if not charter:
+        return json.dumps({"success": False,
+            "message": "本 run 已启用宪章义务但尚未声明：先调 portfolio_declare_charter "
+                       "按你的 METHODOLOGY 配置区间声明单基上限/卫星下限/复评周期，再下买单。"},
+            ensure_ascii=False)
+    core = charter["core_fund_codes"]
+    # ── 模拟成交后结构：replay 持仓市值（已成交 actions）+ 本单 ──
+    state = _replay_fund_account_state(conn, bot_id, trade_date, run_id=run_id)
+    mv: dict[str, float] = {}
+    for code, pos in state["positions"].items():
+        nav, _ = _get_nav(conn, code, trade_date)
+        mv[code] = float(pos["shares"]) * nav
+    mv[fund_code] = mv.get(fund_code, 0.0) + amount
+    equity = sum(mv.values())
+    if equity <= 1e-6:
+        return None
+    view = _bot_run_cash_view(conn, bot_id, run_id, trade_date)
+    total_assets = equity + max(float(view["cash_available"]) - amount, 0.0) + float(view["cash_receivable"])
+    # ── 豁免线：防御态不强拆结构 ──
+    if total_assets > 1e-6 and equity / total_assets < float(charter["min_equity_threshold"]):
+        return None
+    tol = CHARTER_TOLERANCE
+    cap = float(charter["single_fund_max_ratio"])
+    cap_violated = mv[fund_code] / equity > cap + tol
+    if fund_code in core:
+        # ── 核心买单：检卫星下限（稀释效果）与单基上限，违反时一并报告 ──
+        sat_mv = sum(v for k, v in mv.items() if k not in core)
+        floor = float(charter["satellite_min_ratio"])
+        floor_violated = sat_mv / equity < floor - tol
+        if floor_violated or cap_violated:
+            parts = []
+            if floor_violated:
+                parts.append(f"成交后卫星桶将占权益 {sat_mv/equity:.1%} < "
+                             f"satellite_min_ratio {floor:.0%}（-{tol:.0%} 容忍带）；"
+                             f"先配置/加仓卫星基金（主线→候选→选品），或减小核心买入金额")
+            if cap_violated:
+                parts.append(f"{fund_code} 成交后将占权益 {mv[fund_code]/equity:.1%} > "
+                             f"single_fund_max_ratio {cap:.0%}（+{tol:.0%} 容忍带）；"
+                             f"可改买卫星基金或减小金额")
+            msg = "宪章拒单：" + "。".join(parts) + (
+                "。当前权益结构: "
+                + json.dumps({k: round(v/equity, 3) for k, v in mv.items()}, ensure_ascii=False)
+                if cap_violated else "。")
+            return json.dumps({"success": False, "message": msg}, ensure_ascii=False)
+        # ── 复评牙齿（只闸核心买单；无卫星持仓不欠复评）──
+        sat_holdings = _satellite_codes(conn, bot_id, run_id, trade_date, charter)
+        if sat_holdings:
+            last = conn.execute(
+                "SELECT MAX(review_date) AS d FROM fund_bot_satellite_reviews "
+                "WHERE bot_id=? AND run_id=?", (bot_id, run_id)).fetchone()
+            baseline = last["d"] or charter["declared_date"]
+            overdue_after = int(charter["satellite_review_cadence_days"]) + CHARTER_REVIEW_GRACE_TDAYS
+            gap = _trading_days_between(conn, baseline, trade_date)
+            if gap > overdue_after:
+                return json.dumps({"success": False,
+                    "message": f"宪章拒单：卫星复评过期（距上次 {baseline} 已 {gap} 交易日 > "
+                               f"cadence {charter['satellite_review_cadence_days']}+宽限 {CHARTER_REVIEW_GRACE_TDAYS}）。"
+                               f"先调 portfolio_submit_satellite_review 完成复评，再买核心基金。"},
+                    ensure_ascii=False)
+    else:
+        # ── 卫星买单：仅检单基上限 ──
+        if cap_violated:
+            return json.dumps({"success": False,
+                "message": f"宪章拒单：{fund_code} 成交后将占权益 {mv[fund_code]/equity:.1%} > "
+                           f"single_fund_max_ratio {cap:.0%}（+{tol:.0%} 容忍带）。"
+                           f"可改买卫星基金或减小金额。当前权益结构: "
+                           + json.dumps({k: round(v/equity, 3) for k, v in mv.items()}, ensure_ascii=False)},
+                ensure_ascii=False)
+    return None
+
+
 @mcp.tool()
 async def portfolio_place_buy_order(
     bot_id: str,
@@ -1718,6 +1795,10 @@ async def portfolio_place_buy_order(
         cash = float(view["cash_available"])
         if amount > cash + 1e-6:
             return json.dumps({"success": False, "message": f"现金不足：amount={amount} > cash={cash:.2f}"}, ensure_ascii=False)
+
+        gate_err = _charter_gate_buy(conn, bot_id, run_id, trade_date, fund_code, amount)
+        if gate_err:
+            return gate_err
 
         pf_rate, _ = _fund_fee_rates(conn, fund_code)
         est_fee = amount * pf_rate / (1 + pf_rate) if nav is not None else None

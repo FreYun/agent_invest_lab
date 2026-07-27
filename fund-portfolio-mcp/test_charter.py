@@ -209,3 +209,93 @@ def test_amend_charter_cooldown(reload_server, tmp_db):
     n_superseded = conn.execute("SELECT COUNT(*) FROM fund_bot_charters "
                                 "WHERE status='superseded'").fetchone()[0]
     assert n_superseded == 1
+
+
+# ── Task 4: 买单结构闸门测试矩阵 ──────────────────────────────────────────────
+
+def _buy(server, code, amount, date="2025-01-03", bot="bot105d", run="runT"):
+    return json.loads(asyncio.run(server.portfolio_place_buy_order(
+        bot_id=bot, fund_code=code, amount=amount, trade_date=date,
+        reason="test buy", run_id=run)))
+
+
+def test_gate_no_charter_row_passes(reload_server, tmp_db):
+    """表中无任何行（宪章未启用）→ 行为不变，买单照常受理。"""
+    _seed_nav_days(tmp_db, ["2025-01-02", "2025-01-03"])
+    _seed_account(tmp_db)
+    r = _buy(reload_server, "000051", 100000)
+    assert r["success"] is True
+
+
+def test_gate_required_undeclared_rejects(reload_server, tmp_db):
+    """world 已写 required 占位但 bot 未声明 → 拒买。"""
+    _seed_nav_days(tmp_db, ["2025-01-02", "2025-01-03"])
+    _seed_account(tmp_db)
+    conn = sqlite3.connect(tmp_db)
+    conn.execute("INSERT INTO fund_bot_charters (bot_id, run_id, status) "
+                 "VALUES ('bot105d', 'runT', 'required')")
+    conn.commit(); conn.close()
+    r = _buy(reload_server, "000051", 100000)
+    assert r["success"] is False and "portfolio_declare_charter" in r["message"]
+
+
+def test_gate_single_fund_cap(reload_server, tmp_db):
+    """已持核心 40w+卫星 11w（核心占 78%>60%+5pp 容忍带），继续买核心 → 拒。"""
+    _setup_review_env(reload_server, tmp_db)   # 核心40w 卫星11w，含宪章声明
+    r = _buy(reload_server, "000051", 200000)
+    assert r["success"] is False and "single_fund_max_ratio" in r["message"]
+
+
+def test_gate_satellite_floor_blocks_core_buy(reload_server, tmp_db):
+    """卫星占比 21.6%，但一笔大额核心买单会把卫星稀释到 <25%-5pp → 拒；买卫星放行。"""
+    _setup_review_env(reload_server, tmp_db)
+    r_sat = _buy(reload_server, "018135", 50000)
+    assert r_sat["success"] is True            # 买卫星永远放行结构闸（仍受单基上限约束）
+    r_core = _buy(reload_server, "000051", 100000)
+    assert r_core["success"] is False and "satellite_min_ratio" in r_core["message"]
+
+
+def test_gate_exemption_below_equity_threshold(reload_server, tmp_db):
+    """权益/总资产 < min_equity_threshold（防御态）→ 结构闸豁免。"""
+    days = ["2025-01-02", "2025-01-03"]
+    for code in ("000051",):
+        _seed_nav_days(tmp_db, days, code=code)
+    _seed_account(tmp_db)   # 100w 现金
+    _seed_holding_actions(tmp_db, "bot105d", "runT",
+        [("000051", "华夏沪深300ETF联接A", "BUY", 100000, 100000, 1.0, "2025-01-02")])
+    ok = asyncio.run(reload_server.portfolio_declare_charter(
+        bot_id="bot105d", charter_json=json.dumps(VALID_CHARTER),
+        trade_date="2025-01-02", reason="init", run_id="runT"))
+    assert json.loads(ok)["success"]
+    # 权益 10w / 总资产 100w = 10% < 30% 豁免线 → 全核心也放行
+    r = _buy(reload_server, "000051", 50000)
+    assert r["success"] is True
+
+
+def test_gate_review_overdue_blocks_core_buy(reload_server, tmp_db):
+    """有卫星持仓且复评超期（cadence 5 + grace 2 个交易日无复评）→ 核心买单被拒。"""
+    days = [f"2025-01-{d:02d}" for d in range(2, 16)]
+    for code in ("000051", "007818", "014881", "018135", "001617"):
+        _seed_nav_days(tmp_db, days, code=code)
+    _seed_account(tmp_db)
+    _seed_holding_actions(tmp_db, "bot105d", "runT", [
+        ("000051", "华夏沪深300ETF联接A", "BUY", 300000, 300000, 1.0, "2025-01-02"),
+        ("007818", "国泰通信设备C", "BUY", 100000, 100000, 1.0, "2025-01-02"),
+        ("014881", "天弘机器人C", "BUY", 100000, 100000, 1.0, "2025-01-02"),
+    ])
+    ok = asyncio.run(reload_server.portfolio_declare_charter(
+        bot_id="bot105d", charter_json=json.dumps(VALID_CHARTER),
+        trade_date="2025-01-02", reason="init", run_id="runT"))
+    assert json.loads(ok)["success"]
+    # 声明日=01-02，8 个交易日后（>5+2）无复评 → 核心买拒、卫星买放行
+    r_core = _buy(reload_server, "000051", 50000, date="2025-01-15")
+    assert r_core["success"] is False and "复评" in r_core["message"]
+    r_sat = _buy(reload_server, "018135", 30000, date="2025-01-15")
+    assert r_sat["success"] is True
+    # 提交复评后核心买恢复
+    rv = asyncio.run(reload_server.portfolio_submit_satellite_review(
+        bot_id="bot105d", review_json=json.dumps(VALID_REVIEW),
+        trade_date="2025-01-15", run_id="runT"))
+    assert json.loads(rv)["success"]
+    r_core2 = _buy(reload_server, "000051", 50000, date="2025-01-15")
+    assert r_core2["success"] is True
