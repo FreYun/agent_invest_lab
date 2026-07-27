@@ -66,7 +66,7 @@ mcp = FastMCP(
         "巡检调仓记录、每日快照追踪、选品漏斗追踪等工具。"
         "所有 bot 共用同一个数据库，通过 bot_id 区分。"
         + ("【当前为 READONLY 模式：写工具未注册，bot 写库请走系统层 fund_md_to_db。】" if READONLY else "")
-        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance / portfolio_get_buyable_funds / get_fund_detail 暴露；其余隐藏。】" if BOT_ONLY else "")
+        + ("【当前为 BOT_ONLY 模式：仅 portfolio_place_buy_order / portfolio_place_sell_order / portfolio_get_my_history / portfolio_get_my_trades / portfolio_get_my_performance / portfolio_get_buyable_funds / get_fund_detail / portfolio_declare_charter / portfolio_get_my_charter 暴露；其余隐藏。】" if BOT_ONLY else "")
     ),
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
@@ -86,6 +86,8 @@ _BOT_ONLY_ALLOWED = {
     "portfolio_get_my_performance",
     "portfolio_get_buyable_funds",
     "get_fund_detail",
+    "portfolio_declare_charter",
+    "portfolio_get_my_charter",
 }
 if BOT_ONLY:
     _orig_mcp_tool = mcp.tool
@@ -179,6 +181,63 @@ def _load_curated_buyable_codes(run_id: str, bot_id: str = "") -> list[str] | No
         return None
     out = sorted({c for c in codes if isinstance(c, str) and c})
     return out or None
+
+
+# ── Allocation Charter（配置宪章）───────────────────────────────
+# 多基金类 bot 的结构承诺：bot 自声明，系统只卡类别底线，交易层物理执行。
+# spec: docs/superpowers/specs/2026-07-27-allocation-charter-design.md
+CHARTER_CLASS_BOUNDS = {
+    "single_fund_max_ratio": (0.0, 0.75),
+    "satellite_min_ratio": (0.15, 1.0),
+    "min_equity_threshold": (0.0, 0.50),
+    "satellite_review_cadence_days": (1, 10),
+}
+CHARTER_AMEND_COOLDOWN_TDAYS = 20
+CHARTER_TOLERANCE = 0.05           # 结构闸门 ±5pp 容忍带
+CHARTER_REVIEW_GRACE_TDAYS = 2     # 复评过期宽限（交易日）
+
+
+def _trading_days_between(conn, d1: str, d2: str) -> int:
+    """(d1, d2] 之间的全局交易日数（以 fund_nav 的 distinct nav_date 为日历）。"""
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT nav_date) AS n FROM fund_nav WHERE nav_date > ? AND nav_date <= ?",
+        (d1, d2)).fetchone()
+    return int(row["n"] or 0)
+
+
+def _load_active_charter(conn, bot_id: str, run_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM fund_bot_charters WHERE bot_id=? AND run_id=? AND status='active' "
+        "ORDER BY charter_id DESC LIMIT 1", (bot_id, run_id)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["core_fund_codes"] = set(json.loads(d["core_fund_codes"] or "[]"))
+    except json.JSONDecodeError:
+        d["core_fund_codes"] = set()
+    return d
+
+
+def _charter_required(conn, bot_id: str, run_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM fund_bot_charters WHERE bot_id=? AND run_id=? "
+        "AND status IN ('required','active') LIMIT 1", (bot_id, run_id)).fetchone()
+    return row is not None
+
+
+def _validate_charter_fields(payload: dict) -> str | None:
+    """返回错误信息；None = 合法。"""
+    codes = payload.get("core_fund_codes")
+    if not isinstance(codes, list) or not codes or not all(isinstance(c, str) and c for c in codes):
+        return "core_fund_codes 必须是非空 fund_code 数组"
+    for key, (lo, hi) in CHARTER_CLASS_BOUNDS.items():
+        v = payload.get(key)
+        if not isinstance(v, (int, float)):
+            return f"{key} 缺失或非数值"
+        if not (lo <= float(v) <= hi):
+            return f"{key}={v} 超出类别底线 [{lo}, {hi}]（多基金类 bot 硬约束，不可声明豁免）"
+    return None
 
 
 # ============================================================
@@ -2368,6 +2427,91 @@ async def portfolio_get_buyable_funds(run_id: str = "", bot_id: str = "") -> str
         "curated": is_curated,
         "bot_id": bot_id,
     }, ensure_ascii=False)
+
+
+@mcp.tool()
+async def portfolio_declare_charter(
+    bot_id: str, charter_json: str, trade_date: str, reason: str = "", run_id: str = "",
+) -> str:
+    """声明/修订本 bot 的配置宪章（多基金 bot 专用）。
+
+    charter_json 必填字段：core_fund_codes（核心宽基 fund_code 数组，其余池内基金自动算卫星）、
+    single_fund_max_ratio（单基 ≤ 权益市值比，≤0.75）、satellite_min_ratio（卫星桶 ≥ 权益市值比，≥0.15）、
+    min_equity_threshold（权益/总资产低于此值时结构约束豁免，≤0.50）、
+    satellite_review_cadence_days（卫星复评周期交易日，1~10）。
+    首次声明随时可做；修订需距上次声明 ≥20 个交易日且 reason 必填（写明依据什么研究修订）。
+    数值应源自你自己的 METHODOLOGY/IDENTITY 配置区间——这是你对自己架构的承诺，声明后由交易系统物理执行。
+    """
+    err = _require_run_id(run_id)
+    if err:
+        return err
+    err = _require_reason(reason, "宪章声明/修订")
+    if err:
+        return err
+    try:
+        payload = json.loads(charter_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"success": False, "message": f"charter_json 不是合法 JSON: {e}"}, ensure_ascii=False)
+    if not isinstance(payload, dict):
+        return json.dumps({"success": False, "message": "charter_json 必须是 JSON object"}, ensure_ascii=False)
+    verr = _validate_charter_fields(payload)
+    if verr:
+        return json.dumps({"success": False, "message": verr}, ensure_ascii=False)
+    trade_date = _normalize_trade_date(trade_date)
+    with get_conn() as conn:
+        if not _get_account(conn, bot_id):
+            return json.dumps({"success": False, "message": f"bot {bot_id} 无账户"}, ensure_ascii=False)
+        current = _load_active_charter(conn, bot_id, run_id)
+        if current:
+            gap = _trading_days_between(conn, current["declared_date"], trade_date)
+            if gap < CHARTER_AMEND_COOLDOWN_TDAYS:
+                return json.dumps({
+                    "success": False,
+                    "message": f"宪章修订冷却中：距上次声明（{current['declared_date']}）仅 {gap} 个交易日，"
+                               f"需 ≥{CHARTER_AMEND_COOLDOWN_TDAYS}。防止规则反复收紧/放松。",
+                }, ensure_ascii=False)
+            conn.execute("UPDATE fund_bot_charters SET status='superseded' "
+                         "WHERE charter_id=?", (current["charter_id"],))
+        # 吃掉 world 侧 charter_require 写入的占位行
+        conn.execute("UPDATE fund_bot_charters SET status='superseded' "
+                     "WHERE bot_id=? AND run_id=? AND status='required'", (bot_id, run_id))
+        conn.execute(
+            "INSERT INTO fund_bot_charters (bot_id, run_id, declared_date, core_fund_codes, "
+            " single_fund_max_ratio, satellite_min_ratio, min_equity_threshold, "
+            " satellite_review_cadence_days, reason, status) VALUES (?,?,?,?,?,?,?,?,?, 'active')",
+            (bot_id, run_id, trade_date, json.dumps(sorted(set(payload["core_fund_codes"]))),
+             float(payload["single_fund_max_ratio"]), float(payload["satellite_min_ratio"]),
+             float(payload["min_equity_threshold"]), int(payload["satellite_review_cadence_days"]),
+             reason))
+    return json.dumps({
+        "success": True, "bot_id": bot_id, "declared_date": trade_date,
+        "amended": bool(current),
+        "note": "宪章已生效：交易层将按此执行单基上限/卫星下限/复评节奏。修订需 ≥20 交易日冷却。",
+    }, ensure_ascii=False)
+
+
+@mcp.tool()
+async def portfolio_get_my_charter(bot_id: str, run_id: str = "") -> str:
+    """查看本 bot 当前生效的配置宪章与卫星复评状态。"""
+    err = _require_run_id(run_id)
+    if err:
+        return err
+    with get_conn() as conn:
+        charter = _load_active_charter(conn, bot_id, run_id)
+        if not charter:
+            required = _charter_required(conn, bot_id, run_id)
+            return json.dumps({
+                "declared": False, "required": required,
+                "note": "宪章未声明" + ("；本 run 已启用宪章义务，声明前买入单会被拒" if required else ""),
+            }, ensure_ascii=False)
+        last_review = conn.execute(
+            "SELECT MAX(review_date) AS d FROM fund_bot_satellite_reviews "
+            "WHERE bot_id=? AND run_id=?", (bot_id, run_id)).fetchone()
+        out = {k: v for k, v in charter.items() if k != "core_fund_codes"}
+        out["core_fund_codes"] = sorted(charter["core_fund_codes"])
+        out["declared"] = True
+        out["last_satellite_review_date"] = last_review["d"]
+        return json.dumps(out, ensure_ascii=False)
 
 
 @mcp.tool()
