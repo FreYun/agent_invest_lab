@@ -53,6 +53,8 @@ DATE_FILTERED = [
     ("fund_selection_runs", "trade_date"),
     ("fund_paradigm_runs", "trade_date"),
     ("fund_bot_performance", "trade_date"),
+    ("fund_bot_charters", "declared_date"),
+    ("fund_bot_satellite_reviews", "review_date"),
 ]
 # fund_bot_orders has no run_id column; use order_run_id OR settle_run_id
 ORDERS_WHERE_TMPL = ("bot_id=? AND order_date>=? AND "

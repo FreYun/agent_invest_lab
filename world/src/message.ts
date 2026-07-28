@@ -747,12 +747,123 @@ ${bodies}
 【判断管线 skill 结束】`
 }
 
+// 主仓位阶梯核对块（系统核算，确定性）：按 METHODOLOGY「主仓位（阶梯退坡）」把当前阶梯档位
+// 算出来注入。动机与载体核对块相同——阶梯规则写在方法论里 bot 从不自己执行（知道建卫星、
+// 不知道从主仓位换仓）。主仓位 = regime 上一轮配置的主载体（当前多为宽基），判定口径 =
+// **单只持仓 >40% 默认为主仓位**（当前在管主线板块的指定载体除外——那是主线仓，归载体核对管）。
+// 新主线成熟时由主仓位退坡让位给主线载体，这才是真正的轮动。系统解析 mainline 报告的
+// regime / 集中度 / in_top5 计数判档，超上限就直接给出退坡指令。解析失败 / 非抱主线 regime /
+// 无 >40% 主仓位 → 空串。
+const MAIN_POSITION_MIN_W = 0.40 // 单只 >40% 默认视为主仓位
+function mainPositionLadderBlock(
+  mainline: string,
+  holdings?: { fund_code: string; fund_name?: string | null; weight: number }[],
+): string {
+  if (!mainline || !holdings) return ''
+  // 只在『抱主线』regime 下退坡；无主线·宽基 / 防御 regime 下主仓位本来就该重，不注入。
+  if (!/regime：?\*{0,2}抱主线/.test(mainline)) return ''
+  const concM = /top15 集中度\s*(\d+)\s*个/.exec(mainline)
+  const concentration = concM ? Number(concM[1]) : 0
+  // ③ 组合状态机表：| 板块 | 角色 | rank | 站MA60 | 已持 | 最小持有余 | 连续in_top5 | ...
+  const smIdx = mainline.indexOf('组合状态机')
+  if (smIdx < 0) return ''
+  const smSection = mainline.slice(smIdx, mainline.indexOf('##', smIdx + 10) > 0 ? mainline.indexOf('##', smIdx + 10) : undefined)
+  let hasCore = false
+  let maxInTop5 = 0
+  let boardCount = 0
+  for (const line of smSection.split('\n')) {
+    const cells = line.trim().split('|').map(s => s.trim()).filter((_, i, a) => !(i === 0 && a[0] === '') )
+    if (cells.length < 8 || !/^BK/.test(cells[0])) continue
+    boardCount++
+    if (cells[1].includes('核心')) hasCore = true
+    const t5 = Number(cells[6])
+    if (Number.isFinite(t5)) maxInTop5 = Math.max(maxInTop5, t5)
+  }
+  if (boardCount === 0) return '' // 状态机无在管板块 → 主仓位不退坡
+  let tier: string, lo: number, hi: number
+  if (hasCore) { tier = '晋升核心已落地'; lo = 0; hi = 0.25 }
+  else if (maxInTop5 >= 10 || concentration >= 6) { tier = `主线强化（在管板块最大连续in_top5=${maxInTop5}${maxInTop5 >= 10 ? '≥10' : ''}${concentration >= 6 ? `，集中度${concentration}≥6` : ''}）`; lo = 0.30; hi = 0.40 }
+  else { tier = `主线初现（最大连续in_top5=${maxInTop5}<10，集中度${concentration}<6）`; lo = 0.50; hi = 0.60 }
+  // 主仓位识别：单只 >40%，且不是当前『⑤ 可投基金池』指定载体（主线仓归载体核对块管）。
+  const poolIdx = mainline.indexOf('可投基金池')
+  const vehicleCodes = new Set<string>()
+  if (poolIdx >= 0) {
+    for (const line of mainline.slice(poolIdx).split('\n')) {
+      const m = /^\|\s*BK[0-9A-Za-z.]+\s+[^|]+\|\s*[^|]+\|\s*(\d{6})\s/.exec(line.trim())
+      if (m) vehicleCodes.add(m[1])
+    }
+  }
+  const mains = holdings.filter(h => h.weight > MAIN_POSITION_MIN_W && !vehicleCodes.has(h.fund_code))
+  if (!mains.length) return '' // 无 >40% 主仓位 → 无退坡对象
+  const mainW = mains.reduce((s, h) => s + h.weight, 0)
+  const detail = mains.map(h => `${h.fund_code}（${h.fund_name ?? ''}）${fmtNum(h.weight * 100, 1)}%`).join('、')
+  const over = mainW > hi + 1e-9
+  const verdict = over
+    ? `**超出上限 ${fmtNum((mainW - hi) * 100, 1)}pct → 应退坡**：本次卖出主仓位 10%-15%（豁免"最小步长20%"），只动免赎回费份额（持有≥7日档；仍在收费期则顺延至最近免费日并在 mem0 写明）；释放资金等额置换到未建仓 / 未达标准档的主线载体（见上方载体核对表 ✗/△ 行），属等权益结构替换，**不受 sentiment 加仓闸门约束**——主线成熟、主仓位让位，这就是轮动。需要腾槽 / 补资金时也**可以直接清掉你最不看好的卫星**（不必等状态机剔除），只受零费窗口与最小持有期约束。`
+    : `在档内（≤${fmtNum(hi * 100, 0)}%），无需退坡。`
+  return `\n\n────────── 主仓位阶梯核对（系统核算 · METHODOLOGY「主仓位（阶梯退坡）」） ──────────
+- 主仓位判定（单只 >40% 且非主线载体）：${detail}，合计 **${fmtNum(mainW * 100, 1)}%**
+- 当前主线阶段：**${tier}** → 主仓位目标上限 **${fmtNum(lo * 100, 0)}%-${fmtNum(hi * 100, 0)}%**
+- 判定：${verdict}`
+}
+
+// 载体核对块（系统核算，确定性）：把 market_mainline『⑤ 可投基金池』的指定载体逐一对照
+// 当日真实持仓，明确"该板块是否已按标准档建仓"。动机：bot 会把存量同主题旧持仓 / 低重叠代理
+// 认领成板块载体从而跳过『新进[卫星]』建仓（每次换一个说法），方法论文本堵不住；这里由系统
+// 每天把核对结果顶在报告里。纯字符串解析 + 持仓快照对照，无未来函数。解析不到基金池表 → 空串。
+const VEHICLE_STANDARD_TIER_MIN = 0.08 // 标准档下限（METHODOLOGY 参考档 8%-15%）
+function vehicleCheckBlock(
+  mainline: string,
+  holdings?: { fund_code: string; weight: number }[],
+): string {
+  if (!mainline || !holdings) return ''
+  // 只解析『可投基金池』小节内的表格行，避免误吃其它表。
+  const poolIdx = mainline.indexOf('可投基金池')
+  if (poolIdx < 0) return ''
+  const section = mainline.slice(poolIdx)
+  // 行格式：| BK1106.DC 创新药 | 卫星 | 012738 广发创新药ETF联接C | ✓纯载体 | ...
+  const rowRe = /^\|\s*(BK[0-9A-Za-z.]+)\s+([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(\d{6})\s*([^|]*?)\s*\|\s*([^|]+?)\s*\|/
+  const weightOf = new Map(holdings.map(h => [h.fund_code, h.weight]))
+  const rows: string[] = []
+  let anyMissing = false
+  for (const line of section.split('\n')) {
+    const m = rowRe.exec(line.trim())
+    if (!m) {
+      // 表格结束（碰到非表行且已收集到数据）就停，防止解析到下一节。
+      if (rows.length && !line.trim().startsWith('|')) break
+      continue
+    }
+    const [, board, boardName, , fundCode, fundName, grade] = m
+    if (/^-+$/.test(board)) continue
+    const w = weightOf.get(fundCode) ?? 0
+    let status: string
+    if (w >= VEHICLE_STANDARD_TIER_MIN) status = '✓ 已建仓'
+    else if (w > 0) status = `△ 仅 ${fmtNum(w * 100, 1)}%（低于标准档 ${VEHICLE_STANDARD_TIER_MIN * 100}%，不计为已建仓）`
+    else { status = '✗ 未建仓'; anyMissing = true }
+    rows.push(`| ${board} ${boardName} | ${fundCode} ${fundName.trim()}（${grade.trim()}） | ${fmtNum(w * 100, 1)}% | ${status} |`)
+  }
+  if (!rows.length) return ''
+  const note = anyMissing
+    ? '\n> ⚠️ 上表有 ✗/△ 板块：该板块**尚未持有**——判断"某板块是否已持有"只认上表指定载体且仓位 ≥8%；**其它基金（同主题旧持仓、低重叠代理、装饰位）一律不计**，"已有类似持仓 / 成分重叠 / 切换摩擦"不构成跳过『新进[卫星]』建仓的理由（详见 METHODOLOGY 的拒绝理由封闭清单与「主仓位（阶梯退坡）」资金来源）。'
+    : '\n> 口径：板块"已持有"只认指定载体且仓位 ≥8%；其它基金不计。'
+  // 只数硬闸（绝对上限 6 只）：新建载体前先看槽位；满员就必须同日先清一只最不看好的卫星腾槽。
+  const HOLDINGS_HARD_CAP = 6
+  const n = holdings.length
+  const capLine = n >= HOLDINGS_HARD_CAP
+    ? `\n- 持仓数硬闸：**当前 ${n} 只 / 硬上限 ${HOLDINGS_HARD_CAP}（已满员${n > HOLDINGS_HARD_CAP ? '，超限违规，当日必须整合' : ''}）**——任何新建仓必须**同一决策日先清一只腾槽**（先清 <8% 残仓中 conviction 最低者；没有残仓就直接清你最不看好的标准档卫星）；硬上限绝对，不论什么理由都不得超过。`
+    : `\n- 持仓数硬闸：当前 ${n} 只 / 硬上限 ${HOLDINGS_HARD_CAP}（剩 ${HOLDINGS_HARD_CAP - n} 个槽位）。`
+  return `\n\n────────── 载体核对（系统核算 · 仅 fund_pool 指定载体计为板块持仓） ──────────
+| 在管板块 | 指定载体 | 当前仓位 | 状态 |
+|---|---|---|---|
+${rows.join('\n')}${note}${capLine}`
+}
+
 // 系统预读注入三份市场研报（PIT）。bot101/102/103 用：主线/regime/组合骨架已由系统预生成，
 // bot 直接消费报告结论做仓位与下单决策，不自己跑主线识别。三类全缺 → 空串（跳过整块）。
 function marketReportsBlock(reports?: {
   context: string; mainline: string; rotation: string; macroNews?: string
   res?: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string }
-}): string {
+}, holdings?: { fund_code: string; fund_name?: string | null; weight: number }[]): string {
   if (!reports) return ''
   const part = (label: string, body: string): string =>
     `────────── ${label} ──────────\n${body && body.trim() ? body.trim() : '（截至今日暂无该报告——按 METHODOLOGY 保守处理）'}`
@@ -760,7 +871,9 @@ function marketReportsBlock(reports?: {
   const bodies = [
     part('market_context（行情 / regime / risk_state）', reports.context),
     part('market_mainline（主线板块 + 可投基金池）', reports.mainline),
-    part('mainline_rotation（核心/卫星组合骨架 + 今日动作）', reports.rotation),
+    part('mainline_rotation（核心/卫星组合骨架 + 今日动作）', reports.rotation)
+      + vehicleCheckBlock(reports.mainline, holdings)
+      + mainPositionLadderBlock(reports.mainline, holdings),
     ...(hasMacro ? [part('macro_news（宏观 / 政策 / 事件资讯 · 当期）', reports.macroNews as string)] : []),
   ].join('\n\n')
   const n = hasMacro ? '四' : '三'
@@ -879,7 +992,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const kind = botKindOf(ctx.botId)
   let pipelineBlock: string
   if (kind === 'multi-fund') {
-    pipelineBlock = marketReportsBlock(ctx.marketReports)
+    pipelineBlock = marketReportsBlock(ctx.marketReports, ctx.dailyContext?.account?.holdings)
   } else {
     pipelineBlock = injectedSkillsBlock(ctx.injectedSkills)
   }
