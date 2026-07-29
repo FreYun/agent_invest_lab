@@ -23,7 +23,7 @@ export interface DailyMessageContext {
   // 一个"剩余天数"的 endgame 倒计时（会引发临近终点的窗口式抛售等非真实行为）。
   tradingDaysTotal?: number
   // 滚动 history window：前 N 个交易日的 session digest（去掉工具结果），由 history-window 模块
-  // 按 20000 字符预算切割，超 budget 时按 4 维度（踏空 / 反复被收割 / 范式冲击 / thesis 演变）
+  // 按 20000 字符预算切割，超 budget 时按 5 维度（踏空 / 反复被收割 / 验证成功的打法 / 范式冲击 / thesis 演变）
   // 用主模型压缩老的 60%。位置：渲染在 SOUL 等核心 md（在 system prompt 里）与 daily rules / dailyContext
   // 之间——即 daily user message 的最顶部。空串 → 跳过整块（Day 1 没有 prior session 时即此）。
   historyWindow?: string
@@ -807,6 +807,101 @@ function mainPositionLadderBlock(
 - 判定：${verdict}`
 }
 
+// ── 交易纪律核对（系统核算，确定性）──────────────────────────────────────────
+// 平衡「卫星快进快出的引擎节奏」与「无谓交易摩擦」：不回收裁量清仓权（bot 保留探索
+// alpha 的自由），但让清仓变成有后果的真决策——
+//   · 载体再进冷却：任何基金被清仓（卖到 0）后 10 个交易日内不得买回同一基金，
+//     堵「裁量清仓 → 次日载体核对逼回购」的翻烙饼回路；冷却中的指定载体在载体
+//     核对表里渲染 ⏳（不亮 ✗ 施压买回，否则系统自己打架）。
+//   · 防拆单：同一基金同方向 5 个交易日内只应有一单（引擎明令动作豁免）；
+//     推论：避险/止损卖出必须一次到位，不许分批碎步卖。
+// 全部从账户快照 recentOrders + benchmark 交易日历确定性推算，无未来函数；
+// 数据缺失（老快照 / 无 benchmark 日历）→ 空串，行为完全不变。
+const VEHICLE_REENTRY_COOLDOWN_TD = 10 // 清仓后再进冷却（交易日，含当日口径见 left 计算）
+const SLICE_WINDOW_TD = 5              // 同向拆单窗口（交易日）
+
+interface VehicleCooldown { soldOn: string; left: number }
+
+function tradingCalendarOf(dc: DailyContextData | undefined, asOfDate: string): string[] | null {
+  const pts = dc?.benchmark?.pointsByDate
+  if (!pts) return null
+  const days = Object.keys(pts).sort()
+  if (!days.length) return null
+  // 今日是决策交易日，但 benchmark 序列只到昨日——补上，保证 (from, to] 计数含今日。
+  if (days[days.length - 1] < asOfDate) days.push(asOfDate)
+  return days
+}
+
+// (from, to] 之间的交易日数（from 不必在日历内，按字典序比较 ISO 日期）。
+function tdBetween(cal: string[], from: string, to: string): number {
+  let n = 0
+  for (const d of cal) if (d > from && d <= to) n++
+  return n
+}
+
+function computeVehicleCooldowns(dc: DailyContextData | undefined, asOfDate: string): Map<string, VehicleCooldown> {
+  const out = new Map<string, VehicleCooldown>()
+  const orders = dc?.account?.recentOrders
+  const cal = tradingCalendarOf(dc, asOfDate)
+  if (!orders?.length || !cal) return out
+  const held = new Set((dc?.account?.holdings ?? []).map(h => h.fund_code))
+  for (const o of orders) {
+    if (o.order_type !== 'sell' || o.status !== 'confirmed') continue
+    if (held.has(o.fund_code)) continue // 仍在持仓 = 未清仓，不进冷却
+    const prev = out.get(o.fund_code)
+    if (prev && prev.soldOn >= o.order_date) continue
+    // 清仓日后第 1..10 个交易日均封禁，第 11 个交易日解禁（与 min_hold 同口径，防 off-by-one）。
+    const elapsed = tdBetween(cal, o.order_date, asOfDate)
+    const left = Math.min(VEHICLE_REENTRY_COOLDOWN_TD, VEHICLE_REENTRY_COOLDOWN_TD + 1 - elapsed)
+    if (left > 0) out.set(o.fund_code, { soldOn: o.order_date, left })
+    else out.delete(o.fund_code)
+  }
+  return out
+}
+
+function tradeDisciplineBlock(
+  dc: DailyContextData | undefined,
+  asOfDate: string,
+  cooldowns: Map<string, VehicleCooldown>,
+): string {
+  const orders = dc?.account?.recentOrders
+  const cal = tradingCalendarOf(dc, asOfDate)
+  if (!orders?.length || !cal) return ''
+  const lines: string[] = []
+  lines.push('────────── 交易纪律核对（系统核算 · 载体冷却 + 防拆单） ──────────')
+  // ① 载体再进冷却
+  if (cooldowns.size) {
+    lines.push(`- 载体再进冷却（清仓后 ${VEHICLE_REENTRY_COOLDOWN_TD} 个交易日内不得买回同一基金）：`)
+    for (const [code, c] of [...cooldowns.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      lines.push(`  - ${code}：你于 ${c.soldOn} 清仓卖出，**余 ${c.left} 个交易日**内不得买回该基金。`)
+    }
+    lines.push('  冷却是裁量清仓的对价：清了就要空仓扛满冷却期——看对是你的 alpha，看错自己吃踏空；不许今天清、过两天又买回来翻烙饼。')
+  } else {
+    lines.push(`- 载体再进冷却：当前无冷却中基金（任何基金清仓后 ${VEHICLE_REENTRY_COOLDOWN_TD} 个交易日内不得买回同一基金）。`)
+  }
+  // ② 防拆单：近 5 交易日内已有订单的 基金×方向
+  const seen = new Map<string, string>() // `${code}|${dir}` → 最近 order_date
+  for (const o of orders) {
+    if (o.order_type !== 'buy' && o.order_type !== 'sell') continue
+    if (tdBetween(cal, o.order_date, asOfDate) >= SLICE_WINDOW_TD) continue
+    const k = `${o.fund_code}|${o.order_type}`
+    const prev = seen.get(k)
+    if (!prev || prev < o.order_date) seen.set(k, o.order_date)
+  }
+  lines.push(`- 防拆单（同一基金同方向 ${SLICE_WINDOW_TD} 个交易日内只应有一单）：`)
+  if (seen.size) {
+    for (const [k, d] of [...seen.entries()].sort()) {
+      const [code, dir] = k.split('|')
+      lines.push(`  - ${code} 近 ${SLICE_WINDOW_TD} 个交易日已有${dir === 'buy' ? '买入' : '卖出'}单（${d}）——今天再下同向单 = 拆单违规。`)
+    }
+  } else {
+    lines.push(`  - 近 ${SLICE_WINDOW_TD} 个交易日无订单，今天各基金同方向均可下 1 单。`)
+  }
+  lines.push('  豁免：状态机剔除 / 破 MA60 硬止损 / 主仓位退坡阶梯指令等**引擎明令动作**不受此限。')
+  lines.push(`  ⚠️ 推论：因为同向 ${SLICE_WINDOW_TD} 日一单，**避险 / 止损卖出必须一次到位**——第一笔就直接卖到目标仓位，不要分 2-3 笔逐步卖（分批的后几笔会撞纪律）。`)
+  return `\n\n${lines.join('\n')}`
+}
+
 // 载体核对块（系统核算，确定性）：把 market_mainline『⑤ 可投基金池』的指定载体逐一对照
 // 当日真实持仓，明确"该板块是否已按标准档建仓"。动机：bot 会把存量同主题旧持仓 / 低重叠代理
 // 认领成板块载体从而跳过『新进[卫星]』建仓（每次换一个说法），方法论文本堵不住；这里由系统
@@ -815,6 +910,7 @@ const VEHICLE_STANDARD_TIER_MIN = 0.08 // 标准档下限（METHODOLOGY 参考�
 function vehicleCheckBlock(
   mainline: string,
   holdings?: { fund_code: string; weight: number }[],
+  cooldowns?: Map<string, VehicleCooldown>,
 ): string {
   if (!mainline || !holdings) return ''
   // 只解析『可投基金池』小节内的表格行，避免误吃其它表。
@@ -839,7 +935,13 @@ function vehicleCheckBlock(
     let status: string
     if (w >= VEHICLE_STANDARD_TIER_MIN) status = '✓ 已建仓'
     else if (w > 0) status = `△ 仅 ${fmtNum(w * 100, 1)}%（低于标准档 ${VEHICLE_STANDARD_TIER_MIN * 100}%，不计为已建仓）`
-    else { status = '✗ 未建仓'; anyMissing = true }
+    else {
+      const cd = cooldowns?.get(fundCode)
+      if (cd) {
+        // 冷却中不亮 ✗ 施压买回——你自己清的仓，冷却期满信号还在才恢复建仓要求。
+        status = `⏳ 冷却中（${cd.soldOn} 清仓，余 ${cd.left} 交易日不得买回）`
+      } else { status = '✗ 未建仓'; anyMissing = true }
+    }
     rows.push(`| ${board} ${boardName} | ${fundCode} ${fundName.trim()}（${grade.trim()}） | ${fmtNum(w * 100, 1)}% | ${status} |`)
   }
   if (!rows.length) return ''
@@ -863,8 +965,10 @@ ${rows.join('\n')}${note}${capLine}`
 function marketReportsBlock(reports?: {
   context: string; mainline: string; rotation: string; macroNews?: string
   res?: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string }
-}, holdings?: { fund_code: string; fund_name?: string | null; weight: number }[]): string {
+}, holdings?: { fund_code: string; fund_name?: string | null; weight: number }[],
+   dc?: DailyContextData, asOfDate?: string): string {
   if (!reports) return ''
+  const cooldowns = computeVehicleCooldowns(dc, asOfDate ?? '')
   const part = (label: string, body: string): string =>
     `────────── ${label} ──────────\n${body && body.trim() ? body.trim() : '（截至今日暂无该报告——按 METHODOLOGY 保守处理）'}`
   const hasMacro = !!(reports.macroNews && reports.macroNews.trim())
@@ -872,8 +976,9 @@ function marketReportsBlock(reports?: {
     part('market_context（行情 / regime / risk_state）', reports.context),
     part('market_mainline（主线板块 + 可投基金池）', reports.mainline),
     part('mainline_rotation（核心/卫星组合骨架 + 今日动作）', reports.rotation)
-      + vehicleCheckBlock(reports.mainline, holdings)
-      + mainPositionLadderBlock(reports.mainline, holdings),
+      + vehicleCheckBlock(reports.mainline, holdings, cooldowns)
+      + mainPositionLadderBlock(reports.mainline, holdings)
+      + tradeDisciplineBlock(dc, asOfDate ?? '', cooldowns),
     ...(hasMacro ? [part('macro_news（宏观 / 政策 / 事件资讯 · 当期）', reports.macroNews as string)] : []),
   ].join('\n\n')
   const n = hasMacro ? '四' : '三'
@@ -992,7 +1097,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const kind = botKindOf(ctx.botId)
   let pipelineBlock: string
   if (kind === 'multi-fund') {
-    pipelineBlock = marketReportsBlock(ctx.marketReports, ctx.dailyContext?.account?.holdings)
+    pipelineBlock = marketReportsBlock(ctx.marketReports, ctx.dailyContext?.account?.holdings, ctx.dailyContext, ctx.date)
   } else {
     pipelineBlock = injectedSkillsBlock(ctx.injectedSkills)
   }

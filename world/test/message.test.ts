@@ -632,3 +632,119 @@ test('charterBlock: 宪章未声明→声明指引注入；已声明无复评→
   assert.doesNotMatch(declared, /【配置宪章/)
   rmSync(w, { recursive: true, force: true })
 })
+
+// ── 交易纪律核对（载体冷却 + 防拆单）──────────────────────────────────────────
+// 系统块由 recentOrders + benchmark 交易日历确定性推算。断言口径：
+//   冷却 = 清仓日后第 1..10 交易日封禁（left = 10+1-elapsed，与 min_hold 同防 off-by-one）；
+//   拆单窗口 = 同向近 5 交易日；数据缺失 → 整块消失、载体核对回 ✗（行为不变）。
+const DISCIPLINE_MAINLINE = [
+  'regime：**抱主线·v4**（第 3 天）',
+  '## ⑤ 可投基金池',
+  '| 在管板块 | 角色 | 指定载体 | 纯度 |',
+  '|---|---|---|---|',
+  '| BK1106.DC 创新药 | 卫星 | 012738 广发创新药ETF联接C | ✓纯载体 |',
+].join('\n')
+
+function disciplineCtxBase(w: string) {
+  return {
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot105', quotesPath: '/q.json',
+    marketReports: { context: 'ctx', mainline: DISCIPLINE_MAINLINE, rotation: 'rot' },
+  }
+}
+
+const DISCIPLINE_BENCH = {
+  code: 'buyable-pool', name: '买池等权',
+  pointsByDate: { '2024-03-11': 0, '2024-03-12': 0.1, '2024-03-13': 0.2, '2024-03-14': 0.1, '2024-03-15': 0.3 },
+  latestCumulativePct: 0.3,
+}
+
+function disciplineAccount(recentOrders: unknown) {
+  return {
+    asOfDate: '2024-03-18',
+    account: { initial_capital: 1_000_000, cash_available: 800_000, cash_in_transit: 0, market_value: 200_000, total_value: 1_000_000 },
+    holdings: [
+      { fund_code: '510300', fund_name: '沪深300ETF', shares: 89000, amount_invested: 200_000, latest_nav: 2.25, market_value: 200_000, unrealized_pnl_pct: 0.1, weight: 0.2, holding_days: 5, entry_date: '2024-03-13' },
+    ],
+    pendingOrders: [],
+    recentOrders,
+  }
+}
+
+test('交易纪律核对：清仓载体渲染 ⏳ 冷却（不亮 ✗）+ 冷却/拆单/避险一次到位行', () => {
+  const w = tmpWorldWithOverview('2024-03-18', 'x')
+  const m = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    dailyContext: {
+      account: disciplineAccount([
+        // 012738 于 03-12 清仓（confirmed sell，且不在当前持仓）→ elapsed=(03-12,03-18]={13,14,15,18}=4 → 余 7
+        { fund_code: '012738', order_type: 'sell', order_date: '2024-03-12', status: 'confirmed', order_amount: 50000 },
+        // 510300 于 03-15 有确认买单 → 拆单窗口内（elapsed=1 <5）
+        { fund_code: '510300', order_type: 'buy', order_date: '2024-03-15', status: 'confirmed', order_amount: 100000 },
+      ]),
+      benchmark: DISCIPLINE_BENCH,
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  // 载体核对：冷却中的指定载体 ⏳，不亮 ✗、不触发 anyMissing 施压文案
+  assert.match(m, /⏳ 冷却中（2024-03-12 清仓，余 7 交易日不得买回）/)
+  assert.doesNotMatch(m, /✗ 未建仓/)
+  assert.doesNotMatch(m, /上表有 ✗\/△ 板块/)
+  // 纪律块三要素
+  assert.match(m, /交易纪律核对（系统核算 · 载体冷却 \+ 防拆单）/)
+  assert.match(m, /012738：你于 2024-03-12 清仓卖出，\*\*余 7 个交易日\*\*内不得买回/)
+  assert.match(m, /510300 近 5 个交易日已有买入单（2024-03-15）——今天再下同向单 = 拆单违规/)
+  assert.match(m, /引擎明令动作\*\*不受此限/)
+  assert.match(m, /避险 \/ 止损卖出必须一次到位/)
+  rmSync(w, { recursive: true, force: true })
+})
+
+test('交易纪律核对：冷却期满回 ✗；仍持有的基金卖单不算清仓；无 recentOrders 整块消失', () => {
+  const w = tmpWorldWithOverview('2024-03-18', 'x')
+  // 期满：清仓在 10+ 个交易日前（日历只有 5+今日=6 天，elapsed=6 → 余 5 仍在冷却；改用足长日历验证期满）
+  const longBench = {
+    code: 'buyable-pool', name: '买池等权',
+    pointsByDate: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`2024-03-${String(i + 4).padStart(2, '0')}`, 0])),
+    latestCumulativePct: 0,
+  }
+  const expired = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    dailyContext: {
+      account: disciplineAccount([
+        // 清仓于 03-04，日历 03-04..03-15 + 今日 03-18 → elapsed=(03-04,03-18]=12 ≥ 11 → 冷却结束
+        { fund_code: '012738', order_type: 'sell', order_date: '2024-03-04', status: 'confirmed', order_amount: 50000 },
+      ]),
+      benchmark: longBench,
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(expired, /⏳ 冷却中/)
+  assert.match(expired, /✗ 未建仓/)
+  assert.match(expired, /当前无冷却中基金/)
+
+  // 仍持有（部分卖出）→ 不算清仓不冷却
+  const partial = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    dailyContext: {
+      account: {
+        ...disciplineAccount([
+          { fund_code: '012738', order_type: 'sell', order_date: '2024-03-14', status: 'confirmed', order_amount: 20000 },
+        ]),
+        holdings: [
+          { fund_code: '012738', fund_name: '广发创新药ETF联接C', shares: 10000, amount_invested: 15000, latest_nav: 1.5, market_value: 15000, unrealized_pnl_pct: 0, weight: 0.015, holding_days: 9, entry_date: '2024-03-05' },
+        ],
+      },
+      benchmark: DISCIPLINE_BENCH,
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(partial, /⏳ 冷却中/)
+  // 012738 仍持有 1.5% → 载体核对显示 △，拆单行仍提示其卖出单在窗口内
+  assert.match(partial, /△ 仅 1\.5%/)
+  assert.match(partial, /012738 近 5 个交易日已有卖出单（2024-03-14）/)
+
+  // 无 recentOrders（老快照）→ 纪律块整体消失，载体核对回 ✗（行为不变）
+  const legacy = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    dailyContext: { account: disciplineAccount(undefined), benchmark: DISCIPLINE_BENCH },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(legacy, /交易纪律核对/)
+  assert.match(legacy, /✗ 未建仓/)
+  rmSync(w, { recursive: true, force: true })
+})
