@@ -748,3 +748,57 @@ test('交易纪律核对：冷却期满回 ✗；仍持有的基金卖单不算�
   assert.match(legacy, /✗ 未建仓/)
   rmSync(w, { recursive: true, force: true })
 })
+
+// ── 单指数持有承诺块 ──────────────────────────────────────────────
+const HC_FEES = [
+  { fund_code: '019875', fund_name: 'CS稀金属ETF联接C', found: true,
+    purchase_fee_pct: 0, redeem_tiers: [{ max_days: 7, rate_pct: 1.5 }, { max_days: null, rate_pct: 0 }],
+    mgmt_fee_pct_annual: 0.5, custody_fee_pct_annual: 0.1, sales_service_fee_pct_annual: 0.3 },
+]
+const HC_BENCH = {
+  code: 'buyable-pool', name: '买池等权',
+  pointsByDate: { '2024-03-11': 0, '2024-03-12': 0.1, '2024-03-13': 0.2, '2024-03-14': 0.1, '2024-03-15': 0.3 },
+  latestCumulativePct: 0.3,
+}
+function hcAccount(recentOrders: unknown, holdings: unknown) {
+  return {
+    asOfDate: '2024-03-18',
+    account: { initial_capital: 1_000_000, cash_available: 500_000, cash_in_transit: 0, market_value: 500_000, total_value: 1_000_000 },
+    holdings, pendingOrders: [], recentOrders,
+  }
+}
+
+test('持有承诺块：单指数 bot 恒渲染建仓承诺 + 免赎档；多基金不渲染；无费率空串', () => {
+  const w = tmpWorldWithOverview('2024-03-18', 'x')
+  const single = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: {
+      fundFees: HC_FEES, benchmark: HC_BENCH,
+      account: hcAccount(
+        [{ fund_code: '019875', order_type: 'buy', order_date: '2024-03-01', status: 'confirmed', order_amount: 300000 }],
+        [{ fund_code: '019875', fund_name: 'CS稀金属ETF联接C', shares: 140000, amount_invested: 300000, latest_nav: 2.14, market_value: 300000, weight: 0.3 }],
+      ),
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(single, /持有承诺核对（系统核算 · 早赎红线）/)
+  assert.match(single, /建仓 = 持有承诺/)
+  assert.match(single, /019875（CS稀金属ETF联接C）：持满 7 自然日免赎；不足确定亏 1\.50% 早赎费/)
+
+  // 多基金 bot101 → 不渲染（门控）
+  const multi = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot101', quotesPath: '/q.json',
+    dailyContext: {
+      fundFees: HC_FEES, benchmark: HC_BENCH,
+      account: hcAccount([], []),
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(multi, /持有承诺核对/)
+
+  // 无 fundFees → 空串
+  const noFees = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: { benchmark: HC_BENCH, account: hcAccount([], []) },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(noFees, /持有承诺核对/)
+  rmSync(w, { recursive: true, force: true })
+})

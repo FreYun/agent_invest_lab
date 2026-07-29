@@ -902,6 +902,65 @@ function tradeDisciplineBlock(
   return `\n\n${lines.join('\n')}`
 }
 
+// ── 单指数持有承诺块（早赎红线可见化 · 防翻烙饼）──────────────────────────
+// 只对单指数 bot（bot1~20）渲染。牙齿①：建仓=承诺持有到免赎档（前置到买入）；
+// 牙齿②：窗内持仓今日卖出的确切早赎费 + 思考闸（窗内离场须 mem0 写充分理由，审计兜底）。
+// 数据全部现成、确定性、无未来函数；任一缺失→空串，零回归。赎回费按自然日判定。
+
+// 自然日差（含跨月/跨年，按 UTC ISO 日期）。
+function calendarDaysBetween(from: string, to: string): number {
+  const a = Date.parse(`${from}T00:00:00Z`), b = Date.parse(`${to}T00:00:00Z`)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return -1
+  return Math.round((b - a) / 86400000)
+}
+
+// 从赎回阶梯求「免赎档天数 windowDays」与「持有 calDays 自然日的命中费率」。
+// tiers 例：[{max_days:7,rate_pct:1.5},{max_days:null,rate_pct:0}] → windowDays=7；
+//   rateForDays(k<7)=1.5、rateForDays(k≥7)=0。全程零赎回费（无 rate>0 档）→ null（不渲染）。
+function redeemPenaltyOf(fee: FundFee | undefined): { windowDays: number; rateForDays: (calDays: number) => number } | null {
+  const tiers = fee?.redeem_tiers
+  if (!tiers || !tiers.length) return null
+  let windowDays = 0
+  for (const t of tiers) if (t.rate_pct > 0 && t.max_days != null && t.max_days > windowDays) windowDays = t.max_days
+  if (windowDays <= 0) return null
+  const rateForDays = (calDays: number): number => {
+    let best = 0, bestMax = Infinity
+    for (const t of tiers) {
+      const md = t.max_days == null ? Infinity : t.max_days
+      if (calDays < md && md <= bestMax) { bestMax = md; best = t.rate_pct }
+    }
+    return best
+  }
+  return { windowDays, rateForDays }
+}
+
+function holdCommitmentBlock(dc: DailyContextData | undefined, botId: string, asOfDate: string): string {
+  if (botKindOf(botId) !== 'single-fund') return ''
+  const fees = dc?.fundFees
+  if (!fees?.length) return ''
+  // 承诺行（恒定）：对每只"有早赎惩罚档"的基金列免赎档。
+  const commit: string[] = []
+  for (const f of fees) {
+    const pen = redeemPenaltyOf(f)
+    if (!pen) continue
+    commit.push(`  - ${f.fund_code}${f.fund_name ? `（${f.fund_name}）` : ''}：持满 ${pen.windowDays} 自然日免赎；不足确定亏 ${fmtNum(pen.rateForDays(0), 2)}% 早赎费。`)
+  }
+  if (!commit.length) return '' // 全程零赎回费的 bot：无翻烙饼成本，不渲染。
+  const lines: string[] = []
+  lines.push('────────── 持有承诺核对（系统核算 · 早赎红线） ──────────')
+  lines.push('【建仓 = 持有承诺】买入/加仓即承诺持有到免赎档，窗内离场确定吃早赎费——买之前就想清楚能不能拿住：')
+  lines.push(...commit)
+  // 牙齿②窗内持仓思考闸（Task 2 填充）。
+  const gate = inWindowGateLines(dc, asOfDate, fees)
+  if (gate.length) lines.push(...gate)
+  return `\n\n${lines.join('\n')}`
+}
+
+// Task 2 之前先给个空实现，保证 Task 1 可独立通过。
+function inWindowGateLines(_dc: DailyContextData | undefined, _asOfDate: string, _fees: FundFee[]): string[] {
+  return []
+}
+
 // 载体核对块（系统核算，确定性）：把 market_mainline『⑤ 可投基金池』的指定载体逐一对照
 // 当日真实持仓，明确"该板块是否已按标准档建仓"。动机：bot 会把存量同主题旧持仓 / 低重叠代理
 // 认领成板块载体从而跳过『新进[卫星]』建仓（每次换一个说法），方法论文本堵不住；这里由系统
@@ -1128,10 +1187,12 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
     maxGap: ctx.deepResearchMaxGapDays,
     lastDate: ctx.deepResearchLastDate,
   })
+  // 单指数持有承诺块（多基金返回空串，安全）。
+  const holdCommit = holdCommitmentBlock(ctx.dailyContext, ctx.botId, ctx.date)
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${beliefStr}${charterPart}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${holdCommit}${beliefStr}${charterPart}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -1144,5 +1205,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${beliefStr}${charterPart}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${holdCommit}${beliefStr}${charterPart}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
 }
