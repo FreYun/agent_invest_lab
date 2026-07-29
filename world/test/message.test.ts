@@ -346,10 +346,13 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
   // termination contract，Day N 之前没有 footer，LLM 默认"没事做了就停"。
   // 真实事故 2：bot7 dash-2026-05-19 Day 29，巡检明确写"2/07 减仓至 40%"，mem0_add 落库，但当日没调任何 sell 工具
   // ——把决策推到下一日 = 决策蒸发（下一日新会话不继承"明天计划"）。
-  // FOOTER_BRIEF 补三条：(1) 决策必须当日执行；(2) 列了 todo 就要做（或明确说放下并写理由）；(3) 结束前必须 mem0_add。
+  // 真实事故 3：bot102 oos-bot101-daily 2026-07-28，reply.json 里 reply 字段 791 字全是 belief yaml，
+  // 详细决策留在 msg[2] 的 540 字中间轮（工具调用之前），market-reports 页面「当日思考」卡片一片空。
+  // FOOTER_BRIEF 现补五条：(1) 决策必须当日执行；(2) 列了 todo 就要做（或明确说放下并写理由）；
+  // (3) 结束前必须 mem0_add；(4) 最后一条 assistant message = 结构化当日决策 markdown。
   const w = tmpWorldWithOverview('2024-03-19', 'overview')
 
-  // Day N 必须带上 footer 的三条规则
+  // Day N 必须带上 footer 的五条规则
   const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot-test', quotesPath: '/q.json' })
   assert.match(brief, /结束之前必做/)
   // 规则 1：决策必须当日执行——含执行工具名 + "决策从未发生" 反例
@@ -369,6 +372,21 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
   assert.match(brief, /纯 mem0_search \+ mem0_add 不算完成一天/)
   assert.match(brief, /至少 1 次调用非 mem0 的研究\/行情\/数据工具/)
   assert.match(brief, /不查就 mem0 落库\s*=\s*自欺欺人/)
+  // 规则 4（bot102 2026-07-28 修复）：最后一条 assistant message 必须是结构化当日决策 markdown。
+  // 关键字段（风险状态 / 市场环境 / 主线判断 / 今日动作 / 执行结果 / 总仓位 / 关键观察）都在，
+  // 至少 1 个表格，且明确禁止"决策完成/methodology 已更新/mem0_add 已存/单个 belief yaml"这种短收尾。
+  assert.match(brief, /最后一条 assistant message = 结构化当日决策 markdown/)
+  assert.match(brief, /至少 1 个 markdown 表格/)
+  assert.match(brief, /风险状态/)
+  assert.match(brief, /市场环境/)
+  assert.match(brief, /主线判断/)
+  assert.match(brief, /今日动作/)
+  assert.match(brief, /执行结果/)
+  assert.match(brief, /总仓位/)
+  assert.match(brief, /关键观察/)
+  assert.match(brief, /当日思考」卡片唯一展示的入口/)
+  assert.match(brief, /决策完成/)
+  assert.match(brief, /belief yaml/)
 
   // briefRules 也补了 5 步节奏——把"先看数据 → 拉新维度 → mem0 对比 → 决策 → 落库"显式写出，
   // 把"调至少 1 个非 mem0 工具"标为 ② 步骤+黑体警告

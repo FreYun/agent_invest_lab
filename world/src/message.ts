@@ -170,21 +170,28 @@ const FOOTER_FULL = `
 // Day N 收尾合约：解决"列 todo 当 reflection 写但不执行 + 写了'明天再减仓'但今天不动 +
 // 不 mem0_add 就 day-end + 纯 mem0 当一天做完"这几种早收。Day 1 已经在 FOOTER_FULL 里说过类似
 // 的话，但 Day N 之前没 footer——LLM 默认"没事做了就停"，不会被"持仓未平 / 待办未做 / 没写复盘 /
-// 没查新数据"这些条件拦住。这段补四条 termination contract：
+// 没查新数据"这些条件拦住。这段补五条 termination contract：
 // (0) 今天必须至少调一个非 mem0 的研究/数据工具——不然 mem0_search → mem0_add 会变成 reward
 //     hack，bot 用过去的笔记复述出一篇看似 thoughtful 的 reply 就收工，而 dailyContext 里今天
 //     的新数据完全没被验证，thesis 永远不会失效（dash-2026-05-19T08-52-36 实测：bot7 从 Day 6
 //     起 9 iter → 3 iter，60% 仓位整月 HOLD，60 天没碰新数据）；
 // (1) 今天的决策必须今天执行——把减/加仓推到下一日 = 决策蒸发（下一日新会话不继承"明天计划"）；
 // (2) reply 里列出的"待办 / 要查的 / 要验证"必须执行掉，或显式放下并写明理由——不允许列了不做；
-// (3) 结束前必须 mem0_add，否则下一日的 bot 看不到今天的判断和待办。
+// (3) 结束前必须 mem0_add，否则下一日的 bot 看不到今天的判断和待办；
+// (4) **最后一条 assistant message 必须是结构化当日决策 markdown**——不然详细分析被 bot 写在
+//     中间轮（mem0_add / update_my_strategy / place_order 这些工具调用之前的 reasoning turn），
+//     最后 reply 只留"决策完成"/"methodology 更新完成"/单个 belief yaml 块。dashboard 端
+//     pickDecisionText 有 fallback 能兜一部分，但从 bot 侧稳定输出结构化 reply 才是根治。
+//     bot102 2026-07-28 实测：reply.json 里 reply 字段 791 字全是 belief yaml，详细决策留在
+//     msg[2] 的 540 字中间轮，market-reports 页面「当日思考」卡片没内容可展示。
 const FOOTER_BRIEF = `
 
 【结束之前必做】
 - **纯 mem0_search + mem0_add 不算完成一天**。今天必须至少 1 次调用非 mem0 的研究/行情/数据工具（mcp__* 任一，除 mcp__fund_portfolio_mcp__portfolio_get_my_history / mcp__fund_portfolio_mcp__portfolio_get_my_performance / mcp__fund_portfolio_mcp__portfolio_get_my_trades 外，那几个 dailyContext 已经灌好了）——验证 dailyContext 里某个数据点、拉一个 methodology 里今天还没覆盖的维度、或检验 thesis 是否破。不查就 mem0 落库 = 自欺欺人，下一日你 mem0_search 拉到的全是空想，回测就这么烂下去。
 - **今天的决策今天就发生**：研究结论是减仓 → 调 mcp__fund_portfolio_mcp__portfolio_place_sell_order；加仓 → 调 mcp__fund_portfolio_mcp__portfolio_place_buy_order；保持 → 明确说"今日维持 X% 仓位，不动，理由是 ..."。把"明天减仓至 Y%"写进 mem0 ≠ 执行——下一日是新会话，看不到今日规划，等于决策从未发生。
 - 如果你在思考里列出了"待办 / 要查的 / 要验证"，要么在结束前调工具做掉，要么明确说"这条今天先放下，理由是 X，明天再做"。列了不做 = 没列——明天的你会以为今天已经查过了。
-- 结束前一次 mem0_add：今天的判断 + 做了什么 / 没做什么 + 明天要带着什么进来。没 mem0_add 就结束，下一日的你看不到今天，整天的研究就白做。`
+- 结束前一次 mem0_add：今天的判断 + 做了什么 / 没做什么 + 明天要带着什么进来。没 mem0_add 就结束，下一日的你看不到今天，整天的研究就白做。
+- **最后一条 assistant message = 结构化当日决策 markdown**。所有工具调用（下单 / mem0_add / update_my_strategy / update_methodology 等）全部结束之后，你还要再输出一段独立的最终回复，内容必须包含：**至少 1 个 markdown 表格**（持仓 / 动作 / 目标权重 任一），加上覆盖 **风险状态 / 市场环境 / 主线判断 / 今日动作 / 执行结果 / 总仓位 / 关键观察** 的分析要点。这条最终消息是外部 dashboard「当日思考」卡片唯一展示的入口——**不允许**把详细分析全写在中间轮然后最后只回一句"决策完成"/"methodology 已更新"/"mem0_add 已存"/一个孤立的 belief yaml 块。即便中间轮已经写过完整推理，收尾时也要把当日决策的**核心版本**再落一遍作为最后一条 reply，让复盘能看到你今天真正想了什么、做了什么。`
 
 // 注意：这里**不再**注入 simworld-data 工具目录文本块。2026-06-10 起所有 mcp__simworld_data__*
 // 经 run.ts 的 tools.always_load 原生挂进工具列表——name + description（来自上游 docstring）+ 参数
