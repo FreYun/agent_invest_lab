@@ -234,7 +234,7 @@ function readRunStateMeta(worldRoot: string, runId: string): { status: string; b
 }
 
 /** bot 每天滚动刷新、注回 prompt 的自我反思内容（来自当日 sent.md / reply.json 的真值切片）。
- *  - memoryWindow: 【交易记忆窗口】= buildHistoryWindow 产出的"最近原样 + 更早 4 维度压缩"笔记
+ *  - memoryWindow: 【交易记忆窗口】= buildHistoryWindow 产出的"最近原样 + 更早 5 维度压缩"笔记
  *  - decision:     reply.json 的 reply 字段 = bot 当日收尾的决策总结 */
 interface BotReflection {
   tradeDate: string
@@ -257,18 +257,39 @@ function sliceSentSections(md: string): { header: string; body: string }[] {
 /** reply.json 的 `reply` 只是 agent 最后一条 assistant 消息。多数日子它就是当日决策总结，
  *  但偶尔 bot 在给出完整决策后又追一句收尾闲话（如"要开始后台历史类比分析吗？"），`reply` 就
  *  只截到那句短话，「当日思考」看着像空的——决策其实躺在前一条 assistant 消息里。
- *  规则：正常仍用 `reply`（末条即决策，历史健康日 reply 均 >= 260 字，行为不变）；仅当 `reply`
- *  短到不像决策且存在明显更长的 assistant 正文时，回退到最长那条（= 被挤到非末尾的真决策）。 */
+ *  更近期的一种退化：bot 收尾把详细决策写去中间轮的 assistant 消息，`reply` 只留精简总结或
+ *  单个 ```yaml belief: ``` 块——前端 stripBelief 会把纯 belief 块整个剥空。
+ *  规则（按顺序）：
+ *   1) `reply` 剥掉 belief 块后仍 >= STUB 阈值，且没被中间轮明显碾压 → 用 `reply`（保持历史行为）
+ *   2) `reply` 剥完基本没内容（含"整条就是 belief"的情况）→ 回退最长中间轮
+ *   3) 最长中间轮 >= 2× reply 且绝对量足够（> 800 字符）→ 回退最长中间轮（详细分析被挤走了） */
 const DECISION_STUB_MAXLEN = 200
+const DECISION_LONG_FALLBACK_ABS = 800
+const DECISION_LONG_FALLBACK_RATIO = 2
+function stripBeliefBlocks(md: string): string {
+  const fence = '```'
+  const re = new RegExp(fence + '[^\\n]*\\n[\\s\\S]*?' + fence, 'g')
+  return String(md ?? '').replace(re, m => /belief\s*:/.test(m) ? '' : m).replace(/\n{3,}/g, '\n\n').trim()
+}
 function pickDecisionText(parsed: { reply?: unknown; assistant_messages?: unknown }): string {
   const reply = typeof parsed.reply === 'string' ? parsed.reply : ''
   const msgs = Array.isArray(parsed.assistant_messages) ? parsed.assistant_messages : []
-  let longest = ''
+  // "最长" 按剥 belief 后的实际内容长度算：避免把一条纯 ```yaml belief:``` 块误当作详细决策
+  // （bot102 2026-07-28 的 reply 就是这种情况：字符最长但 meat=0，真决策在字符更短的中间轮）
+  let best = ''
+  let bestMeat = -1
   for (const m of msgs) {
     const c = (m as { content?: unknown } | null)?.content
-    if (typeof c === 'string' && c.length > longest.length) longest = c
+    if (typeof c !== 'string') continue
+    const meat = stripBeliefBlocks(c).length
+    if (meat > bestMeat) { bestMeat = meat; best = c }
   }
-  return (reply.length < DECISION_STUB_MAXLEN && longest.length > reply.length) ? longest : reply
+  const replyMeat = stripBeliefBlocks(reply).length
+  // 2) reply 剥完 belief 后几乎无内容 → 拿 meat 最强的中间轮兜底
+  if (replyMeat < DECISION_STUB_MAXLEN && bestMeat > replyMeat) return best
+  // 3) 详细分析被挤到中间轮：中间轮 meat 远超 reply meat 且绝对量足够
+  if (bestMeat >= replyMeat * DECISION_LONG_FALLBACK_RATIO && bestMeat >= DECISION_LONG_FALLBACK_ABS) return best
+  return reply
 }
 
 /** 读当日 sent.md / reply.json，best-effort 拼出反思内容。文件缺失（首日 / 旧 run）
