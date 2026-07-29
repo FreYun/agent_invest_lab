@@ -867,3 +867,39 @@ test('持有承诺块·思考闸：off-by-one（第7自然日=已免赎，不渲
   assert.doesNotMatch(sold, /窗内持仓 · 今日若卖出/)
   rmSync(w, { recursive: true, force: true })
 })
+
+test('持有承诺块·边界：无 recentOrders 承诺行仍渲染无闸行；Day1 路径也渲染；多档基金锚首免赎档', () => {
+  const w = tmpWorldWithOverview('2024-03-18', 'x')
+  // 无 recentOrders（老快照）：承诺行在、无闸行、不报错
+  const legacy = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: { fundFees: HC_FEES, benchmark: HC_BENCH, account: hcAccount(undefined, []) },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(legacy, /持满 7 自然日免赎/)
+  assert.doesNotMatch(legacy, /窗内持仓 · 今日若卖出/)
+
+  // Day1 路径同样渲染
+  const day1 = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: { fundFees: HC_FEES, benchmark: HC_BENCH, account: hcAccount([], []) },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(day1, /持有承诺核对（系统核算 · 早赎红线）/)
+
+  // 多档赎回阶梯：<7d 1.5% / <30d 0.5% / ≥30d 0% → 免赎档=30、rate(0)=1.5
+  const multiTier = [{ fund_code: '013403', fund_name: '某基', found: true, purchase_fee_pct: 0,
+    redeem_tiers: [{ max_days: 7, rate_pct: 1.5 }, { max_days: 30, rate_pct: 0.5 }, { max_days: null, rate_pct: 0 }] }]
+  const mt = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: {
+      fundFees: multiTier, benchmark: HC_BENCH,
+      account: hcAccount(
+        // 03-01 买，calDays=17 <30 在窗，命中 <30d 档 0.5%
+        [{ fund_code: '013403', order_type: 'buy', order_date: '2024-03-01', status: 'confirmed', order_amount: 200000 }],
+        [{ fund_code: '013403', fund_name: '某基', shares: 100000, amount_invested: 200000, latest_nav: 2.0, market_value: 200000, weight: 0.2 }],
+      ),
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(mt, /013403（某基）：持满 30 自然日免赎；不足确定亏 1\.50% 早赎费/)
+  assert.match(mt, /已持 17 自然日，距免赎还剩 13 天）。今日卖出早赎费 ≈ ¥1,?000（0\.50%）/) // 0.5%×200000=1000
+  rmSync(w, { recursive: true, force: true })
+})
