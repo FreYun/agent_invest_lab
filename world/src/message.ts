@@ -956,9 +956,60 @@ function holdCommitmentBlock(dc: DailyContextData | undefined, botId: string, as
   return `\n\n${lines.join('\n')}`
 }
 
-// Task 2 之前先给个空实现，保证 Task 1 可独立通过。
-function inWindowGateLines(_dc: DailyContextData | undefined, _asOfDate: string, _fees: FundFee[]): string[] {
-  return []
+// 窗内持仓 lot：某基金在早赎窗内买入且当前仍持有（用当前持仓市值作粗略上限）的份额。
+// 近似口径（软块够用）：取在窗买单（calDays<windowDays），按买入日倒序（新仓最可能仍在持有）
+// 用当前持仓市值封顶——已部分/全部卖出的自然被市值上限截掉；基金不在持仓即无 lot。
+function computeInWindowLots(
+  dc: DailyContextData | undefined, asOfDate: string, feesByFund: Map<string, FundFee>,
+): { fund_code: string; buyDate: string; calDays: number; windowDays: number; rate: number; amount: number }[] {
+  const orders = dc?.account?.recentOrders
+  if (!orders?.length) return []
+  const mvByFund = new Map((dc?.account?.holdings ?? []).map(h => [h.fund_code, h.market_value]))
+  const buysByFund = new Map<string, { order_date: string; order_amount: number }[]>()
+  for (const o of orders) {
+    if (o.order_type !== 'buy') continue
+    if (o.status !== 'confirmed' && o.status !== 'pending') continue
+    const arr = buysByFund.get(o.fund_code) ?? []
+    arr.push({ order_date: o.order_date, order_amount: Math.max(0, o.order_amount) })
+    buysByFund.set(o.fund_code, arr)
+  }
+  const out: { fund_code: string; buyDate: string; calDays: number; windowDays: number; rate: number; amount: number }[] = []
+  for (const [code, buys] of buysByFund) {
+    const pen = redeemPenaltyOf(feesByFund.get(code))
+    if (!pen) continue
+    let cap = mvByFund.get(code) ?? 0
+    if (cap <= 0) continue // 已清仓，无在窗份额
+    const inWin = buys
+      .map(b => ({ ...b, calDays: calendarDaysBetween(b.order_date, asOfDate) }))
+      .filter(b => b.calDays >= 0 && b.calDays < pen.windowDays)
+      .sort((a, b) => b.order_date.localeCompare(a.order_date)) // 新仓优先（仍在持有）
+    for (const b of inWin) {
+      if (cap <= 0) break
+      const amount = Math.min(b.order_amount, cap)
+      cap -= amount
+      out.push({ fund_code: code, buyDate: b.order_date, calDays: b.calDays, windowDays: pen.windowDays, rate: pen.rateForDays(b.calDays), amount })
+    }
+  }
+  return out.sort((a, b) => a.fund_code.localeCompare(b.fund_code) || a.buyDate.localeCompare(b.buyDate))
+}
+
+function inWindowGateLines(dc: DailyContextData | undefined, asOfDate: string, fees: FundFee[]): string[] {
+  const feesByFund = new Map(fees.map(f => [f.fund_code, f]))
+  const lots = computeInWindowLots(dc, asOfDate, feesByFund)
+  if (!lots.length) return []
+  const pts = dc?.benchmark?.pointsByDate
+  const lines: string[] = ['【窗内持仓 · 今日若卖出的确切成本】']
+  for (const lot of lots) {
+    const fee = (lot.rate / 100) * lot.amount
+    let moveStr = ''
+    if (pts && pts[asOfDate] != null && pts[lot.buyDate] != null) {
+      const mv = pts[asOfDate] - pts[lot.buyDate]
+      moveStr = `；标的自买入 ${mv >= 0 ? '+' : ''}${fmtNum(mv, 2)}%`
+    }
+    lines.push(`  - ${lot.fund_code}：${lot.buyDate} 买入（已持 ${lot.calDays} 自然日，距免赎还剩 ${lot.windowDays - lot.calDays} 天）。今日卖出早赎费 ≈ ¥${fmtNum(fee, 0)}（${fmtNum(lot.rate, 2)}%）${moveStr}`)
+  }
+  lines.push('⚠️ 今日若要在窗内卖出上述份额：**先在 mem0 写下经过思考的充分理由再下单**——不是「指标破位」，不是「感觉风险大」，而是论证为什么这个临时情况足以推翻你建仓时的持有承诺。审计会核：窗内卖出而无实质论证 = 违规。')
+  return lines
 }
 
 // 载体核对块（系统核算，确定性）：把 market_mainline『⑤ 可投基金池』的指定载体逐一对照

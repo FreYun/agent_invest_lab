@@ -802,3 +802,68 @@ test('持有承诺块：单指数 bot 恒渲染建仓承诺 + 免赎档；多基
   assert.doesNotMatch(noFees, /持有承诺核对/)
   rmSync(w, { recursive: true, force: true })
 })
+
+test('持有承诺块·思考闸：窗内买入渲染早赎费+距免赎+思考闸；持满7日不渲染闸行', () => {
+  const w = tmpWorldWithOverview('2024-03-18', 'x')
+  // 03-15 买入（asOfDate 03-18，自然日差=3 <7 → 在窗），持仓市值 300000
+  const inWin = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: {
+      fundFees: HC_FEES, benchmark: HC_BENCH,
+      account: hcAccount(
+        [{ fund_code: '019875', order_type: 'buy', order_date: '2024-03-15', status: 'confirmed', order_amount: 300000 }],
+        [{ fund_code: '019875', fund_name: 'CS稀金属ETF联接C', shares: 140000, amount_invested: 300000, latest_nav: 2.14, market_value: 300000, weight: 0.3 }],
+      ),
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(inWin, /窗内持仓 · 今日若卖出的确切成本/)
+  assert.match(inWin, /019875：2024-03-15 买入（已持 3 自然日，距免赎还剩 4 天）/)
+  assert.match(inWin, /今日卖出早赎费 ≈ ¥4,?500（1\.50%）/) // 1.5% × 300000 = 4500
+  assert.match(inWin, /先在 mem0 写下经过思考的充分理由再下单/)
+  assert.match(inWin, /审计会核：窗内卖出而无实质论证 = 违规/)
+
+  // 持满 7 自然日（02-01 买）→ 无闸行，但承诺行仍在
+  const held = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: {
+      fundFees: HC_FEES, benchmark: HC_BENCH,
+      account: hcAccount(
+        [{ fund_code: '019875', order_type: 'buy', order_date: '2024-02-01', status: 'confirmed', order_amount: 300000 }],
+        [{ fund_code: '019875', fund_name: 'CS稀金属ETF联接C', shares: 140000, amount_invested: 300000, latest_nav: 2.14, market_value: 300000, weight: 0.3 }],
+      ),
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(held, /持满 7 自然日免赎/)      // 承诺行在
+  assert.doesNotMatch(held, /窗内持仓 · 今日若卖出/) // 无闸行
+  rmSync(w, { recursive: true, force: true })
+})
+
+test('持有承诺块·思考闸：off-by-one（第7自然日=已免赎，不渲染）+ 已清仓不警示', () => {
+  const w = tmpWorldWithOverview('2024-03-18', 'x')
+  // 03-11 买，到 03-18 = 7 自然日 → calDays=7 不 <7 → 免赎，无闸行
+  const day7 = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: {
+      fundFees: HC_FEES, benchmark: HC_BENCH,
+      account: hcAccount(
+        [{ fund_code: '019875', order_type: 'buy', order_date: '2024-03-11', status: 'confirmed', order_amount: 300000 }],
+        [{ fund_code: '019875', fund_name: 'CS稀金属ETF联接C', shares: 140000, amount_invested: 300000, latest_nav: 2.14, market_value: 300000, weight: 0.3 }],
+      ),
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(day7, /窗内持仓 · 今日若卖出/)
+
+  // 已清仓（holdings 无该基金）→ 无在窗份额可警示
+  const sold = renderDailyMessage({
+    worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
+    dailyContext: {
+      fundFees: HC_FEES, benchmark: HC_BENCH,
+      account: hcAccount(
+        [{ fund_code: '019875', order_type: 'buy', order_date: '2024-03-15', status: 'confirmed', order_amount: 300000 }],
+        [],
+      ),
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(sold, /窗内持仓 · 今日若卖出/)
+  rmSync(w, { recursive: true, force: true })
+})
