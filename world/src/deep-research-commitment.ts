@@ -5,6 +5,9 @@ export interface DeepResearchCommitment {
   commit_until: string
   min_holding_days: number
   thesis: string
+  /** 承诺类型：deep_research=深研日建仓（重研可证伪平仓）；min_hold=普通建仓（仅硬风控/到期解锁）。
+   *  可选：老 run 的 state.json 无此字段，读取时缺省视作 deep_research。 */
+  kind?: 'deep_research' | 'min_hold'
   source_amount?: number
 }
 
@@ -93,6 +96,7 @@ export function upsertDeepResearchCommitments(
   botId: string,
   tradeDate: string,
   buys: Array<SuccessfulFundAction & { minHoldingDays: number }>,
+  kind: 'deep_research' | 'min_hold',
 ): DeepResearchCommitmentsByBot {
   const next: DeepResearchCommitmentsByBot = structuredClone(current ?? {})
   const byFund = { ...(next[botId] ?? {}) }
@@ -100,14 +104,22 @@ export function upsertDeepResearchCommitments(
     const minHoldingDays = Math.max(1, Math.floor(buy.minHoldingDays))
     const existing = byFund[buy.fundCode]
     const candidateUntil = addCalendarDays(tradeDate, minHoldingDays)
+    // 同一基金已有尚未到期的承诺时，加仓只能延长、不能缩短承诺。
+    const commitUntil = existing && existing.commit_until > candidateUntil ? existing.commit_until : candidateUntil
+    // kind 只升不降：已有活跃 deep_research 承诺时，min_hold 加仓不把它降级为 min_hold
+    // （深研标的的重研平仓通道要保留）；min_hold 承诺遇 deep_research 买入则升级。
+    const existingActiveDeep = Boolean(existing && (existing.kind ?? 'deep_research') === 'deep_research' && isCommitmentActive(existing, tradeDate))
+    const resolvedKind: 'deep_research' | 'min_hold' = kind === 'deep_research' || existingActiveDeep ? 'deep_research' : 'min_hold'
     byFund[buy.fundCode] = {
       bot_id: botId,
       fund_code: buy.fundCode,
       committed_on: tradeDate,
-      // 同一基金已有尚未到期的深研承诺时，加仓只能延长、不能缩短承诺。
-      commit_until: existing && existing.commit_until > candidateUntil ? existing.commit_until : candidateUntil,
+      commit_until: commitUntil,
       min_holding_days: minHoldingDays,
-      thesis: buy.reason || existing?.thesis || '深研日建仓；持有至承诺到期或下一次深研明确证伪。',
+      kind: resolvedKind,
+      thesis: buy.reason || existing?.thesis || (resolvedKind === 'deep_research'
+        ? '深研日建仓；持有至承诺到期或下一次深研明确证伪。'
+        : '普通建仓最短持有承诺；持有至承诺到期或系统硬风控放行。'),
       ...(buy.amount !== undefined ? { source_amount: buy.amount } : {}),
     }
   }

@@ -23,9 +23,9 @@ test('深研成功买入形成承诺：失败单不计、同基金加仓只延�
   const actions = extractSuccessfulFundActions(trace)
   assert.deepEqual(actions.buys, [{ fundCode: '008591', amount: 200000, reason: '深研确认宽基上行，轻仓建立观察位' }])
 
-  let state = upsertDeepResearchCommitments({}, 'bot16d', '2025-10-21', actions.buys.map(b => ({ ...b, minHoldingDays: 7 })))
+  let state = upsertDeepResearchCommitments({}, 'bot16d', '2025-10-21', actions.buys.map(b => ({ ...b, minHoldingDays: 7 })), 'deep_research')
   assert.equal(state.bot16d['008591'].commit_until, '2025-10-28')
-  state = upsertDeepResearchCommitments(state, 'bot16d', '2025-10-22', [{ ...actions.buys[0], minHoldingDays: 3 }])
+  state = upsertDeepResearchCommitments(state, 'bot16d', '2025-10-22', [{ ...actions.buys[0], minHoldingDays: 3 }], 'deep_research')
   assert.equal(state.bot16d['008591'].commit_until, '2025-10-28')
 
   const active = activeCommitmentsForBot(state, 'bot16d', '2025-10-22', ['008591'])
@@ -110,4 +110,20 @@ test("深研承诺块在 Day 1 和后续交易日都注入每日消息", () => {
   assert.match(dayN, /深研持仓承诺（系统状态 · 跨日生效）/)
   assert.match(day1, /承诺至 2025-10-28/)
   assert.match(dayN, /承诺至 2025-10-28/)
+})
+
+test('kind 只升不降：min_hold 加仓不降级活跃 deep_research；min_hold 遇 deep_research 升级', () => {
+  // deep_research 建仓 → 之后 min_hold 加仓：kind 保持 deep_research，commit_until 取更晚
+  let s = upsertDeepResearchCommitments({}, 'bot16d', '2025-10-21', [{ fundCode: '008591', reason: '深研', minHoldingDays: 7 }], 'deep_research')
+  assert.equal(s.bot16d['008591'].kind, 'deep_research')
+  assert.equal(s.bot16d['008591'].commit_until, '2025-10-28')
+  s = upsertDeepResearchCommitments(s, 'bot16d', '2025-10-22', [{ fundCode: '008591', reason: '普通加仓', minHoldingDays: 7 }], 'min_hold')
+  assert.equal(s.bot16d['008591'].kind, 'deep_research', '活跃 deep_research 不被降级')
+  assert.equal(s.bot16d['008591'].commit_until, '2025-10-29', 'commit_until 延长到 min_hold 到期')
+
+  // min_hold 建仓 → deep_research 加仓：升级为 deep_research
+  let t = upsertDeepResearchCommitments({}, 'bot5d', '2025-10-21', [{ fundCode: '510300', reason: '普通', minHoldingDays: 7 }], 'min_hold')
+  assert.equal(t.bot5d['510300'].kind, 'min_hold')
+  t = upsertDeepResearchCommitments(t, 'bot5d', '2025-10-22', [{ fundCode: '510300', reason: '深研', minHoldingDays: 7 }], 'deep_research')
+  assert.equal(t.bot5d['510300'].kind, 'deep_research', 'min_hold 被深研买入升级')
 })
