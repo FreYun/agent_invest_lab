@@ -312,6 +312,17 @@ function loadReflection(worldRoot: string, runId: string, botId: string, date: s
   return result
 }
 
+/** live 详情的日期轴同时包含源回测与 live 日期。前端始终携带当前 live run id，
+ * 因而源回测日期需要沿 source_run_id 回退读取；若 live 当日已有任一真值内容，则保持
+ * live 优先，避免源 run 与 live 在交界日重叠时把两次不同决策混在一起。 */
+export function loadReflectionForRun(worldRoot: string, runId: string, botId: string, date: string): BotReflection {
+  const current = loadReflection(worldRoot, runId, botId, date)
+  if (!isLiveRunId(runId) || current.memoryWindow || current.decision) return current
+  const link = readLiveRunLink(worldRoot, runId)
+  if (!link || link.botId !== botId) return current
+  return loadReflection(worldRoot, link.sourceRunId, botId, date)
+}
+
 // Persistent in-process SQLite handles, one per dbPath. Replaces the old per-query
 // `sqlite3` CLI spawn: forking the CLI + reopening the ~280MB fund.db cost ~7ms per
 // query, and loadDataset fires ~200 queries per /api/backtest/data poll → ~1.5s of
@@ -2004,7 +2015,7 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
           sendJson(res, 400, { error: 'bot_id, run_id, trade_date required and must be well-formed' })
           return
         }
-        sendJson(res, 200, loadReflection(worldRoot, runId, botId, tradeDate))
+        sendJson(res, 200, loadReflectionForRun(worldRoot, runId, botId, tradeDate))
         return
       }
       // 某 (bot, run) 的方法论三件套：初始（冻结库重建）/ 最新（workspace）/ 修订轨迹。

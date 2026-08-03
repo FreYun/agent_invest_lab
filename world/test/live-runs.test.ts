@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isLiveRunId, readLiveRunLink, listLiveRuns, sourceRunIdFromLiveRunId } from '../src/backtest-dashboard/server.ts'
+import { isLiveRunId, loadReflectionForRun, readLiveRunLink, listLiveRuns, sourceRunIdFromLiveRunId } from '../src/backtest-dashboard/server.ts'
 
 function makeWorld(): string {
   const world = mkdtempSync(join(tmpdir(), 'world-'))
@@ -58,4 +58,36 @@ test('readLiveRunLink 兜底：state.json 丢了 source_run_id 时从 run id 反
 test('sourceRunIdFromLiveRunId 反推与无法解析', () => {
   assert.equal(sourceRunIdFromLiveRunId('live-bot10-20260616T095923'), 'dash-2026-06-16T09-59-23')
   assert.equal(sourceRunIdFromLiveRunId('live-broken'), '')
+})
+
+
+test("live 历史决策在本 run 无内容时回退 source run，live 当日内容优先", () => {
+  const world = mkdtempSync(join(tmpdir(), "world-"))
+  const liveRun = "live-bot20-20260601T120000"
+  const sourceRun = "dash-2026-06-01T12-00-00"
+  const date = "2026-05-29"
+  try {
+    const liveDir = join(world, "runs", liveRun)
+    const sourceDay = join(world, "runs", sourceRun, date, "bot20")
+    mkdirSync(liveDir, { recursive: true })
+    mkdirSync(sourceDay, { recursive: true })
+    writeFileSync(join(liveDir, "state.json"), JSON.stringify({ bots: ["bot20"], source_run_id: sourceRun }))
+    writeFileSync(join(sourceDay, "sent.md"), "【交易记忆窗口】\n源回测记忆")
+    writeFileSync(join(sourceDay, "reply.json"), JSON.stringify({ reply: "源回测决策" }))
+
+    assert.deepEqual(loadReflectionForRun(world, liveRun, "bot20", date), {
+      tradeDate: date,
+      memoryWindow: "【交易记忆窗口】\n源回测记忆",
+      decision: "源回测决策",
+    })
+
+    const liveDay = join(liveDir, date, "bot20")
+    mkdirSync(liveDay, { recursive: true })
+    writeFileSync(join(liveDay, "reply.json"), JSON.stringify({ reply: "live 当日决策" }))
+    assert.deepEqual(loadReflectionForRun(world, liveRun, "bot20", date), {
+      tradeDate: date,
+      memoryWindow: "",
+      decision: "live 当日决策",
+    })
+  } finally { rmSync(world, { recursive: true, force: true }) }
 })
