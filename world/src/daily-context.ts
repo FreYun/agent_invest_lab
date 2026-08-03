@@ -37,6 +37,18 @@ export interface AccountSnapshot {
   }
   holdings: HoldingRow[]
   pendingOrders: PendingOrderRow[]
+  // 最近订单（pending + confirmed，order_date desc）。供 message.ts 的交易纪律块做
+  // 确定性核算：载体清仓后 10 交易日再进冷却、同向 5 日一单防拆单。缺省 = 老快照 / 测试 mock，
+  // 纪律块整体跳过，行为不变。
+  recentOrders?: RecentOrderRow[]
+}
+
+export interface RecentOrderRow {
+  fund_code: string
+  order_type: 'buy' | 'sell' | string
+  order_date: string
+  status: string
+  order_amount: number
 }
 
 export interface HoldingRow {
@@ -249,7 +261,7 @@ async function fetchAccountSnapshot(opts: {
 }): Promise<AccountSnapshot | null> {
   try {
     const r = await runFundCli(opts.fundMcpCli, 'get_my_history',
-      ['--bot-id', opts.botId, '--run-id', opts.runId, '--limit', '30'],
+      ['--bot-id', opts.botId, '--run-id', opts.runId, '--limit', '60'],
       { timeoutMs: 30_000 })
     if (r.code !== 0) return null
     const d = JSON.parse(r.stdout) as Record<string, unknown>
@@ -309,7 +321,16 @@ async function fetchAccountSnapshot(opts: {
         order_amount: Number(o.order_amount ?? 0),
         reference_nav: Number(o.reference_nav ?? 0),
       }))
-    return { asOfDate: opts.asOfDate, account: accountForPrompt, holdings, pendingOrders }
+    const recentOrders: RecentOrderRow[] = rawOrders
+      .filter(o => o.status === 'pending' || o.status === 'confirmed')
+      .map(o => ({
+        fund_code: String(o.fund_code ?? ''),
+        order_type: String(o.order_type ?? ''),
+        order_date: String(o.order_date ?? ''),
+        status: String(o.status ?? ''),
+        order_amount: Number(o.order_amount ?? 0),
+      }))
+    return { asOfDate: opts.asOfDate, account: accountForPrompt, holdings, pendingOrders, recentOrders }
   } catch {
     return null
   }

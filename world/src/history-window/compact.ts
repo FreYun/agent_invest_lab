@@ -42,15 +42,18 @@ export function resolveLlmEndpoint(openclawJsonPath: string): LlmEndpoint {
 
 // History window 压缩端点的首选来源：每个 bot 影子 workspace 的 research-loop.yaml
 // （writeResearchLoopYaml 落的明文，内容是 JSON.stringify → 可直接 JSON.parse）。
-// 取 model.primary.{base_url, model, api_key} —— 即 bot 自身 LLM 调用的同一套端点，
-// 让压缩跟着 bot 当前 key 走，不再依赖 world/config/openclaw.json（其 provider/key 易与回测脱节）。
+// 默认取 model.primary.{base_url, model, api_key}；如果 llm.compact_model 存在，
+// 压缩使用该模型，但仍复用 primary 的 provider/base_url/api_key，避免和 bot chat 主模型耦合。
 export function resolveLlmEndpointFromRlConfig(rlConfigPath: string): LlmEndpoint {
   const cfg = JSON.parse(readFileSync(rlConfigPath, 'utf8')) as Record<string, unknown>
   const model = (typeof cfg.model === 'object' && cfg.model ? cfg.model : {}) as Record<string, unknown>
   const primary = (typeof model.primary === 'object' && model.primary ? model.primary : {}) as Record<string, unknown>
+  const llm = (typeof cfg.llm === 'object' && cfg.llm ? cfg.llm : {}) as Record<string, unknown>
   const baseUrl = typeof primary.base_url === 'string' ? primary.base_url : ''
   const apiKey = typeof primary.api_key === 'string' ? primary.api_key : ''
-  const modelId = typeof primary.model === 'string' ? primary.model : ''
+  const modelId = typeof llm.compact_model === 'string' && llm.compact_model
+    ? llm.compact_model
+    : (typeof primary.model === 'string' ? primary.model : '')
   if (!baseUrl || !apiKey || !modelId) throw new Error(`resolveLlmEndpointFromRlConfig: incomplete model.primary in ${rlConfigPath} (need base_url/api_key/model)`)
   return { baseUrl, apiKey, model: modelId }
 }
@@ -58,12 +61,13 @@ export function resolveLlmEndpointFromRlConfig(rlConfigPath: string): LlmEndpoin
 const COMPACT_SYSTEM_PROMPT = `你在帮一个量化交易 agent 维护"历史交易记忆"。
 我会给你这个 agent 过去 N 个交易日的 session 记录（包含工具调用链 + 决策反思，已去掉工具结果原文）。
 
-你的任务：把这些历史压缩成不超过 \${TARGET_CHARS} 中文字符的浓缩笔记，按以下 4 个维度组织——
+你的任务：把这些历史压缩成不超过 \${TARGET_CHARS} 中文字符的浓缩笔记，按以下 5 个维度组织——
 
 1. **踏空 / 大回撤经验**：哪些日错过了机会 / 哪些日吃了大亏，原因是什么，下次如何避免。
 2. **反复被收割的经验**：同一个错误模式（追高被套 / 抄底抄半山 / 频繁切换被双杀 / etc）出现了几次，what's the recurring trap。
-3. **新范式出现的冲击**：宏观/政策/事件级别的非线性变化（如 2025-04 TACO 交易），agent 是否捕捉到、有没有及时调整 thesis。
-4. **历次交易日的核心交易逻辑**：最重要的几个 thesis（"为什么这段时间持仓 X"），按时间排序简述演变。
+3. **验证成功的打法（可复用条件）**：哪些操作事后被证明做对了。每条必须写齐三件事：当时的**触发条件**（什么信号组合）、**动作**（进/出多少）、**边界条件**（为什么下次仍可复用、什么情况下不适用）。纯运气的盈利不许入册——拿着不动恰好涨了不算，除非当时有明确的持有论据事后被验证。
+4. **新范式出现的冲击**：宏观/政策/事件级别的非线性变化（如 2025-04 TACO 交易），agent 是否捕捉到、有没有及时调整 thesis。
+5. **历次交易日的核心交易逻辑**：最重要的几个 thesis（"为什么这段时间持仓 X"），按时间排序简述演变。
 
 输出格式（严格 markdown）：
 
@@ -71,6 +75,9 @@ const COMPACT_SYSTEM_PROMPT = `你在帮一个量化交易 agent 维护"历史�
 - ...
 
 ### 反复被收割的经验
+- ...
+
+### 验证成功的打法（可复用条件）
 - ...
 
 ### 新范式 / 范式冲击
@@ -83,6 +90,7 @@ const COMPACT_SYSTEM_PROMPT = `你在帮一个量化交易 agent 维护"历史�
 - 不要重述工具调用细节；只提炼出"经验 / 教训 / thesis"。
 - 不要超过 \${TARGET_CHARS} 字符（严格）。
 - 每一维度都要写，没有就写"暂无显著记录"。
+- 成功经验与失败教训对称对待：只记损失不记制胜打法会把 agent 推向过度保守。
 - 中文输出。`
 
 export interface CompactOptions {

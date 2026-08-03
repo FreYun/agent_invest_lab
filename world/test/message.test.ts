@@ -767,6 +767,53 @@ test('交易纪律核对：冷却期满回 ✗；仍持有的基金卖单不算�
   rmSync(w, { recursive: true, force: true })
 })
 
+test('交易纪律核对：显式交易日历可独立支撑整块（benchmark 为空也渲染）；两者皆缺才消失', () => {
+  const w = tmpWorldWithOverview('2024-03-18', 'x')
+  const orders = [
+    { fund_code: '012738', order_type: 'sell', order_date: '2024-03-12', status: 'confirmed', order_amount: 50000 },
+    { fund_code: '510300', order_type: 'buy', order_date: '2024-03-15', status: 'confirmed', order_amount: 100000 },
+  ]
+  // 实盘/大买池下 benchmark 恒为 null（runStartDate 退化 + 整池 NAV 60s 超时）。这时必须靠
+  // run.ts 传入的真实交易日历撑住整块，否则纪律核对静默消失——bot105d 381 天就是这么丢的。
+  const viaCalendar = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    tradingCalendar: ['2024-03-11', '2024-03-12', '2024-03-13', '2024-03-14', '2024-03-15', '2024-03-18'],
+    dailyContext: { account: disciplineAccount(orders) },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(viaCalendar, /交易纪律核对（系统核算 · 载体冷却 \+ 防拆单）/)
+  assert.match(viaCalendar, /012738：你于 2024-03-12 清仓卖出，\*\*余 7 个交易日\*\*内不得买回/)
+  assert.match(viaCalendar, /510300 近 5 个交易日已有买入单（2024-03-15）/)
+  assert.match(viaCalendar, /⏳ 冷却中（2024-03-12 清仓，余 7 交易日不得买回）/)
+
+  // 日历末尾就是今日（不需要补 asOfDate）→ 计数不能多算一天，仍是余 7。
+  const endsToday = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    tradingCalendar: ['2024-03-12', '2024-03-13', '2024-03-14', '2024-03-15', '2024-03-18'],
+    dailyContext: { account: disciplineAccount(orders) },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(endsToday, /\*\*余 7 个交易日\*\*内不得买回/)
+
+  // 显式日历优先于 benchmark：给一条只到 03-15 的短 benchmark + 完整日历，结果按日历算。
+  const explicitWins = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    tradingCalendar: Array.from({ length: 12 }, (_, i) => `2024-03-${String(i + 4).padStart(2, '0')}`).concat('2024-03-18'),
+    dailyContext: {
+      account: disciplineAccount([{ fund_code: '012738', order_type: 'sell', order_date: '2024-03-04', status: 'confirmed', order_amount: 50000 }]),
+      benchmark: DISCIPLINE_BENCH,
+    },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.match(explicitWins, /当前无冷却中基金/) // 按长日历 elapsed≥11 → 期满
+  assert.doesNotMatch(explicitWins, /⏳ 冷却中/)
+
+  // 两者皆缺 → 整块消失（旧行为，不回归）
+  const neither = renderDailyMessage({
+    ...disciplineCtxBase(w),
+    dailyContext: { account: disciplineAccount(orders) },
+  } as Parameters<typeof renderDailyMessage>[0])
+  assert.doesNotMatch(neither, /交易纪律核对/)
+  rmSync(w, { recursive: true, force: true })
+})
+
 // ── 单指数持有承诺块 ──────────────────────────────────────────────
 const HC_FEES = [
   { fund_code: '019875', fund_name: 'CS稀金属ETF联接C', found: true,

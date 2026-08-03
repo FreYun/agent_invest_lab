@@ -119,6 +119,30 @@ test('listBotSessionsBefore: 严格 <beforeDate，按日期升序', () => {
   cleanup()
 })
 
+test('buildHistoryWindow: 合并源 run 与 live session，同日以 live 为准', async () => {
+  const source = fakeRunSetup()
+  const live = fakeRunSetup()
+  addDay(source.rlDir, source.botId, 'source', '2026-01-05', [msg('assistant', [txt('source-only')])])
+  addDay(source.rlDir, source.botId, 'source', '2026-01-06', [msg('assistant', [txt('source-overridden')])])
+  addDay(live.rlDir, live.botId, 'live', '2026-01-06', [msg('assistant', [txt('live-wins')])])
+  addDay(live.rlDir, live.botId, 'live', '2026-01-07', [msg('assistant', [txt('live-only')])])
+  const r = await buildHistoryWindow({
+    rlOpenclawDir: live.rlDir,
+    priorRlOpenclawDirs: [source.rlDir],
+    botId: live.botId,
+    beforeDate: '2026-01-08',
+    openclawJsonPath: '/nonexistent',
+    skipLlmCompact: true,
+  })
+  assert.equal(r.dayCount, 3)
+  assert.match(r.markdown, /source-only/)
+  assert.match(r.markdown, /live-wins/)
+  assert.match(r.markdown, /live-only/)
+  assert.doesNotMatch(r.markdown, /source-overridden/)
+  source.cleanup()
+  live.cleanup()
+})
+
 test('resolveLlmEndpointFromRlConfig: 取 research-loop.yaml 的 model.primary', () => {
   const dir = mkdtempSync(join(tmpdir(), 'rlcfg-'))
   const p = join(dir, 'research-loop.yaml')
@@ -128,6 +152,12 @@ test('resolveLlmEndpointFromRlConfig: 取 research-loop.yaml 的 model.primary',
   }))
   const ep = resolveLlmEndpointFromRlConfig(p)
   assert.deepEqual(ep, { baseUrl: 'https://dd-ai-api.eastmoney.com/v1', apiKey: 'sk-live-xyz', model: 'qwen3.6-plus' })
+  // llm.compact_model 只覆盖 history-window 压缩模型，不改变主 chat 模型配置。
+  writeFileSync(p, JSON.stringify({
+    model: { primary: { provider: 'openai_compatible', base_url: 'https://dd-ai-api.eastmoney.com/v1', model: 'glm-5.2', api_key: 'sk-live-xyz' } },
+    llm: { compact_model: 'qwen3.6-plus' },
+  }))
+  assert.deepEqual(resolveLlmEndpointFromRlConfig(p), { baseUrl: 'https://dd-ai-api.eastmoney.com/v1', apiKey: 'sk-live-xyz', model: 'qwen3.6-plus' })
   // 字段不全 → 抛错（让调用方回退到 openclaw.json）
   writeFileSync(p, JSON.stringify({ model: { primary: { base_url: 'x', model: 'm' } } }))
   assert.throws(() => resolveLlmEndpointFromRlConfig(p), /incomplete model.primary/)

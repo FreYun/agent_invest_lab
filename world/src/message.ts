@@ -17,6 +17,12 @@ export interface DailyMessageContext {
   // 走势、主要指数 MA。每天必看的几样直接灌进 prompt，bot 不必再调 tool 自查。
   // 任一字段缺失（fetcher 失败 / 无持仓 / day 1 没历史）就跳过对应渲染块。
   dailyContext?: DailyContextData
+  /** 系统持久化的深研持仓承诺块；由 run.ts 生成，普通日同时受交易代理硬闸保护。 */
+  deepResearchCommitmentBlock?: string
+  // 本 run 的完整交易日历（run.ts 传 setupRes.calendarDates，即 runtime 日历全量，与 replay
+  // 区间无关）。交易纪律核对块用它数「清仓后过了几个交易日」。缺省时回退 benchmark 序列，
+  // 但那条路会因 runStartDate 退化或整池 NAV 超时而变 null（见 tradingCalendarOf 注释）。
+  tradingCalendar?: string[]
   // 本次回测总交易日数。仅 Day 1 注入到 fullRules，让 bot 按这个时间窗口规划策略
   // （短线 / 波段 / 长持）。具体起止日期不暴露——只给"今天 + N 个交易日"——以减少
   // LLM 训练记忆按已知历史时间段反向决策的泄漏面。Day N 即便传了也不注入，避免给 bot
@@ -829,12 +835,22 @@ const SLICE_WINDOW_TD = 5              // 同向拆单窗口（交易日）
 
 interface VehicleCooldown { soldOn: string; left: number }
 
-function tradingCalendarOf(dc: DailyContextData | undefined, asOfDate: string): string[] | null {
-  const pts = dc?.benchmark?.pointsByDate
-  if (!pts) return null
-  const days = Object.keys(pts).sort()
+// explicit（run.ts 传入的 runtime 交易日历）优先，benchmark 序列只是回退。
+//
+// 原先只有 benchmark 一条路，而 benchmark 依赖 runStartDate 且整池 NAV 拉取有 60s 超时——
+// bot105d 的买池 1515 只 × 380 交易日实测 75.6s，超时后 catch 成 null（无日志），于是整块
+// 交易纪律核对在它 381 天里一次都没渲染过。交易日历跟基准数据本来毫无关系，不该借它的道。
+function tradingCalendarOf(dc: DailyContextData | undefined, asOfDate: string, explicit?: string[]): string[] | null {
+  let days: string[]
+  if (explicit?.length) {
+    days = explicit.slice() // 不能就地 push：会污染调用方持有的 setupRes.calendarDates
+  } else {
+    const pts = dc?.benchmark?.pointsByDate
+    if (!pts) return null
+    days = Object.keys(pts).sort()
+  }
   if (!days.length) return null
-  // 今日是决策交易日，但 benchmark 序列只到昨日——补上，保证 (from, to] 计数含今日。
+  // 今日是决策交易日，但序列可能只到昨日——补上，保证 (from, to] 计数含今日。
   if (days[days.length - 1] < asOfDate) days.push(asOfDate)
   return days
 }
@@ -846,10 +862,10 @@ function tdBetween(cal: string[], from: string, to: string): number {
   return n
 }
 
-function computeVehicleCooldowns(dc: DailyContextData | undefined, asOfDate: string): Map<string, VehicleCooldown> {
+function computeVehicleCooldowns(dc: DailyContextData | undefined, asOfDate: string, tradingCalendar?: string[]): Map<string, VehicleCooldown> {
   const out = new Map<string, VehicleCooldown>()
   const orders = dc?.account?.recentOrders
-  const cal = tradingCalendarOf(dc, asOfDate)
+  const cal = tradingCalendarOf(dc, asOfDate, tradingCalendar)
   if (!orders?.length || !cal) return out
   const held = new Set((dc?.account?.holdings ?? []).map(h => h.fund_code))
   for (const o of orders) {
@@ -870,9 +886,10 @@ function tradeDisciplineBlock(
   dc: DailyContextData | undefined,
   asOfDate: string,
   cooldowns: Map<string, VehicleCooldown>,
+  tradingCalendar?: string[],
 ): string {
   const orders = dc?.account?.recentOrders
-  const cal = tradingCalendarOf(dc, asOfDate)
+  const cal = tradingCalendarOf(dc, asOfDate, tradingCalendar)
   if (!orders?.length || !cal) return ''
   const lines: string[] = []
   lines.push('────────── 交易纪律核对（系统核算 · 载体冷却 + 防拆单） ──────────')
@@ -1083,9 +1100,9 @@ function marketReportsBlock(reports?: {
   context: string; mainline: string; rotation: string; macroNews?: string
   res?: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string }
 }, holdings?: { fund_code: string; fund_name?: string | null; weight: number }[],
-   dc?: DailyContextData, asOfDate?: string): string {
+   dc?: DailyContextData, asOfDate?: string, tradingCalendar?: string[]): string {
   if (!reports) return ''
-  const cooldowns = computeVehicleCooldowns(dc, asOfDate ?? '')
+  const cooldowns = computeVehicleCooldowns(dc, asOfDate ?? '', tradingCalendar)
   const part = (label: string, body: string): string =>
     `────────── ${label} ──────────\n${body && body.trim() ? body.trim() : '（截至今日暂无该报告——按 METHODOLOGY 保守处理）'}`
   const hasMacro = !!(reports.macroNews && reports.macroNews.trim())
@@ -1095,7 +1112,7 @@ function marketReportsBlock(reports?: {
     part('mainline_rotation（核心/卫星组合骨架 + 今日动作）', reports.rotation)
       + vehicleCheckBlock(reports.mainline, holdings, cooldowns)
       + mainPositionLadderBlock(reports.mainline, holdings)
-      + tradeDisciplineBlock(dc, asOfDate ?? '', cooldowns),
+      + tradeDisciplineBlock(dc, asOfDate ?? '', cooldowns, tradingCalendar),
     ...(hasMacro ? [part('macro_news（宏观 / 政策 / 事件资讯 · 当期）', reports.macroNews as string)] : []),
   ].join('\n\n')
   const n = hasMacro ? '四' : '三'
@@ -1193,6 +1210,21 @@ function deepResearchTriggerBlock(ctx: {
 
 // 「当日研究室简报」块：单指数 run 用。内容由 run.ts 的 assembleBriefing() 从 fund.db PIT 拼好传进来
 // （res 四研判室 + macro_news + market_context）。定位＝参考信号，不覆盖 METHODOLOGY 的仓位/闸门决策。
+// 深研结论的使用口径：每决策日注入（仅深研 run），不分是否深研日。
+// 动机：bot 会在自己写的深研报告里把几个观察指标写成「加仓条件（全部满足才执行）」，此后每天
+// 从历史窗口里重读自己昨天的复述，把一次写作口误固化成不可逾越的执行闸门。bot105g 2025-03/04
+// 即因此连续 20+ 交易日把权益压在风险预算带下限之下，同时自报 risk_on_overweight；而写下该
+// 清单的那篇报告，其证伪条件恰恰是「任一命中即加仓」——AND 与 OR 在同一篇里并存。
+// METHODOLOGY 早写明深研的定量数字/操作建议仅供参考，但那条在 system prompt 里，离决策点远，
+// 敌不过历史窗口里天天复述的自造规则。这里不加禁令，只把「照做的后果」摆到决策点旁边。
+const DEEP_RESEARCH_USAGE = `
+
+【深研结论怎么用 · 每天适用】
+- 深研里的**目标仓位、加仓/减仓门槛、条件清单都是参考量，不是执行闸门**。仓位下限由你 METHODOLOGY 的风险预算带定，不由某一篇深研的措辞定。
+- **当心你自己写下的条件清单**：若某篇深研把几个指标写成「全部满足才加仓」，而同一篇的证伪条件里它们各自独立触发，以**证伪条件（任一命中即成立）**为准——AND 那版是写作口误，不是纪律。历史窗口里你前几天复述过的门槛，不因为复述过就变成事实，回原文核对。
+- 深研的零基目标仓位是**写作当日**的参考，隔了几个交易日还拿它当今天的仓位上限，等于用过期结论交易。
+- **后果**：因为「深研门槛没全满足」而让仓位停在风险预算带下限之下、当期又拿不出一级价格证据（研究层担忧不算确认），这会被计为一次纪律违反——回补到带内不需要额外理由，**不回补才需要理由**。真要维持，就在今天 mem0_add 记 \`[纪律违规, 深研门槛压仓, 低于下限N个百分点]\`，让它进你的复盘。`
+
 // 空串 → 跳过整块（世界日早于全部报告日时为空）。
 function briefingBlock(briefing?: string): string {
   if (!briefing || !briefing.trim()) return ''
@@ -1214,7 +1246,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const kind = botKindOf(ctx.botId)
   let pipelineBlock: string
   if (kind === 'multi-fund') {
-    pipelineBlock = marketReportsBlock(ctx.marketReports, ctx.dailyContext?.account?.holdings, ctx.dailyContext, ctx.date)
+    pipelineBlock = marketReportsBlock(ctx.marketReports, ctx.dailyContext?.account?.holdings, ctx.dailyContext, ctx.date, ctx.tradingCalendar)
   } else {
     pipelineBlock = injectedSkillsBlock(ctx.injectedSkills)
   }
@@ -1245,12 +1277,14 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
     maxGap: ctx.deepResearchMaxGapDays,
     lastDate: ctx.deepResearchLastDate,
   })
+  const drUsage = ctx.deepResearchEnabled ? DEEP_RESEARCH_USAGE : ''
   // 单指数持有承诺块（多基金返回空串，安全）。
   const holdCommit = holdCommitmentBlock(ctx.dailyContext, ctx.botId, ctx.date)
+  const deepCommit = ctx.deepResearchCommitmentBlock?.trim() ? "\n\n" + ctx.deepResearchCommitmentBlock.trim() : ""
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
     // bot 的 methodology 已被 research-loop splice 进 system prompt，daily message 只附短提示。
-    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${holdCommit}${beliefStr}${charterPart}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}\n`
+    return `${history}${fullRules(ctx.date, weekday, ctx.botId, ctx.tradingDaysTotal, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${contextBlocks}${holdCommit}${deepCommit}${beliefStr}${charterPart}${METHODOLOGY_DAY1_HINT}${FOOTER_FULL}${deepResearch}${deepResearchTrigger}${drUsage}\n`
   }
   // Day N：briefRules + 可买池/数据 + belief + methodology 短提示 + FOOTER_BRIEF（termination contract）
   //        + 策略强制复盘（每 5 个交易日，非复盘日为空串）。复盘块放在最后——最末尾的指令 recency 最高，
@@ -1263,5 +1297,5 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${holdCommit}${beliefStr}${charterPart}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${holdCommit}${deepCommit}${beliefStr}${charterPart}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${drUsage}${coherence}${review}\n`
 }

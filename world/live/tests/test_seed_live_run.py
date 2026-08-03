@@ -73,6 +73,7 @@ def test_state_stub_makes_run_discoverable(tmp_path):
     assert payload["bots"] == ["bot18"]
     assert payload["run_id"] == dst
     assert payload["status"] == "seeded"
+    assert payload["source_run_id"] == "dash-2026-07-20T15-04-39"
     # discover_live_runs 只凭 state.json 即可发现（无需先跑引擎）
     assert lc.discover_live_runs(str(runs_dir)) == [(dst, "bot18")]
 
@@ -99,3 +100,57 @@ def test_clone_run_rows_repairs_stale_open_lots(tmp_path):
         "FROM fund_bot_holding_lots WHERE run_id=? AND status='open'", (dst,)
     ).fetchone()
     assert lot == (h[0], h[1], 1000, None)
+
+
+def test_backfill_existing_live_lineage_is_safe_and_idempotent(tmp_path):
+    old_world = seed.WORLD
+    seed.WORLD = str(tmp_path)
+    try:
+        runs = tmp_path / "runtime" / "runs"
+        source_id = "dash-2026-07-20T15-04-39"
+        live_id = "live-bot18-20260720T150439"
+        source = runs / source_id
+        live = runs / live_id
+        source_ws = source / "workspaces" / "bot18"
+        live_ws = live / "workspaces" / "bot18"
+        source_ws.mkdir(parents=True)
+        live_ws.mkdir(parents=True)
+        (source / "strategies").mkdir()
+        (source / "strategies" / "bot18.revisions.jsonl").write_text("{}\n")
+        (source_ws / "METHODOLOGY.md").write_text("evolved source method\n")
+        (live_ws / "METHODOLOGY.md").write_text("template method\n")
+        (source_ws / "memory").mkdir()
+        (source_ws / "memory" / "historical-note.md").write_text("carry me\n")
+        source_compact = source / "rl-openclaw" / "history-compact" / "bot18"
+        source_compact.mkdir(parents=True)
+        (source_compact / "state.json").write_text(json.dumps({
+            "compactText": "historical summary", "compactedUpToDate": "2026-07-18",
+        }))
+        live.mkdir(parents=True, exist_ok=True)
+        (live / "state.json").write_text(json.dumps({
+            "run_id": live_id, "bots": ["bot18"], "status": "done",
+        }))
+
+        preview = seed.backfill_existing_live_lineage(dry_run=True)
+        assert preview["state_updated"] == 1
+        assert preview["methodology_restored"] == 1
+        assert preview["history_compact_seeded"] == 1
+        assert "source_run_id" not in json.loads((live / "state.json").read_text())
+        assert (live_ws / "METHODOLOGY.md").read_text() == "template method\n"
+
+        applied = seed.backfill_existing_live_lineage()
+        assert applied["missing_source"] == []
+        assert json.loads((live / "state.json").read_text())["source_run_id"] == source_id
+        assert (live_ws / "METHODOLOGY.md").read_text() == "evolved source method\n"
+        assert (live_ws / "memory" / "historical-note.md").read_text() == "carry me\n"
+        compact = json.loads((live / "rl-openclaw" / "history-compact" / "bot18" / "state.json").read_text())
+        assert compact["compactText"] == "historical summary"
+        assert compact["historyScope"] == str(source / "rl-openclaw")
+
+        second = seed.backfill_existing_live_lineage(dry_run=True)
+        assert second["state_updated"] == 0
+        assert second["workspace_files_added"] == 0
+        assert second["methodology_restored"] == 0
+        assert second["history_compact_seeded"] == 0
+    finally:
+        seed.WORLD = old_world

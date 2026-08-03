@@ -1,11 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { runDir, runStateFile } from './paths.ts'
+import type { DeepResearchCommitmentsByBot } from './deep-research-commitment.ts'
 
 export type RunStatus = 'setup' | 'running' | 'paused' | 'done' | 'failed' | 'aborted'
 
 export interface WorldState {
   run_id: string
+  /** live run 的源回测 run。它既是 dashboard 血缘，也是历史窗口/workspace 续跑的真相源。 */
+  source_run_id?: string
   status: RunStatus
   current_date: string
   trading_dates: string[]
@@ -33,6 +36,8 @@ export interface WorldState {
   last_deep_research_dates?: Record<string, string>
   /** 账户当前回撤是否已处于阈值内；用于把持续回撤电平转换成一次性的阈值穿越事件。 */
   deep_research_drawdown_active_by_bot?: Record<string, boolean>
+  /** 深研日成功买入形成的跨日承诺；普通日卖单由 proxy 按此状态拦截。 */
+  deep_research_commitments_by_bot?: DeepResearchCommitmentsByBot
   /** PID of the world orchestrator process that owns this run. Stale across restarts
    *  if the process died without teardown — that's the signal external readers (e.g.
    *  the dashboard) use to detect orphan runs and self-heal them to 'aborted'. */

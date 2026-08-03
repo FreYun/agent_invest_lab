@@ -15,8 +15,15 @@ export interface FundPortfolioProxyOptions {
   runId: string
   /** Current world trade date. When set, buy/sell order trade_date is hidden from bots and forced here. */
   getTradeDate?: () => string
+  /** 深研持仓承诺卖出闸门。返回 allowed=false 时 proxy 直接回绝，不触达交易服务。 */
+  checkSellCommitment?: (input: { botId: string; fundCode: string; tradeDate: string }) => SellCommitmentGateDecision
   host?: string
   port?: number
+}
+
+export interface SellCommitmentGateDecision {
+  allowed: boolean
+  message?: string
 }
 
 export interface FundPortfolioProxyHandle {
@@ -112,6 +119,12 @@ async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = []
   for await (const c of req) chunks.push(c as Buffer)
   return Buffer.concat(chunks).toString('utf8')
+}
+
+function rejectToolCall(res: ServerResponse, id: number | string | null | undefined, message: string): void {
+  const payload = { jsonrpc: '2.0', id: id ?? null, result: { content: [{ type: 'text', text: JSON.stringify({ success: false, blocked_by: 'deep_research_commitment', message }) }] } }
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+  res.end('event: message\ndata: ' + JSON.stringify(payload) + '\n\n')
 }
 
 export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions): Promise<FundPortfolioProxyHandle> {
@@ -220,6 +233,20 @@ export async function createFundPortfolioProxy(opts: FundPortfolioProxyOptions):
         // Force-overwrite: bots must not be able to widen the PIT window themselves.
         args[AS_OF_KEY] = opts.getTradeDate()
         parsed.params.arguments = args
+      }
+    }
+
+    if (parsed && parsed.method === 'tools/call' && isObject(parsed.params) && parsed.params.name === 'portfolio_place_sell_order' && opts.checkSellCommitment) {
+      const args = isObject(parsed.params.arguments) ? parsed.params.arguments : {}
+      const botId = typeof args.bot_id === 'string' ? args.bot_id : ''
+      const fundCode = typeof args.fund_code === 'string' ? args.fund_code : ''
+      const tradeDate = opts.getTradeDate?.() ?? (typeof args.trade_date === 'string' ? args.trade_date : '')
+      if (botId && fundCode && tradeDate) {
+        const decision = opts.checkSellCommitment({ botId, fundCode, tradeDate })
+        if (!decision.allowed) {
+          rejectToolCall(res, parsed.id, decision.message ?? '深研持仓承诺期内，普通交易日禁止卖出。')
+          return
+        }
       }
     }
 

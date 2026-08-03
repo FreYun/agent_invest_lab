@@ -6,7 +6,7 @@ import { compactHistory, resolveLlmEndpoint, resolveLlmEndpointFromRlConfig } fr
 // History window 注入位置（在 daily prompt 顶部）。预算：20000 中文字符。
 // 切割策略：
 //   - 最近的（按时间倒序，累计字符 ≤ budget × 30%）→ 原样保留（"raw recent"）
-//   - 余下更老的 → 若拼起来 ≤ budget × 60% 也原样保留；否则调主模型按 4 维度压缩到 ≤ budget × 60%
+//   - 余下更老的 → 若拼起来 ≤ budget × 60% 也原样保留；否则调主模型按 5 维度压缩到 ≤ budget × 60%
 //   - 总长 = recent (≤30%) + (compact or older raw) (≤60%) + 标头/分隔 ≤10%
 //
 // 缓存（增量复用）：rl-openclaw/history-compact/<botId>/state.json，单一文件:
@@ -61,6 +61,8 @@ export function listBotSessionsBefore(rlOpenclawDir: string, botId: string, befo
 
 export interface BuildHistoryWindowOptions {
   rlOpenclawDir: string
+  /** live lineage 的源 run openclaw 目录；当前 run 同日 session 覆盖源 session。 */
+  priorRlOpenclawDirs?: string[]
   botId: string
   beforeDate: string                  // 当前世界日，不含
   // 压缩 LLM 端点优先来源：本 bot 影子 workspace 的 research-loop.yaml（跟着 bot 当前 key 走）。
@@ -82,6 +84,7 @@ export interface HistoryWindowResult {
 interface CompactState {
   compactText: string         // 最近一次 LLM compact 的成品
   compactedUpToDate: string   // 成品涵盖到的"最后一天 older digest"日期（含）
+  historyScope?: string       // lineage 来源变化时使旧 compact 失效，防止静默断档
 }
 
 function compactStatePath(rlOpenclawDir: string, botId: string): string {
@@ -94,7 +97,7 @@ function readCompactState(rlOpenclawDir: string, botId: string): CompactState | 
   try {
     const obj = JSON.parse(readFileSync(p, 'utf8')) as Partial<CompactState>
     if (typeof obj.compactText === 'string' && typeof obj.compactedUpToDate === 'string') {
-      return { compactText: obj.compactText, compactedUpToDate: obj.compactedUpToDate }
+      return { compactText: obj.compactText, compactedUpToDate: obj.compactedUpToDate, ...(typeof obj.historyScope === 'string' ? { historyScope: obj.historyScope } : {}) }
     }
     return null
   } catch { return null }
@@ -120,7 +123,12 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
   const recentBudget = Math.floor(budget * RECENT_FRACTION)
   const compactBudget = Math.floor(budget * COMPACT_FRACTION)
 
-  const sessions = listBotSessionsBefore(opts.rlOpenclawDir, opts.botId, opts.beforeDate)
+  // 源 run 在前、当前 run 在后；同一日期若两边都有记录，以 live/当前 run 为准。
+  const sessionsByDate = new Map<string, { date: string; sessionFile: string }>()
+  for (const dir of [...(opts.priorRlOpenclawDirs ?? []), opts.rlOpenclawDir]) {
+    for (const session of listBotSessionsBefore(dir, opts.botId, opts.beforeDate)) sessionsByDate.set(session.date, session)
+  }
+  const sessions = [...sessionsByDate.values()].sort((a, b) => a.date.localeCompare(b.date))
   if (!sessions.length) {
     return { markdown: '', dayCount: 0, recentDays: 0, compactedDays: 0, totalChars: 0 }
   }
@@ -155,6 +163,7 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
   //   3. 冷启动 / state 失效（如人工删除）：
   //        - olderRaw ≤ compactBudget → 原样保留，不写 state（数据还没多到值得 compact）
   //        - 否则 → LLM 首次 compact，写 state
+  const historyScope = (opts.priorRlOpenclawDirs ?? []).join('\n')
   let olderBlock = ''
   let compactedDays = 0
   if (olderDigests.length) {
@@ -163,6 +172,7 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
     const state = readCompactState(opts.rlOpenclawDir, opts.botId)
     // state 有效条件：cutoff 日期落在当前 older 段内（不能比第一天还早 → 中间会断档，不能比最后一天还晚 → 越界）
     const stateUsable = state
+      && (state.historyScope ?? '') === historyScope
       && state.compactedUpToDate >= firstOlderDate
       && state.compactedUpToDate <= lastOlderDate
     if (stateUsable && state) {
@@ -177,7 +187,7 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
         compactedDays = cutoffIdx + 1  // state 涵盖的天数（不算新增的 raw 天）
         if (candidate.length <= compactBudget) {
           // 无需调 LLM —— 增量复用直接落地
-          olderBlock = `> 以下为更早 ${olderDigests.length} 个交易日（${firstOlderDate} ～ ${lastOlderDate}）的历史笔记（${compactedDays} 天为 4 维度压缩，其余原样）：\n\n${candidate}`
+          olderBlock = `> 以下为更早 ${olderDigests.length} 个交易日（${firstOlderDate} ～ ${lastOlderDate}）的历史笔记（${compactedDays} 天为 5 维度压缩，其余原样）：\n\n${candidate}`
         } else {
           // 老 compact + 新增 raw 超 budget → 再 compact 一次，把整段重新压扁
           let compactText: string
@@ -191,9 +201,9 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
               targetChars: compactBudget - 200,
             })
           }
-          writeCompactState(opts.rlOpenclawDir, opts.botId, { compactText, compactedUpToDate: lastOlderDate })
+          writeCompactState(opts.rlOpenclawDir, opts.botId, { compactText, compactedUpToDate: lastOlderDate, historyScope })
           compactedDays = olderDigests.length
-          olderBlock = `> 以下为更早 ${olderDigests.length} 个交易日（${firstOlderDate} ～ ${lastOlderDate}）的 4 维度压缩笔记：\n\n${compactText}`
+          olderBlock = `> 以下为更早 ${olderDigests.length} 个交易日（${firstOlderDate} ～ ${lastOlderDate}）的 5 维度压缩笔记：\n\n${compactText}`
         }
       }
     }
@@ -214,9 +224,9 @@ export async function buildHistoryWindow(opts: BuildHistoryWindowOptions): Promi
             targetChars: compactBudget - 200,
           })
         }
-        writeCompactState(opts.rlOpenclawDir, opts.botId, { compactText, compactedUpToDate: lastOlderDate })
+        writeCompactState(opts.rlOpenclawDir, opts.botId, { compactText, compactedUpToDate: lastOlderDate, historyScope })
         compactedDays = olderDigests.length
-        olderBlock = `> 以下为更早 ${olderDigests.length} 个交易日（${firstOlderDate} ～ ${lastOlderDate}）的 4 维度压缩笔记：\n\n${compactText}`
+        olderBlock = `> 以下为更早 ${olderDigests.length} 个交易日（${firstOlderDate} ～ ${lastOlderDate}）的 5 维度压缩笔记：\n\n${compactText}`
       }
     }
   }

@@ -33,6 +33,30 @@ test('buildShadowWorkspace copies included paths, skips others', () => {
   rmSync(dest, { recursive: true, force: true })
 })
 
+test('buildShadowWorkspace preserves selected mutable files while refreshing static files', () => {
+  const src = fakeWorkspace()
+  writeFileSync(join(src, 'METHODOLOGY.md'), 'template method')
+  writeFileSync(join(src, 'USER.md'), 'template user')
+  const dest = join(mkdtempSync(join(tmpdir(), 'dstws-preserve-')), 'bot1')
+  mkdirSync(dest, { recursive: true })
+  writeFileSync(join(dest, 'METHODOLOGY.md'), 'evolved method')
+  writeFileSync(join(dest, 'USER.md'), 'evolved user')
+  writeFileSync(join(dest, 'SOUL.md'), 'old soul')
+
+  buildShadowWorkspace({
+    sourceDir: src,
+    destDir: dest,
+    include: ['SOUL.md', 'METHODOLOGY.md', 'USER.md'],
+    preserveExisting: ['METHODOLOGY.md', 'USER.md'],
+  })
+
+  assert.equal(readFileSync(join(dest, 'METHODOLOGY.md'), 'utf8'), 'evolved method')
+  assert.equal(readFileSync(join(dest, 'USER.md'), 'utf8'), 'evolved user')
+  assert.equal(readFileSync(join(dest, 'SOUL.md'), 'utf8'), '# soul')
+  rmSync(src, { recursive: true, force: true })
+  rmSync(dest, { recursive: true, force: true })
+})
+
 test('buildShadowWorkspace tolerates missing source entries', () => {
   const src = mkdtempSync(join(tmpdir(), 'srcws2-'))
   writeFileSync(join(src, 'SOUL.md'), 's')

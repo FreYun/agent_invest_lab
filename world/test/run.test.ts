@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runWorld, requestPause, requestStop, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, isChatDayAt, previousChatCursor, isoWeekKey, proxyEnvSupplement } from '../src/run.ts'
+import { runWorld, requestPause, requestStop, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, isChatDayAt, previousChatCursor, isoWeekKey, proxyEnvSupplement, recordedRunDays } from '../src/run.ts'
 import { BotServer } from '../src/botServer.ts'
 import * as P from '../src/paths.ts'
 import { readState, writeState } from '../src/state.ts'
@@ -143,6 +143,46 @@ test('runWorld replays 2 trading days for 2 bots: artifacts written, status done
   const summary = JSON.parse(readFileSync(P.summaryFile(worldRoot, 'r1'), 'utf8'))
   assert.equal(summary.run_id, 'r1')
   assert.equal(summary.days.length, 2)
+  cleanup()
+})
+
+test('recordedRunDays: 只认 YYYY-MM-DD 目录名、升序返回；run 目录不存在时空数组', () => {
+  const { worldRoot, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14'] })
+  assert.deepEqual(recordedRunDays(worldRoot, 'never-ran'), [])
+  const rd = P.runDir(worldRoot, 'rr')
+  for (const name of ['2024-03-15', '2024-03-14', 'rl-openclaw', 'shadow', 'state.json', '2024-3-1']) {
+    mkdirSync(join(rd, name), { recursive: true })
+  }
+  assert.deepEqual(recordedRunDays(worldRoot, 'rr'), ['2024-03-14', '2024-03-15'])
+  cleanup()
+})
+
+test('单日驱动同 run_id 重跑：第二天按续跑发 Day-N 规则（cursor 恒 0 也不再自称首日）', async () => {
+  // oos-daily-driver 每天把 replay 钉在当天，所以 cursor/dates/state 全部退化；判定必须看
+  // 磁盘上已落盘的日目录。这里模拟两次独立 runWorld 调用（同 runId、不同单日区间）。
+  const { worldRoot, config, cleanup } = setupWorldDir({ bots: ['bot1'], dates: ['2024-03-14', '2024-03-15'] })
+  const day1 = { ...config, replay: { from: '2024-03-14', to: '2024-03-14' } }
+  const day2 = { ...config, replay: { from: '2024-03-15', to: '2024-03-15' } }
+  await runWorld({ worldRoot, config: day1, runId: 'daily', startBotServer: stubStartBotServer })
+  const afterDay1 = readState(worldRoot, 'daily')
+  writeState(worldRoot, 'daily', { ...afterDay1, source_run_id: 'dash-source-lineage' })
+  await runWorld({ worldRoot, config: day2, runId: 'daily', startBotServer: stubStartBotServer })
+
+  const sent1 = readFileSync(P.sentFile(worldRoot, 'daily', '2024-03-14', 'bot1'), 'utf8')
+  const sent2 = readFileSync(P.sentFile(worldRoot, 'daily', '2024-03-15', 'bot1'), 'utf8')
+  // 第一天仍是真首日：完整规则 + Day-1 hint
+  assert.match(sent1, /你的 active methodology 已就位/)
+  assert.match(sent1, /portfolio_place_buy_order/)
+  // 第二天：精简规则 + Day-N，不能再出现"账户已被初始化、100 万初始现金"那套冷启动叙述
+  assert.match(sent2, /今天的节奏（按顺序）/)
+  assert.doesNotMatch(sent2, /你的基金账户已被初始化/)
+  // 状态仍是单日（cursor 1/1）——续跑判定不依赖它
+  assert.equal(readState(worldRoot, 'daily').cursor, 1)
+  assert.equal(readState(worldRoot, 'daily').source_run_id, 'dash-source-lineage')
+  // 日志打 resume 标记而不是 [first day]
+  const logText = readFileSync(P.runLogFile(worldRoot, 'daily'), 'utf8')
+  assert.match(logText, /2024-03-15 \[resume day 2\]/)
+  assert.doesNotMatch(logText, /2024-03-15 \[first day\]/)
   cleanup()
 })
 
@@ -936,5 +976,11 @@ test('runWorld installs assigned strategy as active shadow METHODOLOGY and write
   const audit = JSON.parse(readFileSync(join(P.runDir(worldRoot, 'strategy-r1'), 'strategy-assignments.json'), 'utf8'))
   assert.deepEqual(audit.bots.bot7.buyable_fund_codes, ['000051'])
   assert.equal(audit.bots.bot11.strategy_id, 'semiconductor')
+
+  // 同 run 再启动时，bot 已演化的方法论不能被模板或 assignment 重置。
+  const evolved = '# evolved live methodology\nkeep me\n'
+  writeFileSync(join(P.shadowWorkspaceDir(worldRoot, 'strategy-r1', 'bot7'), 'METHODOLOGY.md'), evolved)
+  await runWorld({ worldRoot, config, runId: 'strategy-r1', startBotServer: stubStartBotServer })
+  assert.equal(readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'strategy-r1', 'bot7'), 'METHODOLOGY.md'), 'utf8'), evolved)
   cleanup()
 })

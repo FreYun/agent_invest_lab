@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import type { WorldConfig } from './config.ts'
@@ -20,6 +20,7 @@ import { fetchIntradayQuoteBlock } from './intraday-market.ts'
 import { assembleBriefing, type BriefingReportType } from './intraday-briefing.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
+import { activeCommitmentsForBot, extractSuccessfulFundActions, isCommitmentActive, renderDeepResearchCommitmentBlock, upsertDeepResearchCommitments, type DeepResearchCommitmentsByBot, type SuccessfulFundAction } from './deep-research-commitment.ts'
 import * as P from './paths.ts'
 
 export type StartBotServer = (botId: string, argv: string[]) => Promise<BotServer>
@@ -339,8 +340,9 @@ function installStrategyLibraryInShadow(opts: {
   shadow: string
   botId: string
   buyableCodes: string[] | undefined
+  preserveActiveMethodology?: boolean
 }): StrategyAssignmentAuditEntry | null {
-  const { config, lib, shadow, botId, buyableCodes } = opts
+  const { config, lib, shadow, botId, buyableCodes, preserveActiveMethodology } = opts
   if (!lib) return null
   copyStrategyLibraryToWorkspace(lib, shadow)
   writeFileSync(join(shadow, 'STRATEGY_LIBRARY.md'), renderStrategyCatalog(lib))
@@ -350,7 +352,9 @@ function installStrategyLibraryInShadow(opts: {
   if (!strategy) throw new Error('bot ' + botId + ' strategy "' + assignment.strategyId + '" not found in strategy library')
   const codes = buyableCodes ?? strategy.defaultBuyableFundCodes
   if (!codes.length) throw new Error('bot ' + botId + ' strategy "' + assignment.strategyId + '" resolved empty buyable fund pool')
-  writeFileSync(join(shadow, 'METHODOLOGY.md'), renderActiveMethodology({ botId, strategy, buyableFundCodes: codes }))
+  if (!preserveActiveMethodology || !existsSync(join(shadow, 'METHODOLOGY.md'))) {
+    writeFileSync(join(shadow, 'METHODOLOGY.md'), renderActiveMethodology({ botId, strategy, buyableFundCodes: codes }))
+  }
   // 持久化任务头 pin：update_my_strategy 每次重写方法论时会读这份，把 target_index / buyable_fund_codes
   // 重新锚回去，防止 bot 自进化时把标的代码丢了漂到错误指数。写在 shadow 根下、随 shadow 重建而刷新。
   writeFileSync(join(shadow, '.methodology-header.md'), renderTaskHeader({ botId, strategy, buyableFundCodes: codes }))
@@ -466,6 +470,9 @@ export function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow
 
 interface SetupResult {
   tradingDates: string[]
+  /** 完整交易日历，不是本次 run 的区间切片。深研 gap 要在它上面量：单日驱动的
+   *  tradingDates 只有当天一格，拿它 indexOf(lastDeepDate) 必然落空。 */
+  calendarDates: string[]
   memory: MemoryServerHandle
   simworldProxy: SimworldProxyHandle
   fundPortfolioProxy: FundPortfolioProxyHandle | null
@@ -475,6 +482,7 @@ interface SetupResult {
   buyableCodesByBot: BuyableCodesByBot
   // 进程内共享的 MemoryStore 实例；与 memory-server 是同一份。
   memoryStore: MemoryStore
+  deepResearchCommitmentGate: { commitmentsByBot: DeepResearchCommitmentsByBot; unlockedByBot: Record<string, boolean> }
   // Kill the named bot's server and spawn a fresh one in its slot. Used by runLoop
   // after a per-day chat timeout so the next day doesn't race with the still-in-flight
   // request on the server side (research-loop-ts doesn't serialize same-session chats
@@ -522,6 +530,12 @@ function formatBotNotification(botId: string, method: string, params: Record<str
 
 async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   const { worldRoot, config, runId } = opts
+  const persistedCommitments = existsSync(P.runStateFile(worldRoot, runId))
+    ? (() => { try { return readState(worldRoot, runId).deep_research_commitments_by_bot ?? {} } catch { return {} } })()
+    : {}
+  const deepResearchCommitmentGate: SetupResult['deepResearchCommitmentGate'] = {
+    commitmentsByBot: persistedCommitments, unlockedByBot: {},
+  }
   // pi-server needs to be spawned with cwd=openclawRoot so tsx's tsconfig.json lookup picks up
   // openclaw's path aliases (openclaw/plugin-sdk/*). research-loop doesn't need this.
   const spawnCwd = config.loop === 'openclaw-pi' ? config.openclawRoot : undefined
@@ -564,6 +578,10 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
         readyTimeoutMs: 60_000,
         onLog: (l) => process.stderr.write(l + '\n'),
         onNotification: (method, params) => {
+          if (method === 'tool.call' && params.name === 'start_research') {
+            deepResearchCommitmentGate.unlockedByBot[botId] = true
+            log(worldRoot, runId, 'bot ' + botId + ': deep-research commitment sell gate unlocked after start_research')
+          }
           const line = formatBotNotification(botId, method, params)
           if (line) log(worldRoot, runId, line)
         },
@@ -621,7 +639,14 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   // bot 的 mcporter.json 用 ${FUND_PORTFOLIO_PROXY_URL} 占位符引用。
   let fundPortfolioProxy: FundPortfolioProxyHandle | null = null
   if (config.fundMcpCli && config.fundPortfolioUpstreamUrl) {
-    fundPortfolioProxy = await createFundPortfolioProxy({ upstreamUrl: config.fundPortfolioUpstreamUrl, runId, getTradeDate: getCurrentDate })
+    fundPortfolioProxy = await createFundPortfolioProxy({
+      upstreamUrl: config.fundPortfolioUpstreamUrl, runId, getTradeDate: getCurrentDate,
+      checkSellCommitment: ({ botId, fundCode, tradeDate }) => {
+        const commitment = deepResearchCommitmentGate.commitmentsByBot[botId]?.[fundCode]
+        if (!isCommitmentActive(commitment, tradeDate) || deepResearchCommitmentGate.unlockedByBot[botId] === true) return { allowed: true }
+        return { allowed: false, message: '基金 ' + fundCode + ' 仍在深研持仓承诺期（' + commitment.committed_on + '→' + commitment.commit_until + '）。今天不是深度研究日，普通指标走弱不能推翻深研建仓结论；等待承诺到期，或由系统风险事件触发强制深研后重新判断。' }
+      },
+    })
     writeFileSync(P.fundPortfolioProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: fundPortfolioProxy.port, url: fundPortfolioProxy.url, upstream: config.fundPortfolioUpstreamUrl, runId }, null, 2) + '\n')
     log(worldRoot, runId, `fund-portfolio proxy at ${fundPortfolioProxy.url} (upstream ${config.fundPortfolioUpstreamUrl}, run_id=${runId})`)
     templateVars.FUND_PORTFOLIO_PROXY_URL = fundPortfolioProxy.url
@@ -659,7 +684,11 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     const srcWs = isAbsolute(botId) ? botId : join(config.botsRoot, botId)
     if (!existsSync(srcWs)) throw new Error(`source workspace not found for ${botId}: ${srcWs}`)
     const shadow = P.shadowWorkspaceDir(worldRoot, runId, botId)
-    buildShadowWorkspace({ sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars })
+    const continuingShadow = existsSync(join(shadow, 'METHODOLOGY.md'))
+    buildShadowWorkspace({
+      sourceDir: srcWs, destDir: shadow, include: config.shadowInclude, templateVars,
+      preserveExisting: ['METHODOLOGY.md', 'USER.md'],
+    })
     if (config.loop !== 'openclaw-pi') writeResearchLoopYaml(config, botId, shadow, memory.url, rlOpenclawDir)
     const audit = installStrategyLibraryInShadow({
       config,
@@ -667,6 +696,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
       shadow,
       botId,
       buyableCodes: buyableCodesByBot[botId],
+      preserveActiveMethodology: continuingShadow,
     })
     if (audit) strategyAssignmentAudit[botId] = audit
     const argv = botServerArgv(config, botId, shadow, loopConfigPath(config, worldRoot, runId))
@@ -742,7 +772,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     }
   }
 
-  return { tradingDates, memory, simworldProxy, fundPortfolioProxy, strategyServer, bots, currentDateRef, buyableCodesByBot, memoryStore: store, restartBot }
+  return { tradingDates, calendarDates: cal.tradingDays, memory, simworldProxy, fundPortfolioProxy, strategyServer, bots, currentDateRef, buyableCodesByBot, memoryStore: store, deepResearchCommitmentGate, restartBot }
 }
 
 /** 写当前 run 的可买基金白名单文件。落点 = paths.buyableCodesFile(worldRoot, runId)；
@@ -764,7 +794,7 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
   return p
 }
 
-interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean; accountDrawdownActive?: boolean }
+interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean; accountDrawdownActive?: boolean; successfulBuys?: SuccessfulFundAction[]; successfulSells?: SuccessfulFundAction[]; deepResearchBuys?: Array<SuccessfulFundAction & { minHoldingDays: number }> }
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }, opts?: { maxToolCalls?: number }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -844,15 +874,16 @@ async function chatOneBot(worldRoot: string, runId: string, date: string, messag
       const o = ev as Record<string, unknown>
       return o.type === 'tool_start' && o.name === 'start_research'
     })
+    const fundActions = extractSuccessfulFundActions(Array.isArray(r.tool_trace) ? r.tool_trace : [])
     if (toolCalls === 0) {
       const reason = r.chat_error ? `no tool calls; chat_error: ${r.chat_error}` : 'no tool calls (chat returned without invoking any tool)'
-      const s: DayBotStatus = { bot: b.botId, status: 'error', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, error: reason, toolCalls, deepResearchFired }
+      const s: DayBotStatus = { bot: b.botId, status: 'error', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, error: reason, toolCalls, deepResearchFired, successfulBuys: fundActions.buys, successfulSells: fundActions.sells }
       writeStatus(s.status, { iterations: s.iterations, usage: s.usage, error: s.error, finishedAt: new Date().toISOString() })
       log(worldRoot, runId, `bot ${b.botId}: chat made no tool calls — failing the day${r.chat_error ? ` (chat_error: ${r.chat_error})` : ''}`)
       return s
     }
     if (r.chat_error) log(worldRoot, runId, `bot ${b.botId}: chat ended with chat_error but ${toolCalls} tool call(s) made — advancing (${r.chat_error})`)
-    const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, toolCalls, deepResearchFired }
+    const s: DayBotStatus = { bot: b.botId, status: 'ok', iterations: r.iterations, usage: r.usage, ms: Date.now() - startedAt, toolCalls, deepResearchFired, successfulBuys: fundActions.buys, successfulSells: fundActions.sells }
     writeStatus(s.status, { iterations: s.iterations, usage: s.usage, finishedAt: new Date().toISOString() })
     return s
   } catch (err) {
@@ -921,8 +952,12 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     throw err
   }
 
+  // 单日驱动（oos-daily-driver）每天用同一个 run_id 重新 runWorld 一次，state 会被这份
+  // initial 整个盖掉。深研计时器是跨 run 的账：丢了它，agent-triggered 模式下 lastDeepDate
+  // 恒为空 → gap 判定永远命中 max-gap → 天天强制深研，「每 N 天一次」名存实亡。
+  const prev = existsSync(P.runStateFile(worldRoot, runId)) ? (() => { try { return readState(worldRoot, runId) } catch { return null } })() : null
   const initial: WorldState = {
-    run_id: runId, status: 'running', current_date: setupRes.tradingDates[0],
+    run_id: runId, source_run_id: prev?.source_run_id, status: 'running', current_date: setupRes.tradingDates[0],
     trading_dates: setupRes.tradingDates, cursor: 0, bots: config.bots,
     memory_port: setupRes.memory.port, started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     loop: config.loop,
@@ -930,6 +965,10 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     chat_step_days: config.chatStepDays,
     chat_weekday: config.chatWeekday,
     chat_monthly_nth: config.chatMonthlyNth,
+    last_deep_research_date: prev?.last_deep_research_date,
+    last_deep_research_dates: prev?.last_deep_research_dates,
+    deep_research_drawdown_active_by_bot: prev?.deep_research_drawdown_active_by_bot,
+    deep_research_commitments_by_bot: prev?.deep_research_commitments_by_bot,
     pid: process.pid,
   }
   writeState(worldRoot, runId, initial)
@@ -938,6 +977,21 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
 }
 
 interface RunLoopArgs { worldRoot: string; runId: string; config: WorldConfig; setupRes: SetupResult; fromCursor: number }
+
+/** 本 run 已落盘的决策日（runs/<runId>/<YYYY-MM-DD>/ 目录名），升序去重。
+ *
+ *  单日驱动（oos-daily-driver.ts）每天用**同一个 run_id** 重新 runWorld，replay 区间只有当天：
+ *  cursor 恒 0、dates.length 恒 1、state.json 每天被 initial 覆盖。所以「这是本 run 的第几天」
+ *  不能问 cursor / dates / state，只能问磁盘——日目录逐日累积、跨进程保留，是唯一可靠的 run 长度。 */
+export function recordedRunDays(worldRoot: string, runId: string): string[] {
+  let entries: string[]
+  try {
+    entries = readdirSync(P.runDir(worldRoot, runId))
+  } catch {
+    return [] // run 目录还不存在 = 真的第一天
+  }
+  return entries.filter(e => /^\d{4}-\d{2}-\d{2}$/.test(e)).sort()
+}
 
 /** 第 N / 2N / 3N … 个交易日（cursor 0-based）算研究日；researchDayEvery=0 关闭。 */
 export function isResearchDay(cursor: number, researchDayEvery: number): boolean {
@@ -976,7 +1030,12 @@ export interface DeepResearchStateInput {
   maxGapDays: number
   todayDate: string
   lastDeepDate?: string
+  /** 量 gap 用的日期轴，传完整交易日历而不是本 run 的区间切片：单日驱动的区间只有当天
+   *  一格，lastDeepDate 必然不在里面，indexOf 落空就退化成 MAX_SAFE_INTEGER。 */
   tradingDates: string[]
+  /** 从未深研过时的锚点（run 首个交易日）。tradingDates 传完整日历后，
+   *  tradingDaysBetween 内部的 dates[0] 兜底会落到日历开头，锚错了。 */
+  runStartDate?: string
   /** 提前深研信号：投资目标单日大幅波动，或 bot 账户当前回撤首次跌破阈值。 */
   crashSignal?: {
     targetDailyMovePct: number | null
@@ -1025,7 +1084,7 @@ export function isCrashForced(s?: DeepResearchStateInput['crashSignal']): boolea
  *   agent-triggered：未达间隔不授权；达到 maxGapDays 后授权并强制。
  *   两分支均可被崩盘信号强制。 */
 export function computeDeepResearchState(inp: DeepResearchStateInput): DeepResearchStateOut {
-  const gapDays = tradingDaysBetween(inp.tradingDates, inp.lastDeepDate, inp.todayDate)
+  const gapDays = tradingDaysBetween(inp.tradingDates, inp.lastDeepDate ?? inp.runStartDate, inp.todayDate)
   const eventReasons = deepResearchEventReasons(inp.crashSignal)
   // 首次深研的窗口包含 run Day1：maxGapDays=5 时 Day5 到期（gap=4）。
   // 已深研后则从该日往后数 5 个完整交易日，gap=5 时再次到期。
@@ -1126,6 +1185,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
   const deepResearchTimeoutMs = (config.deepResearchTimeoutSeconds ?? Math.max(config.researchDayTimeoutSeconds, 2400)) * 1000
   const deepResearchMode: 'ordinal' | 'agent-triggered' = config.deepResearchMode ?? 'ordinal'
   const deepResearchMaxGapDays = config.deepResearchMaxGapDays ?? 5
+  // 进入循环前扫一次已落盘的日目录：这是 isFirstDay 的真实依据（见 recordedRunDays）。
+  // 只扫一次而不是每天扫——本进程内新写的日目录本来就该由 cursor 表达，混进来会重复计数。
+  const recordedDays = recordedRunDays(worldRoot, runId)
   // dead = bot server 进程已经退出，无可挽救 → 加入 brokenBots，剩余日子直接 writeSkippedDeadBot
   // 跳过。timeout 不进这个集合：当天记 timeout，但下一天循环顶部会 restartBot 重启该 bot 的
   // server（kill 老的、spawn 新的），这样后续日子能恢复正常 chat。重启的必要性：research-loop-ts
@@ -1229,7 +1291,16 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       let statuses: DayBotStatus[] = []
       if (isChatDay) {
       const isResearch = isResearchDay(cursor, config.researchDayEvery)
-      const isFirstDay = cursor === 0
+      // 两个口径必须分开，之前挤在 `cursor === 0` 一个变量里：
+      //   isColdStart —— **本进程**的第一天。决定预算（bot server 刚拉起，discover_tools/读
+      //     SOUL/查持仓这些冷启动开销真实存在，不管它是 run 的第 1 天还是第 381 天）。
+      //   isFirstDay  —— **本 run** 真的第一天。决定 prompt 形态（fullRules 里那句"账户已初始化、
+      //     100 万初始现金、盈亏从 0 累计"、FOOTER_FULL、DAY1_HINT，以及复盘/持有承诺块是否出现）。
+      // 单日驱动下 cursor 恒 0，旧写法让**每个**实盘日都自称第一天：bot 收到 FOOTER_FULL
+      //（"下单 + mem0_add 写完就可以结束"）而不是 FOOTER_BRIEF 的收尾契约，也收不到复盘块。
+      const priorRunDays = recordedDays.filter(d => d < date).length
+      const isColdStart = cursor === 0
+      const isFirstDay = isColdStart && priorRunDays === 0
       // First day shares research-day's wider budget: full rules + cold-start onboarding
       // (discover_tools, read SOUL/IDENTITY, query holdings/cooldown, web_fetch
       // sanity check) consistently spills past a 60s budget.
@@ -1237,7 +1308,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       // instead of adding another knob.
       // 周/月度决策日本身就是一次重再平衡（覆盖整段区间），等同研究日，给更宽预算——无需再单独配
       // research_day_every 去命中它们。
-      const useExtendedBudget = isFirstDay || isResearch || periodTradingDays > 1
+      const useExtendedBudget = isColdStart || isResearch || periodTradingDays > 1
       // 深度研究日（第 N/2N/3N 个决策日）：给最宽预算（覆盖引擎内研究 budget + 常规决策），
       // 并让 message.ts 注入【深度研究日】授权块。deepResearchEvery=0 时恒 false（历史行为）。
       const chatOrdinal = chatDayOrdinal(cursor, dates, config.chatStepMode, config.chatStepDays, chatDayOpts)
@@ -1255,7 +1326,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       const stepTag = config.chatStepMode === 'weekly' ? `[weekly@dow${config.chatWeekday ?? 1}]`
         : config.chatStepMode === 'monthly' ? `[monthly#${config.chatMonthlyNth ?? 1}]`
         : (config.chatStepDays > 1 ? `[step=${config.chatStepDays}d]` : '')
-      const tagBits = [isFirstDay ? '[first day]' : '', isResearch ? '[research day]' : '', periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
+      const tagBits = [isFirstDay ? '[first day]' : '', isColdStart && !isFirstDay ? `[resume day ${priorRunDays + 1}]` : '', isResearch ? '[research day]' : '', periodTradingDays > 1 ? `[+${periodTradingDays}td]` : '', stepTag].filter(Boolean).join(' ')
       log(worldRoot, runId, `day ${cursor + 1}/${dates.length}: ${date}${tagBits ? ' ' + tagBits : ''} — sending to ${config.bots.length} bot(s)`)
       const quotesAbs = resolve(P.quotesFile(worldRoot, date))
       statuses = await mapWithConcurrency(setupRes.bots, config.concurrency, async (b) => {
@@ -1307,10 +1378,15 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           maxGapDays: deepResearchMaxGapDays,
           todayDate: date,
           lastDeepDate,
-          tradingDates: dates,
+          tradingDates: setupRes.calendarDates,
+          runStartDate: dates[0],
           crashSignal,
         })
         const isDeepResearch = drState.forced
+        const heldFundCodes = dailyContext.account?.holdings?.map(h => h.fund_code) ?? []
+        const activeDeepCommitments = activeCommitmentsForBot(stateNow.deep_research_commitments_by_bot, b.botId, date, heldFundCodes)
+        const deepResearchCommitmentBlock = renderDeepResearchCommitmentBlock(activeDeepCommitments, date, isDeepResearch)
+        setupRes.deepResearchCommitmentGate.unlockedByBot[b.botId] = false
         const isDeepAuthorized = drState.authorized
         const timeoutMs = drState.forced
           ? deepResearchTimeoutMs
@@ -1321,13 +1397,16 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         log(worldRoot, runId, `bot ${b.botId} deep-research-check ${date}: reason=${reasonTag} gap=${drState.gapDays} target_move=${crashSignal?.targetDailyMovePct?.toFixed(2) ?? 'n/a'}% account_dd=${crashSignal?.accountDrawdownPct?.toFixed(2) ?? 'n/a'}% timeout=${Math.floor(timeoutMs / 1000)}s`)
 
         // 滚动 history window：从前几个交易日的 session jsonl 抽 digest（去掉工具结果原文），
-        // 按 20000 字符预算切割。超 budget 时用主模型（openclaw.json 的 default route）按 4 维度
+        // 按 20000 字符预算切割。超 budget 时用主模型（openclaw.json 的 default route）按 5 维度
         // 压缩老的 60%。Day 1 时 sessions.json 还没有任何记录，返回空字符串。
         // best-effort：抽取/压缩失败不阻塞 chat。
         let historyWindow = ''
         try {
           const hw = await buildHistoryWindow({
             rlOpenclawDir: P.rlOpenclawDir(worldRoot, runId),
+            priorRlOpenclawDirs: stateNow.source_run_id
+              ? [P.rlOpenclawDir(worldRoot, stateNow.source_run_id)]
+              : [],
             botId: b.botId,
             beforeDate: date,
             // 压缩端点首选本 bot 的 research-loop.yaml（model.primary，跟 bot 当前 key 一致）；
@@ -1454,6 +1533,10 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           briefing,
           intradayMarketBlock,
           dailyContext,
+          deepResearchCommitmentBlock,
+          // 交易纪律核对块数冷却期用的日历。必须给全量 calendarDates 而不是 setupRes.tradingDates：
+          // 单日驱动下后者只有当天一个日期，数不出「清仓后过了几个交易日」。
+          tradingCalendar: setupRes.calendarDates,
           historyWindow,
           beliefBlock,
           latestBelief,
@@ -1486,6 +1569,10 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const maxToolCalls = drState.forced ? 80 : drState.authorized ? 60 : 40
         const status = await chatOneBot(worldRoot, runId, date, message, timeoutMs, b, { maxToolCalls })
         status.accountDrawdownActive = drState.accountDrawdownActive
+        if (status.deepResearchFired && status.successfulBuys?.length) {
+          const feeWindowByFund = new Map((dailyContext.fundFees ?? []).map(f => [f.fund_code, Math.max(0, ...(f.redeem_tiers ?? []).filter(t => t.rate_pct > 0 && t.max_days != null).map(t => t.max_days as number))]))
+          status.deepResearchBuys = status.successfulBuys.map(buy => ({ ...buy, minHoldingDays: Math.max(7, feeWindowByFund.get(buy.fundCode) ?? 0) }))
+        }
         return status
       })
       for (const s of statuses) {
@@ -1539,19 +1626,26 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       const st = readState(worldRoot, runId)
       const nextLastDeepByBot = { ...(st.last_deep_research_dates ?? {}) }
       const nextDrawdownActiveByBot = { ...(st.deep_research_drawdown_active_by_bot ?? {}) }
+      let nextDeepCommitments = st.deep_research_commitments_by_bot ?? {}
       for (const status of statuses) {
         if (status.deepResearchFired === true) {
           nextLastDeepByBot[status.bot] = date
           log(worldRoot, runId, `bot ${status.bot} ${date}: start_research fired — last deep date updated`)
         }
         if (typeof status.accountDrawdownActive === 'boolean') nextDrawdownActiveByBot[status.bot] = status.accountDrawdownActive
+        if (status.deepResearchFired && status.deepResearchBuys?.length) {
+          nextDeepCommitments = upsertDeepResearchCommitments(nextDeepCommitments, status.bot, date, status.deepResearchBuys)
+          log(worldRoot, runId, 'bot ' + status.bot + ' ' + date + ': deep-research holding commitment created for ' + status.deepResearchBuys.map(b => b.fundCode).join(','))
+        }
       }
+      setupRes.deepResearchCommitmentGate.commitmentsByBot = nextDeepCommitments
       const anyFired = statuses.some(s => s.deepResearchFired === true)
       writeState(worldRoot, runId, {
         ...st, cursor: cursor + 1, updated_at: new Date().toISOString(),
         last_deep_research_date: anyFired ? date : st.last_deep_research_date,
         last_deep_research_dates: nextLastDeepByBot,
         deep_research_drawdown_active_by_bot: nextDrawdownActiveByBot,
+        deep_research_commitments_by_bot: nextDeepCommitments,
       })
     }
     await teardown(worldRoot, runId, setupRes, 'done', days)

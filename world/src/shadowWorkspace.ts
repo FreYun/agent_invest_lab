@@ -11,6 +11,8 @@ export interface BuildShadowWorkspaceOptions {
   // referencing ${SIMWORLD_PROXY_URL} doesn't accidentally ship the literal
   // placeholder downstream if the proxy is disabled).
   templateVars?: Record<string, string>
+  // 已存在时不从模板覆盖的 run 内可演化文件（相对 workspace 路径）。
+  preserveExisting?: string[]
 }
 
 const RESEARCH_LOOP_CONFIG = new Set([
@@ -51,12 +53,14 @@ function copyConfigDirWithoutRuntimeOverrides(sourceDir: string, destDir: string
 
 export function buildShadowWorkspace(opts: BuildShadowWorkspaceOptions): void {
   const include = opts.include ?? DEFAULT_SHADOW_INCLUDE
+  const preserveExisting = new Set(opts.preserveExisting ?? [])
   mkdirSync(opts.destDir, { recursive: true })
   for (const rel of include) {
     if (isResearchLoopConfigRel(rel)) continue
     const src = join(opts.sourceDir, rel)
     if (!existsSync(src)) continue
     const dst = join(opts.destDir, rel)
+    if (preserveExisting.has(rel) && existsSync(dst)) continue
     mkdirSync(dirname(dst), { recursive: true })
     if (rel === 'config') {
       mkdirSync(dst, { recursive: true })
