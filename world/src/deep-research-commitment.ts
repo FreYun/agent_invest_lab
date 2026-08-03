@@ -91,6 +91,32 @@ export function isCommitmentActive(commitment: DeepResearchCommitment | undefine
   return Boolean(commitment && tradeDate < commitment.commit_until)
 }
 
+export interface SellCommitmentDecision {
+  allowed: boolean
+  message?: string
+}
+
+/** 卖出闸门双轨判定（纯函数）：
+ *   到期 → 放行；硬风控 → 两轨都放；重研（unlockedByResearch）只放 deep_research 轨。
+ *   min_hold 轨窗内只认硬风控 + 到期，主动深研不解锁。 */
+export function decideSellCommitment(input: {
+  commitment: DeepResearchCommitment | undefined
+  tradeDate: string
+  unlockedByResearch: boolean
+  unlockedByForcedRiskControl: boolean
+}): SellCommitmentDecision {
+  const { commitment, tradeDate, unlockedByResearch, unlockedByForcedRiskControl } = input
+  if (!isCommitmentActive(commitment, tradeDate)) return { allowed: true }
+  if (unlockedByForcedRiskControl) return { allowed: true }
+  const kind = commitment!.kind ?? 'deep_research'
+  if (kind === 'deep_research' && unlockedByResearch) return { allowed: true }
+  const window = commitment!.committed_on + '→' + commitment!.commit_until
+  const message = kind === 'min_hold'
+    ? '基金 ' + commitment!.fund_code + ' 在最短持有承诺期（' + window + '）。窗内普通交易日禁止卖出，仅系统硬风控（急跌/账户回撤越线）可提前放行，或等承诺到期。'
+    : '基金 ' + commitment!.fund_code + ' 仍在深研持仓承诺期（' + window + '）。今天不是深度研究日，普通指标走弱不能推翻深研建仓结论；等待承诺到期，或由系统风险事件触发强制深研后重新判断。'
+  return { allowed: false, message }
+}
+
 export function upsertDeepResearchCommitments(
   current: DeepResearchCommitmentsByBot | undefined,
   botId: string,

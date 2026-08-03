@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   activeCommitmentsForBot,
+  decideSellCommitment,
   extractSuccessfulFundActions,
   renderDeepResearchCommitmentBlock,
   upsertDeepResearchCommitments,
@@ -126,4 +127,39 @@ test('kind 只升不降：min_hold 加仓不降级活跃 deep_research；min_hol
   assert.equal(t.bot5d['510300'].kind, 'min_hold')
   t = upsertDeepResearchCommitments(t, 'bot5d', '2025-10-22', [{ fundCode: '510300', reason: '深研', minHoldingDays: 7 }], 'deep_research')
   assert.equal(t.bot5d['510300'].kind, 'deep_research', 'min_hold 被深研买入升级')
+})
+
+test('decideSellCommitment 双轨：min_hold 只认硬风控/到期；deep_research 额外认重研', () => {
+  const mk = (kind: 'deep_research' | 'min_hold') => ({
+    bot_id: 'bot5d', fund_code: '510300', committed_on: '2025-10-21',
+    commit_until: '2025-10-28', min_holding_days: 7, kind,
+    thesis: 't',
+  })
+  const day = '2025-10-23' // 窗内
+
+  // 到期：无条件放行
+  assert.equal(decideSellCommitment({ commitment: mk('min_hold'), tradeDate: '2025-10-28', unlockedByResearch: false, unlockedByForcedRiskControl: false }).allowed, true)
+
+  // min_hold 窗内、无解锁 → 拒
+  const blocked = decideSellCommitment({ commitment: mk('min_hold'), tradeDate: day, unlockedByResearch: false, unlockedByForcedRiskControl: false })
+  assert.equal(blocked.allowed, false)
+  assert.match(blocked.message!, /最短持有承诺/)
+
+  // min_hold 窗内、主动深研(unlockedByResearch) → 仍拒(不解普通锁)
+  assert.equal(decideSellCommitment({ commitment: mk('min_hold'), tradeDate: day, unlockedByResearch: true, unlockedByForcedRiskControl: false }).allowed, false)
+
+  // min_hold 窗内、硬风控 → 放行
+  assert.equal(decideSellCommitment({ commitment: mk('min_hold'), tradeDate: day, unlockedByResearch: false, unlockedByForcedRiskControl: true }).allowed, true)
+
+  // deep_research 窗内、主动深研 → 放行(重研可证伪)
+  assert.equal(decideSellCommitment({ commitment: mk('deep_research'), tradeDate: day, unlockedByResearch: true, unlockedByForcedRiskControl: false }).allowed, true)
+
+  // deep_research 窗内、无解锁 → 拒
+  const dr = decideSellCommitment({ commitment: mk('deep_research'), tradeDate: day, unlockedByResearch: false, unlockedByForcedRiskControl: false })
+  assert.equal(dr.allowed, false)
+  assert.match(dr.message!, /深研持仓承诺期/)
+
+  // 旧承诺无 kind → 缺省 deep_research：主动深研可解锁
+  const legacy = { bot_id: 'bot5d', fund_code: '510300', committed_on: '2025-10-21', commit_until: '2025-10-28', min_holding_days: 7, thesis: 't' } as any
+  assert.equal(decideSellCommitment({ commitment: legacy, tradeDate: day, unlockedByResearch: true, unlockedByForcedRiskControl: false }).allowed, true)
 })
