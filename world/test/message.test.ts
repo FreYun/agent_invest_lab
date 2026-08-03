@@ -845,9 +845,8 @@ test('持有承诺块：单指数 bot 恒渲染建仓承诺 + 免赎档；多基
       ),
     },
   } as Parameters<typeof renderDailyMessage>[0])
-  assert.match(single, /持有承诺核对（系统核算 · 早赎红线）/)
-  assert.match(single, /建仓 = 持有承诺/)
-  assert.match(single, /019875（CS稀金属ETF联接C）：持满 7 自然日免赎；不足确定亏 1\.50% 早赎费/)
+  assert.match(single, /建仓 = 最短持有承诺（系统硬闸 · 跨日生效）/)
+  assert.match(single, /019875（CS稀金属ETF联接C）：今日建仓\/加仓 → 锁 7 自然日（不足 7 天确定亏 1\.50% 早赎费）/)
 
   // 多基金 bot101 → 不渲染（门控）
   const multi = renderDailyMessage({
@@ -857,14 +856,14 @@ test('持有承诺块：单指数 bot 恒渲染建仓承诺 + 免赎档；多基
       account: hcAccount([], []),
     },
   } as Parameters<typeof renderDailyMessage>[0])
-  assert.doesNotMatch(multi, /持有承诺核对/)
+  assert.doesNotMatch(multi, /建仓 = 最短持有承诺/)
 
   // 无 fundFees → 空串
   const noFees = renderDailyMessage({
     worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
     dailyContext: { benchmark: HC_BENCH, account: hcAccount([], []) },
   } as Parameters<typeof renderDailyMessage>[0])
-  assert.doesNotMatch(noFees, /持有承诺核对/)
+  assert.doesNotMatch(noFees, /建仓 = 最短持有承诺/)
   rmSync(w, { recursive: true, force: true })
 })
 
@@ -898,7 +897,7 @@ test('持有承诺块·思考闸：窗内买入渲染早赎费+距免赎+思考�
       ),
     },
   } as Parameters<typeof renderDailyMessage>[0])
-  assert.match(held, /持满 7 自然日免赎/)      // 承诺行在
+  assert.match(held, /今日建仓\/加仓 → 锁 7 自然日/)      // 承诺行在
   assert.doesNotMatch(held, /窗内持仓 · 今日若卖出/) // 无闸行
   rmSync(w, { recursive: true, force: true })
 })
@@ -940,7 +939,7 @@ test('持有承诺块·边界：无 recentOrders 承诺行仍渲染无闸行；D
     worldRoot: w, date: '2024-03-18', isFirstDay: false, botId: 'bot20', quotesPath: '/q.json',
     dailyContext: { fundFees: HC_FEES, benchmark: HC_BENCH, account: hcAccount(undefined, []) },
   } as Parameters<typeof renderDailyMessage>[0])
-  assert.match(legacy, /持满 7 自然日免赎/)
+  assert.match(legacy, /今日建仓\/加仓 → 锁 7 自然日/)
   assert.doesNotMatch(legacy, /窗内持仓 · 今日若卖出/)
 
   // Day1 路径同样渲染
@@ -948,7 +947,7 @@ test('持有承诺块·边界：无 recentOrders 承诺行仍渲染无闸行；D
     worldRoot: w, date: '2024-03-18', isFirstDay: true, botId: 'bot20', quotesPath: '/q.json',
     dailyContext: { fundFees: HC_FEES, benchmark: HC_BENCH, account: hcAccount([], []) },
   } as Parameters<typeof renderDailyMessage>[0])
-  assert.match(day1, /持有承诺核对（系统核算 · 早赎红线）/)
+  assert.match(day1, /建仓 = 最短持有承诺（系统硬闸 · 跨日生效）/)
 
   // 多档赎回阶梯：<7d 1.5% / <30d 0.5% / ≥30d 0% → 免赎档=30、rate(0)=1.5
   const multiTier = [{ fund_code: '013403', fund_name: '某基', found: true, purchase_fee_pct: 0,
@@ -964,7 +963,33 @@ test('持有承诺块·边界：无 recentOrders 承诺行仍渲染无闸行；D
       ),
     },
   } as Parameters<typeof renderDailyMessage>[0])
-  assert.match(mt, /013403（某基）：持满 30 自然日免赎；不足确定亏 1\.50% 早赎费/)
+  assert.match(mt, /013403（某基）：今日建仓\/加仓 → 锁 30 自然日（不足 30 天确定亏 1\.50% 早赎费）/)
   assert.match(mt, /已持 17 自然日，距免赎还剩 13 天）。今日卖出早赎费 ≈ ¥1,?000（0\.50%）/) // 0.5%×200000=1000
   rmSync(w, { recursive: true, force: true })
+})
+
+test('holdCommitmentBlock：单指数硬锁口径 max(7,窗口)、零赎费也列、深研日补重研句', () => {
+  const w = '/tmp'
+  const dc = {
+    fundFees: [
+      { fund_code: '510300', fund_name: '沪深300', redeem_tiers: [{ max_days: 7, rate_pct: 1.5 }, { max_days: null, rate_pct: 0 }] },
+      { fund_code: '008591', fund_name: '零赎费基', redeem_tiers: [{ max_days: null, rate_pct: 0 }] },
+    ],
+  } as any
+
+  // 单指数、普通日：显示硬锁口径，两只都列（含零赎费），无重研句
+  const single = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot5d', quotesPath: '/q.json', dailyContext: dc })
+  assert.match(single, /建仓 = 最短持有承诺/)
+  assert.match(single, /510300/)
+  assert.match(single, /锁 7 自然日/)           // 510300 窗口7 → max(7,7)=7
+  assert.match(single, /008591/)                 // 零赎费基金也列
+  assert.doesNotMatch(single, /可在后续深研日重研/)
+
+  // 单指数、深研可触发日：补重研通道句
+  const deepDay = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot5d', quotesPath: '/q.json', dailyContext: dc, deepResearchAuthorized: true })
+  assert.match(deepDay, /可在后续深研日重研/)
+
+  // 多指数 bot：不渲染该块
+  const multi = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot105d', quotesPath: '/q.json', dailyContext: dc })
+  assert.doesNotMatch(multi, /建仓 = 最短持有承诺/)
 })

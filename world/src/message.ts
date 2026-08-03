@@ -958,23 +958,26 @@ function redeemPenaltyOf(fee: FundFee | undefined): { windowDays: number; rateFo
   return { windowDays, rateForDays }
 }
 
-function holdCommitmentBlock(dc: DailyContextData | undefined, botId: string, asOfDate: string): string {
+function holdCommitmentBlock(dc: DailyContextData | undefined, botId: string, asOfDate: string, deepResearchEligible: boolean): string {
   if (botKindOf(botId) !== 'single-fund') return ''
   const fees = dc?.fundFees
   if (!fees?.length) return ''
-  // 承诺行（恒定）：对每只"有早赎惩罚档"的基金列免赎档。
+  // 硬锁承诺行：对每只可买基金列锁定天数 = max(7, 赎回费窗口)。零赎费基金也列（仍锁 7 天）。
   const commit: string[] = []
   for (const f of fees) {
     const pen = redeemPenaltyOf(f)
-    if (!pen) continue
-    commit.push(`  - ${f.fund_code}${f.fund_name ? `（${f.fund_name}）` : ''}：持满 ${pen.windowDays} 自然日免赎；不足确定亏 ${fmtNum(pen.rateForDays(0), 2)}% 早赎费。`)
+    const windowDays = pen?.windowDays ?? 0
+    const lockDays = Math.max(7, windowDays)
+    const feeNote = pen ? `不足 ${windowDays} 天确定亏 ${fmtNum(pen.rateForDays(0), 2)}% 早赎费` : '无赎回费'
+    commit.push(`  - ${f.fund_code}${f.fund_name ? `（${f.fund_name}）` : ''}：今日建仓/加仓 → 锁 ${lockDays} 自然日（${feeNote}）。`)
   }
-  if (!commit.length) return '' // 全程零赎回费的 bot：无翻烙饼成本，不渲染。
+  if (!commit.length) return ''
   const lines: string[] = []
-  lines.push('────────── 持有承诺核对（系统核算 · 早赎红线） ──────────')
-  lines.push('【建仓 = 持有承诺】买入/加仓即承诺持有到免赎档，窗内离场确定吃早赎费——买之前就想清楚能不能拿住：')
+  lines.push('────────── 建仓 = 最短持有承诺（系统硬闸 · 跨日生效） ──────────')
+  lines.push('【买之前想清楚能不能拿住】今日买入/加仓即被锁定；锁定天数 = max(7, 赎回费窗口)。窗内普通交易日想卖，交易代理会直接拒单（blocked_by:deep_research_commitment）；只有系统硬风控（急跌/账户回撤越线）能提前放行，或等承诺到期。拿不住就别在今天建：')
   lines.push(...commit)
-  // 牙齿②窗内持仓思考闸（Task 2 填充）。
+  if (deepResearchEligible) lines.push('  （今日若经 start_research 深研后建仓，该仓位属深研承诺：可在后续深研日重研明确证伪后平仓；普通日建仓不享此通道。）')
+  // 牙齿②窗内持仓「今日卖出确切早赎费 + 思考闸」（赎回费维度，与硬锁并存）。
   const gate = inWindowGateLines(dc, asOfDate, fees)
   if (gate.length) lines.push(...gate)
   return `\n\n${lines.join('\n')}`
@@ -1279,7 +1282,7 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   })
   const drUsage = ctx.deepResearchEnabled ? DEEP_RESEARCH_USAGE : ''
   // 单指数持有承诺块（多基金返回空串，安全）。
-  const holdCommit = holdCommitmentBlock(ctx.dailyContext, ctx.botId, ctx.date)
+  const holdCommit = holdCommitmentBlock(ctx.dailyContext, ctx.botId, ctx.date, Boolean(ctx.deepResearchForced ?? ctx.deepResearchDay) || Boolean(ctx.deepResearchAuthorized))
   const deepCommit = ctx.deepResearchCommitmentBlock?.trim() ? "\n\n" + ctx.deepResearchCommitmentBlock.trim() : ""
   if (ctx.isFirstDay) {
     // Day 1 = 冷启动：完整规则 + 可买池/预取上下文 + belief（含 schema + 校准）+ methodology 提示 + 记忆边界。
