@@ -20,7 +20,7 @@ import { fetchIntradayQuoteBlock } from './intraday-market.ts'
 import { assembleBriefing, type BriefingReportType } from './intraday-briefing.ts'
 import { readState, writeState, type WorldState } from './state.ts'
 import { buildBeliefContext, validateBeliefMd } from './belief-context/index.ts'
-import { activeCommitmentsForBot, extractSuccessfulFundActions, isCommitmentActive, renderDeepResearchCommitmentBlock, upsertDeepResearchCommitments, type DeepResearchCommitmentsByBot, type SuccessfulFundAction } from './deep-research-commitment.ts'
+import { activeCommitmentsForBot, decideSellCommitment, extractSuccessfulFundActions, renderDeepResearchCommitmentBlock, upsertDeepResearchCommitments, type DeepResearchCommitmentsByBot, type SuccessfulFundAction } from './deep-research-commitment.ts'
 import * as P from './paths.ts'
 
 export type StartBotServer = (botId: string, argv: string[]) => Promise<BotServer>
@@ -482,7 +482,7 @@ interface SetupResult {
   buyableCodesByBot: BuyableCodesByBot
   // 进程内共享的 MemoryStore 实例；与 memory-server 是同一份。
   memoryStore: MemoryStore
-  deepResearchCommitmentGate: { commitmentsByBot: DeepResearchCommitmentsByBot; unlockedByBot: Record<string, boolean> }
+  deepResearchCommitmentGate: { commitmentsByBot: DeepResearchCommitmentsByBot; unlockedByResearch: Record<string, boolean>; unlockedByForcedRiskControl: Record<string, boolean> }
   // Kill the named bot's server and spawn a fresh one in its slot. Used by runLoop
   // after a per-day chat timeout so the next day doesn't race with the still-in-flight
   // request on the server side (research-loop-ts doesn't serialize same-session chats
@@ -534,7 +534,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     ? (() => { try { return readState(worldRoot, runId).deep_research_commitments_by_bot ?? {} } catch { return {} } })()
     : {}
   const deepResearchCommitmentGate: SetupResult['deepResearchCommitmentGate'] = {
-    commitmentsByBot: persistedCommitments, unlockedByBot: {},
+    commitmentsByBot: persistedCommitments, unlockedByResearch: {}, unlockedByForcedRiskControl: {},
   }
   // pi-server needs to be spawned with cwd=openclawRoot so tsx's tsconfig.json lookup picks up
   // openclaw's path aliases (openclaw/plugin-sdk/*). research-loop doesn't need this.
@@ -579,7 +579,7 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
         onLog: (l) => process.stderr.write(l + '\n'),
         onNotification: (method, params) => {
           if (method === 'tool.call' && params.name === 'start_research') {
-            deepResearchCommitmentGate.unlockedByBot[botId] = true
+            deepResearchCommitmentGate.unlockedByResearch[botId] = true
             log(worldRoot, runId, 'bot ' + botId + ': deep-research commitment sell gate unlocked after start_research')
           }
           const line = formatBotNotification(botId, method, params)
@@ -641,11 +641,12 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   if (config.fundMcpCli && config.fundPortfolioUpstreamUrl) {
     fundPortfolioProxy = await createFundPortfolioProxy({
       upstreamUrl: config.fundPortfolioUpstreamUrl, runId, getTradeDate: getCurrentDate,
-      checkSellCommitment: ({ botId, fundCode, tradeDate }) => {
-        const commitment = deepResearchCommitmentGate.commitmentsByBot[botId]?.[fundCode]
-        if (!isCommitmentActive(commitment, tradeDate) || deepResearchCommitmentGate.unlockedByBot[botId] === true) return { allowed: true }
-        return { allowed: false, message: '基金 ' + fundCode + ' 仍在深研持仓承诺期（' + commitment.committed_on + '→' + commitment.commit_until + '）。今天不是深度研究日，普通指标走弱不能推翻深研建仓结论；等待承诺到期，或由系统风险事件触发强制深研后重新判断。' }
-      },
+      checkSellCommitment: ({ botId, fundCode, tradeDate }) => decideSellCommitment({
+        commitment: deepResearchCommitmentGate.commitmentsByBot[botId]?.[fundCode],
+        tradeDate,
+        unlockedByResearch: deepResearchCommitmentGate.unlockedByResearch[botId] === true,
+        unlockedByForcedRiskControl: deepResearchCommitmentGate.unlockedByForcedRiskControl[botId] === true,
+      }),
     })
     writeFileSync(P.fundPortfolioProxyRuntimeFile(worldRoot, runId), JSON.stringify({ port: fundPortfolioProxy.port, url: fundPortfolioProxy.url, upstream: config.fundPortfolioUpstreamUrl, runId }, null, 2) + '\n')
     log(worldRoot, runId, `fund-portfolio proxy at ${fundPortfolioProxy.url} (upstream ${config.fundPortfolioUpstreamUrl}, run_id=${runId})`)
@@ -794,7 +795,7 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
   return p
 }
 
-interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean; accountDrawdownActive?: boolean; successfulBuys?: SuccessfulFundAction[]; successfulSells?: SuccessfulFundAction[]; deepResearchBuys?: Array<SuccessfulFundAction & { minHoldingDays: number }> }
+interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean; accountDrawdownActive?: boolean; successfulBuys?: SuccessfulFundAction[]; successfulSells?: SuccessfulFundAction[]; commitmentPlan?: { kind: 'deep_research' | 'min_hold'; buys: Array<SuccessfulFundAction & { minHoldingDays: number }> } }
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }, opts?: { maxToolCalls?: number }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -1417,7 +1418,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const heldFundCodes = dailyContext.account?.holdings?.map(h => h.fund_code) ?? []
         const activeDeepCommitments = activeCommitmentsForBot(stateNow.deep_research_commitments_by_bot, b.botId, date, heldFundCodes)
         const deepResearchCommitmentBlock = renderDeepResearchCommitmentBlock(activeDeepCommitments, date, isDeepResearch)
-        setupRes.deepResearchCommitmentGate.unlockedByBot[b.botId] = false
+        // 每日 chat 前重置两个解锁标志：unlockedByResearch 由 start_research notification 置真；
+        // unlockedByForcedRiskControl 仅在硬风控（急跌 target-move / 账户回撤越线 account-drawdown）
+        // 强制深研时置真——它解 min_hold 与 deep_research 两轨；主动深研只解 deep_research 轨。
+        setupRes.deepResearchCommitmentGate.unlockedByResearch[b.botId] = false
+        setupRes.deepResearchCommitmentGate.unlockedByForcedRiskControl[b.botId] =
+          drState.reasons.some(r => r === 'target-move' || r === 'account-drawdown')
         const isDeepAuthorized = drState.authorized
         const timeoutMs = drState.forced
           ? deepResearchTimeoutMs
@@ -1600,10 +1606,12 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const maxToolCalls = drState.forced ? 80 : drState.authorized ? 60 : 40
         const status = await chatOneBot(worldRoot, runId, date, message, timeoutMs, b, { maxToolCalls })
         status.accountDrawdownActive = drState.accountDrawdownActive
-        if (status.deepResearchFired && status.successfulBuys?.length) {
-          const feeWindowByFund = new Map((dailyContext.fundFees ?? []).map(f => [f.fund_code, Math.max(0, ...(f.redeem_tiers ?? []).filter(t => t.rate_pct > 0 && t.max_days != null).map(t => t.max_days as number))]))
-          status.deepResearchBuys = status.successfulBuys.map(buy => ({ ...buy, minHoldingDays: Math.max(7, feeWindowByFund.get(buy.fundCode) ?? 0) }))
-        }
+        status.commitmentPlan = planCommitmentUpsert({
+          botId: b.botId,
+          deepResearchFired: status.deepResearchFired ?? false,
+          successfulBuys: status.successfulBuys,
+          feeWindowByFund: feeWindowByFundFrom(dailyContext.fundFees),
+        }) ?? undefined
         return status
       })
       for (const s of statuses) {
@@ -1664,9 +1672,9 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           log(worldRoot, runId, `bot ${status.bot} ${date}: start_research fired — last deep date updated`)
         }
         if (typeof status.accountDrawdownActive === 'boolean') nextDrawdownActiveByBot[status.bot] = status.accountDrawdownActive
-        if (status.deepResearchFired && status.deepResearchBuys?.length) {
-          nextDeepCommitments = upsertDeepResearchCommitments(nextDeepCommitments, status.bot, date, status.deepResearchBuys)
-          log(worldRoot, runId, 'bot ' + status.bot + ' ' + date + ': deep-research holding commitment created for ' + status.deepResearchBuys.map(b => b.fundCode).join(','))
+        if (status.commitmentPlan) {
+          nextDeepCommitments = upsertDeepResearchCommitments(nextDeepCommitments, status.bot, date, status.commitmentPlan.buys, status.commitmentPlan.kind)
+          log(worldRoot, runId, 'bot ' + status.bot + ' ' + date + ': ' + status.commitmentPlan.kind + ' holding commitment created for ' + status.commitmentPlan.buys.map(b => b.fundCode).join(','))
         }
       }
       setupRes.deepResearchCommitmentGate.commitmentsByBot = nextDeepCommitments
