@@ -9,7 +9,7 @@ import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
 import { buildShadowWorkspace } from './shadowWorkspace.ts'
 import { renderDailyMessage, botKindOf } from './message.ts'
-import { fetchDailyContext, fetchBenchmarkDailyState } from './daily-context.ts'
+import { fetchDailyContext, fetchBenchmarkDailyState, type FundFee } from './daily-context.ts'
 import { buildHistoryWindow } from './history-window/index.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
@@ -991,6 +991,37 @@ export function recordedRunDays(worldRoot: string, runId: string): string[] {
     return [] // run 目录还不存在 = 真的第一天
   }
   return entries.filter(e => /^\d{4}-\d{2}-\d{2}$/.test(e)).sort()
+}
+
+/** 最短持有天数 = max(7, 赎回费窗口)。零赎费/无窗口也至少锁 7 自然日。 */
+export function minHoldingDaysFor(feeWindowDays: number | undefined): number {
+  return Math.max(7, feeWindowDays ?? 0)
+}
+
+/** 每只基金的赎回费窗口天数（有 rate>0 且 max_days 非空的最大 max_days；无惩罚档=0）。 */
+export function feeWindowByFundFrom(fundFees: FundFee[] | undefined): Map<string, number> {
+  return new Map((fundFees ?? []).map(f => [
+    f.fund_code,
+    Math.max(0, ...(f.redeem_tiers ?? []).filter(t => t.rate_pct > 0 && t.max_days != null).map(t => t.max_days as number)),
+  ]))
+}
+
+/** 决定当日成功买入要建哪种承诺：
+ *   深研日（deepResearchFired）→ deep_research（所有 bot，保持现状）；
+ *   普通日 + 单指数 → min_hold（新）；
+ *   普通日 + 多指数 → null（现状不变）。 */
+export function planCommitmentUpsert(input: {
+  botId: string
+  deepResearchFired: boolean
+  successfulBuys: SuccessfulFundAction[] | undefined
+  feeWindowByFund: Map<string, number>
+}): { kind: 'deep_research' | 'min_hold'; buys: Array<SuccessfulFundAction & { minHoldingDays: number }> } | null {
+  const raw = input.successfulBuys ?? []
+  if (!raw.length) return null
+  const buys = raw.map(b => ({ ...b, minHoldingDays: minHoldingDaysFor(input.feeWindowByFund.get(b.fundCode)) }))
+  if (input.deepResearchFired) return { kind: 'deep_research', buys }
+  if (botKindOf(input.botId) === 'single-fund') return { kind: 'min_hold', buys }
+  return null
 }
 
 /** 第 N / 2N / 3N … 个交易日（cursor 0-based）算研究日；researchDayEvery=0 关闭。 */

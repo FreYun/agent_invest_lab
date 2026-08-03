@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runWorld, requestPause, requestStop, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, isChatDayAt, previousChatCursor, isoWeekKey, proxyEnvSupplement, recordedRunDays } from '../src/run.ts'
+import { runWorld, requestPause, requestStop, botServerArgv, openclawJsonSource, loopConfigPath, patchPiOpenclawJsonMemory, seedPiAgentBot, isResearchDay, isChatDayAt, previousChatCursor, isoWeekKey, proxyEnvSupplement, recordedRunDays, planCommitmentUpsert, minHoldingDaysFor, feeWindowByFundFrom } from '../src/run.ts'
 import { BotServer } from '../src/botServer.ts'
 import * as P from '../src/paths.ts'
 import { readState, writeState } from '../src/state.ts'
@@ -983,4 +983,46 @@ test('runWorld installs assigned strategy as active shadow METHODOLOGY and write
   await runWorld({ worldRoot, config, runId: 'strategy-r1', startBotServer: stubStartBotServer })
   assert.equal(readFileSync(join(P.shadowWorkspaceDir(worldRoot, 'strategy-r1', 'bot7'), 'METHODOLOGY.md'), 'utf8'), evolved)
   cleanup()
+})
+
+test('minHoldingDaysFor：至少 7，赎回窗口更长则取窗口', () => {
+  assert.equal(minHoldingDaysFor(undefined), 7)
+  assert.equal(minHoldingDaysFor(0), 7)
+  assert.equal(minHoldingDaysFor(5), 7)
+  assert.equal(minHoldingDaysFor(30), 30)
+})
+
+test('feeWindowByFundFrom：取有惩罚档的最大 max_days', () => {
+  const m = feeWindowByFundFrom([
+    { fund_code: '510300', fund_name: 'A', redeem_tiers: [{ max_days: 7, rate_pct: 1.5 }, { max_days: null, rate_pct: 0 }] },
+    { fund_code: '008591', fund_name: 'B', redeem_tiers: [{ max_days: null, rate_pct: 0 }] }, // 零赎费
+  ] as any)
+  assert.equal(m.get('510300'), 7)
+  assert.equal(m.get('008591'), 0)
+})
+
+test('planCommitmentUpsert：深研日→deep_research(所有bot)；普通日单指数→min_hold；普通日多指数→null', () => {
+  const fw = new Map([['510300', 30], ['008591', 0]])
+  const buys = [{ fundCode: '510300', reason: 'x' }, { fundCode: '008591', reason: 'y' }]
+
+  // 深研日，单指数
+  const a = planCommitmentUpsert({ botId: 'bot5d', deepResearchFired: true, successfulBuys: buys, feeWindowByFund: fw })!
+  assert.equal(a.kind, 'deep_research')
+  assert.equal(a.buys.find(b => b.fundCode === '510300')!.minHoldingDays, 30)
+  assert.equal(a.buys.find(b => b.fundCode === '008591')!.minHoldingDays, 7)
+
+  // 普通日，单指数
+  const b = planCommitmentUpsert({ botId: 'bot5d', deepResearchFired: false, successfulBuys: buys, feeWindowByFund: fw })!
+  assert.equal(b.kind, 'min_hold')
+  assert.equal(b.buys.length, 2)
+
+  // 深研日，多指数 → 仍 deep_research(现状不变)
+  const c = planCommitmentUpsert({ botId: 'bot105d', deepResearchFired: true, successfulBuys: buys, feeWindowByFund: fw })!
+  assert.equal(c.kind, 'deep_research')
+
+  // 普通日，多指数 → null(现状不变)
+  assert.equal(planCommitmentUpsert({ botId: 'bot105d', deepResearchFired: false, successfulBuys: buys, feeWindowByFund: fw }), null)
+
+  // 无买入 → null
+  assert.equal(planCommitmentUpsert({ botId: 'bot5d', deepResearchFired: true, successfulBuys: [], feeWindowByFund: fw }), null)
 })
