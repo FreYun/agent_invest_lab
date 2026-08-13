@@ -1,0 +1,179 @@
+# =====================================================================
+# macro_rules —— CPI/PPI/GDP/PMI/非农/汇率 → 宏观定性
+# =====================================================================
+# 蒸馏自 3 份招商 A 股周报的 §中观·景气 + §主题·风向 里的宏观资讯段
+#
+# 2026-07-30 修订：
+#   1) 顶层加 rules: 键（修 YAML 语法）
+#   2) 07-12 与 07-19 报告归属大面积互换（原稿把 07-19 p24/p31/p33
+#      的宏观数据错记到 07-12 头上）：
+#        · CPI 1.0% / PPI 4.1% → 07-19 p24
+#        · GDP 4.7% / 美 CPI 3.5% / 洛根讲话 / 韩国杠杆 ETF → 07-19 p31/p33
+#        · 集成电路 / 工业机器人 → 07-19 中观·景气段（p22 区间）
+# =====================================================================
+
+meta:
+  version: 0.2
+  distilled_at: 2026-07-29
+  revised_at: 2026-07-30
+  source_reports: [cms_20260705, cms_20260712, cms_20260719]
+
+rules:
+
+  # -------------------------------------------------------------------
+  # 国内 CPI / PPI / GDP
+  # -------------------------------------------------------------------
+  - id: cn_cpi_soft
+    when:
+      metric: cn_cpi_yoy
+      lt: 0.015
+    verdict: "国内价格温和，货币政策空间充足"
+    phrases:
+      - "6 月 CPI 同比上涨{{yoy}}%，通胀温和不构成货币政策掣肘"
+      - "低通胀环境下，降准降息窗口未关"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260712, page: 24, evidence: "6 月 CPI 同比上涨 1.0%（财联社 7 月 9 日电）"}
+
+  - id: cn_ppi_moderate_recovery
+    when:
+      metric: cn_ppi_yoy
+      ge: 0.02
+      lt: 0.05
+    verdict: "工业价格温和修复，中游制造业盈利改善"
+    phrases:
+      - "PPI 同比上涨{{yoy}}%，工业品价格温和回升"
+    confidence: 0.75
+    sources:
+      - {report: cms_20260712, page: 24, evidence: "6 月 PPI 同比上涨 4.1%"}
+
+  - id: cn_gdp_stable
+    when:
+      metric: cn_gdp_yoy
+      ge: 0.04
+      lt: 0.05
+    verdict: "GDP 增速稳中略缓，短期扰动不改基本面"
+    phrases:
+      - "二季度 GDP 同比增长{{q2_yoy}}%，上半年 GDP {{h1_yoy}}%"
+      - "经济稳中向好基本面未变，二季度波动主要受{{disturb_source}}影响"
+    confidence: 0.80
+    sources:
+      - {report: cms_20260719, page: 31, evidence: "上半年 GDP 4.7%，国家统计局二季度谈话"}
+
+  - id: cn_pmi_expansion
+    when:
+      metric: cn_pmi_mfg
+      ge: 50
+    verdict: "PMI 回到扩张区间，制造业景气修复"
+    phrases:
+      - "6 月制造业 PMI 为{{pmi}}%，重返扩张区间"
+    confidence: 0.90
+    sources:
+      - {report: cms_20260705, page: 24, evidence: "6 月 PMI 50.3%"}
+
+  # -------------------------------------------------------------------
+  # 海外宏观
+  # -------------------------------------------------------------------
+  - id: us_nonfarm_soft_dovish
+    when:
+      metric_1: us_nonfarm_add
+      lt_1_wan: 10          # <10 万
+      metric_2: us_nonfarm_expectation
+      ratio_actual_to_expect_lt: 0.6
+    verdict: "美国就业疲软，美联储加息预期降温，全球流动性中期趋松"
+    phrases:
+      - "美国 6 月非农就业增加{{actual}}万，远低于市场预期{{expect}}万"
+      - "就业数据疲软推动美联储加息预期回落，海外流动性预期改善"
+    confidence: 0.90
+    sources:
+      - {report: cms_20260705, page: 25, evidence: "6 月非农 5.7 万，预期 10.7 万"}
+
+  - id: us_cpi_cooling
+    when:
+      metric: us_cpi_yoy_change_mom
+      lt: -0.003      # 同比读数环比下降 30bp+
+    verdict: "美国通胀降温，加息节奏放缓预期强化"
+    phrases:
+      - "美国 6 月 CPI 同比增长{{yoy}}%（前值{{prev}}%），通胀读数明显回落"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260719, page: 33, evidence: "美国 6 月 CPI +3.5%，前值 +4.2%"}
+
+  - id: fed_hawkish_ai_risk_call_out
+    when:
+      signal: fed_minutes_ai_capex_flag
+      or: fed_governor_hawkish_comment
+    verdict: "美联储将 AI 投资列为通胀风险，转向鹰派概率上升"
+    phrases:
+      - "美联储在纪要中首次将 AI 投资列为三大通胀风险之一"
+      - "个别官员表态倾向为控通胀适度加息"
+    confidence: 0.70
+    sources:
+      - {report: cms_20260719, page: 33, evidence: "洛根：倾向为降低通胀率而适度加息"}
+      - {report: cms_20260712, page: 25, evidence: "纪要将 AI 投资列为三大通胀风险之一"}
+
+  - id: yen_weakness_extreme
+    when:
+      metric: usd_jpy
+      ge: 160
+    verdict: "日元跌至近 40 年低位，日本央行干预窗口临近"
+    phrases:
+      - "日元兑美元跌破{{level}}，触及{{year}}年以来最低水平"
+    confidence: 0.70
+    sources:
+      - {report: cms_20260705, page: 25, evidence: "日元跌破 162，触及 1986 以来最低"}
+
+  - id: overseas_leverage_etf_regulation
+    when:
+      signal: overseas_leverage_etf_restriction
+    verdict: "海外杠杆 ETF 被监管，衍生资金去杠杆压力可能通过 ETF 联动扩散"
+    phrases:
+      - "{{country}}将暂停单一股票杠杆 ETF 上市，杠杆资金结构性去化"
+      - "海外杠杆产品监管收紧，与融资余额下降形成同向压力"
+    confidence: 0.70
+    sources:
+      - {report: cms_20260719, page: 33, evidence: "韩国将暂停新单一股票杠杆 ETF 上市"}
+      - {report: cms_20260712, page: 前段, evidence: "韩股杠杆 ETF 强平 → A 股半导体链承压"}
+
+  # -------------------------------------------------------------------
+  # 中观景气单项（§中观·景气 段规则）
+  # -------------------------------------------------------------------
+  - id: industry_output_yoy_trend
+    when:
+      metric: industry_output_yoy_3m_rolling
+      delta_pct_pts: any
+    verdict: "以三个月滚动同比刻画中观拐点，避免单月噪音"
+    phrases:
+      - "{{indicator}}产量同比{{direction}}{{pct}}%，三个月滚动同比{{trend_dir}}{{trend_delta}}个百分点至{{trend_new}}%"
+    confidence: 1.00
+    usage: 必须为 §中观·景气 段每个指标的固定表述
+    sources:
+      - {report: cms_20260719, page: 22, evidence: "6 月集成电路 +18.8%，滚动 +21.27%（招商 7-19 中观·景气段）"}
+      - {report: cms_20260719, page: 22, evidence: "6 月工业机器人 +28.1%，滚动 +23.70%"}
+
+  - id: real_estate_negative_persistent
+    when:
+      metric: commodity_house_sales_yoy_3m
+      lt: -0.05
+      duration_months: 6+
+    verdict: "商品房销售负增长仍在延续，房地产链景气持续承压"
+    phrases:
+      - "商品房销售额三个月滚动同比降幅{{trend_desc}}至{{trend_pct}}%"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260712, page: 23, evidence: "商品房销售额 3M 同比 -11.77%"}
+
+  # -------------------------------------------------------------------
+  # 组合规则（招商体最爱的"两低一高"）
+  # -------------------------------------------------------------------
+  - id: recovery_no_inflation
+    when:
+      condition_1: "cn_cpi_yoy < 0.02"
+      condition_2: "cn_pmi_mfg > 50"
+    verdict: "复苏无通胀，具备货币宽松基础"
+    phrases:
+      - "CPI 温和 + PMI 回到扩张区间，'复苏无通胀'组合成立，货币政策仍有腾挪空间"
+    confidence: 0.75
+    sources:
+      - {report: cms_20260705, page: 24, evidence: "PMI 50.3"}
+      - {report: cms_20260712, page: 24, evidence: "CPI 1.0%"}

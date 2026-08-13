@@ -33,9 +33,28 @@ OUT_DIR="${OUT_DIR:-runtime-market-reports-daily}"
 RETRIES="${RETRIES:-2}"
 CONFIG_PATH="${CONFIG_PATH:-config/world-market-reports.yaml}"
 
+PREPASS_LOCK="${PREPASS_LOCK:-/tmp/oos-market-reports-${TRADE_DATE}.lock}"
+PREPASS_LOCK_WAIT="${PREPASS_LOCK_WAIT:-1800}"
+
 missing="$(missing_reports)"
 if [[ -z "$missing" ]]; then
   echo "market reports already ready for $TRADE_DATE: market_context, market_mainline, mainline_rotation"
+  exit 0
+fi
+
+# 现在有两批 OOS cron（bot101/102/103 一批、bot105d 一批）同在 14:30 起跑，都会走到这里。
+# prepass 的 run_id 和 out-dir 只由 TRADE_DATE 决定，两个进程并发跑同一个 run 会互相踩
+# state.json、重复起 reporter agent、并把同一天的报告往 market_reports 里塞两遍。按交易日
+# 加锁串行：后到的那个等前一个跑完，再复查一次，报告已齐就直接退（这才是常态路径）。
+# 用 fd 8——外层 run-oos-bot101-daily.sh 的批次锁占着 fd 9，会被子进程继承。
+exec 8>"$PREPASS_LOCK"
+if ! flock -w "$PREPASS_LOCK_WAIT" 8; then
+  echo "market reports prepass lock busy for more than ${PREPASS_LOCK_WAIT}s ($TRADE_DATE)" >&2
+  exit 1
+fi
+missing="$(missing_reports)"
+if [[ -z "$missing" ]]; then
+  echo "market reports finished by a concurrent batch for $TRADE_DATE: market_context, market_mainline, mainline_rotation"
   exit 0
 fi
 

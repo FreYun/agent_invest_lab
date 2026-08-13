@@ -9,7 +9,7 @@ import { mapWithConcurrency } from './concurrency.ts'
 import { BotServer } from './botServer.ts'
 import { buildShadowWorkspace } from './shadowWorkspace.ts'
 import { renderDailyMessage, botKindOf } from './message.ts'
-import { fetchDailyContext, fetchBenchmarkDailyState, type FundFee } from './daily-context.ts'
+import { fetchDailyContext, fetchBenchmarkDailyState, type DailyContextData, type FundFee } from './daily-context.ts'
 import { buildHistoryWindow } from './history-window/index.ts'
 import { MemoryStore } from './memory-server/store.ts'
 import { createMemoryServer, type MemoryServerHandle } from './memory-server/server.ts'
@@ -160,44 +160,66 @@ export function botServerArgv(config: WorldConfig, botId: string, workspace: str
 // 不再注入 skill 让其自跑主线识别流水线（遵循度低、退化成只查持仓板块）。此表清空，机制保留备用。
 const INJECT_PIPELINE_SKILLS: Record<string, string[]> = {}
 
-/** 系统侧从 fund.db 预读「4 份市场研报 + 四研判室(res1/2/4/5)观点」的 content_md
+/** 系统侧从 fund.db 预读「3 份市场研报 + 四研判室(res1/2/4/5)观点」的 content_md
  *  （PIT：as_of_date<=世界日，各取最新一期）。market_reports 与 res_reports 同库；
  *  与 strategy-server.get_market_report / res_query.get_prof_views 同口径，但走系统注入而非 bot 工具调用。
- *  8 份全缺 → 返回 undefined（message.ts 不渲染该块）。
- *  2026-07-02（用户拍板「替换」）：主线/rotation 优先取日度版（market_mainline_daily /
- *  mainline_rotation_daily，skill 日度纪律确定性引擎，backfill-mainline-daily.ts 生成）；
- *  日度缺失（世界日早于日度回补起点 2025-01，或日度管线故障）回退月度版，注入永不缺块。
- *  月度版的生成管线（prepass / v5）不动，只换消费端。 */
+ *  全缺 → 返回 undefined（message.ts 不渲染该块）。
+ *  2026-07-02（用户拍板「替换」）：主线优先取日度版（market_mainline_daily，skill 日度纪律确定性
+ *  引擎，backfill-mainline-daily.ts 生成）；日度缺失回退月度版，注入永不缺块。
+ *  2026-08-04：rotation 改为直读**月度** mainline_rotation。原写法是
+ *  `readLatest(rotation_daily) || readLatest(rotation)`，语义想表达「日度更好、优先用」，但
+ *  `||` 的短路发生在「日度表里有任意一行 <= 世界日的记录」时，而 mainline_rotation_daily 只回补了
+ *  2025-01-02..01-22 共 15 天 —— 于是完整的月度表（396 期）一次都没被读到过，2025 回测里
+ *  227/242 个交易日注入的都是 2025-01-22 那份快照（regime 恒为「抱主线·v4 已维持75日」、
+ *  HS300 距年线恒为 2.39%，4/7 关税崩盘当天真值 -8.39%，防御档因此永远无法经由该块触发）。
+ *  月度版由 prepass/v5 + reporter-rotation 独立生成、覆盖完整，是这里真正该消费的源。 */
 function readMarketReportsForInjection(fundDbPath: string, worldDate: string):
   { context: string; mainline: string; rotation: string; macroNews: string;
     res: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string } } | undefined {
   // res_reports 同 (report_type, as_of_date) 可能有多行（历史回填）→ 必须 id DESC 取最新一行，
   // 对齐 res_query.get_prof_views；market_reports 有 UNIQUE 约束无多行，加 id DESC 无害，统一一条 helper。
-  const readLatest = (table: string, type: string): string => {
-    const sql = `SELECT content_md FROM ${table} WHERE report_type=${sqlStr(type)} AND scope='global' `
+  //
+  // maxLagDays = 该类报告允许的最大「顺延」自然日数。这个参数是必需的而不是可选的保险：
+  // 顺延本身没有上限时，一张只回补了几天的表会被无声地一路带到回测末尾，且注入端会剥掉
+  // as_of_date，读 prompt 的人和 bot 都无从察觉（mainline_rotation 就是这么烂掉的）。
+  // 超限不静默丢弃（丢块会让 bot 以为"今日无报告"而保守处理），而是加一条显式陈旧横幅。
+  const readLatest = (table: string, type: string, maxLagDays: number): string => {
+    const sql = `SELECT as_of_date, content_md FROM ${table} WHERE report_type=${sqlStr(type)} AND scope='global' `
       + `AND as_of_date<=${sqlStr(worldDate)} ORDER BY as_of_date DESC, id DESC LIMIT 1;`
     try {
       const out = runSqlite(fundDbPath, sql).trim()
-      const rows = out ? (JSON.parse(out) as { content_md: string }[]) : []
-      return rows[0]?.content_md ?? ''
+      const rows = out ? (JSON.parse(out) as { as_of_date: string; content_md: string }[]) : []
+      const row = rows[0]
+      if (!row?.content_md) return ''
+      const lag = Math.round((Date.parse(worldDate) - Date.parse(row.as_of_date)) / 86400000)
+      if (!Number.isFinite(lag) || lag <= maxLagDays) return row.content_md
+      return `> ⚠️ **陈旧报告告警**：本块 as_of_date=${row.as_of_date}，距今日世界日 ${worldDate} 已 ${lag} 天`
+        + `（该类报告新鲜度上限 ${maxLagDays} 天）。生成管线可能中断，**其中的排名/计数器/组合骨架很可能已经失效**，`
+        + `请勿据此下单，改以当日可直接核验的数据为准。\n\n${row.content_md}`
     } catch { return '' }
   }
-  const context = readLatest('market_reports', 'market_context')
-  const mainline = readLatest('market_reports', 'market_mainline_daily') || readLatest('market_reports', 'market_mainline')
-  const rotation = readLatest('market_reports', 'mainline_rotation_daily') || readLatest('market_reports', 'mainline_rotation')
-  const macroNews = readLatest('market_reports', 'macro_news')
+  // 日度类：正常每交易日一份，容忍长假顺延（春节/国庆最长 ~9 天）。
+  const context = readLatest('market_reports', 'market_context', 10)
+  const mainline = readLatest('market_reports', 'market_mainline_daily', 10)
+    || readLatest('market_reports', 'market_mainline', 45)  // 回退月度版：按月生成，上限放宽
+  // rotation：只读月度真源。**不要**再加 `readLatest(mainline_rotation_daily) ||` 的优先级——
+  // 那张表是残缺回补，短路后会把月度版永久屏蔽（本函数注释里的 2026-08-04 记录）。
+  // 若将来把 rotation_daily 回补齐了要恢复优先级，必须同时确认它逐交易日无缺口。
+  const rotation = readLatest('market_reports', 'mainline_rotation', 45)
+  // 周频类：res 研判室与宏观资讯本就是每周一期，顺延数日属设计内。
+  const macroNews = readLatest('market_reports', 'macro_news', 14)
   const res = {
-    market_strategy: readLatest('res_reports', 'market_strategy'),
-    policy_analysis: readLatest('res_reports', 'policy_analysis'),
-    intl_relations: readLatest('res_reports', 'intl_relations'),
-    cross_market_linkage: readLatest('res_reports', 'cross_market_linkage'),
+    market_strategy: readLatest('res_reports', 'market_strategy', 14),
+    policy_analysis: readLatest('res_reports', 'policy_analysis', 14),
+    intl_relations: readLatest('res_reports', 'intl_relations', 14),
+    cross_market_linkage: readLatest('res_reports', 'cross_market_linkage', 14),
   }
   const anyRes = res.market_strategy || res.policy_analysis || res.intl_relations || res.cross_market_linkage
   if (!context && !mainline && !rotation && !macroNews && !anyRes) return undefined
   return { context, mainline, rotation, macroNews, res }
 }
 
-/** 从 daily 主线/rotation 报告 markdown 里正则抽出提到的 6 位数基金代码。
+/** 从 daily 主线报告 markdown 里正则抽出提到的 6 位数基金代码。
  *  用于收窄「daily prompt 费率块」的入参（省 ~30k tokens/day）——bot 只需要看得到
  *  持仓 + 报告推荐载体的费率，全 buyable 池 759 只 99% 用不上。
  *  匹配 `**\d{6}` / ` \d{6} ` / `载体：**\d{6}` 都覆盖，一律去重返回。 */
@@ -212,9 +234,11 @@ function extractFundCodesFromReport(md: string): string[] {
 
 /** 【多基金 bot 的费率块入参】= 当前持仓 codes ∪ 报告推荐载体 codes。
  *  持仓：从 fund_bot_position_snapshots 拿 (bot_id, run_id) 上距 worldDate 最近一日的快照 fund_code。
- *  报告：从 mainline_daily / rotation_daily（缺失回退月度版）里正则抽 6 位数。
+ *  报告：从 mainline_daily（缺失回退月度版）里正则抽 6 位数。
  *  两者并集通常 ≤10 只，比全 buyable 池 759 只节省大量 daily prompt token。
- *  日度报告 + 持仓都缺失（Day 1 或极端情况）→ 空数组，caller 侧回退到全 buyable 池（老行为）。 */
+ *  日度报告 + 持仓都缺失（Day 1 或极端情况）→ 空数组，caller 侧回退到全 buyable 池（老行为）。
+ *  2026-08-04：不再并入 rotation_daily——该表只回补了 15 天，会把 2025-01-22 那批已失效的
+ *  载体代码（018135/014881）常年顶进费率块，挤掉真正相关的基金。 */
 export function computeRelevantFundCodesForBot(
   fundDbPath: string, botId: string, runId: string, worldDate: string
 ): string[] {
@@ -228,8 +252,7 @@ export function computeRelevantFundCodesForBot(
     } catch { return '' }
   }
   const mainline = readLatestReport('market_mainline_daily') || readLatestReport('market_mainline')
-  const rotation = readLatestReport('mainline_rotation_daily') || readLatestReport('mainline_rotation')
-  const merged = new Set<string>([...extractFundCodesFromReport(mainline), ...extractFundCodesFromReport(rotation)])
+  const merged = new Set<string>(extractFundCodesFromReport(mainline))
   // 叠上持仓 codes（同 bot、同 run 上距 worldDate 最近一日的持仓快照）。
   try {
     const holdingsSql = `SELECT fund_code FROM fund_bot_position_snapshots WHERE bot_id=${sqlStr(botId)} `
@@ -325,13 +348,51 @@ function buyableCodesForBot(config: WorldConfig, lib: StrategyLibrary | null, bo
   return config.buyableFundCodes
 }
 
-function buildBuyableCodesByBot(config: WorldConfig, lib: StrategyLibrary | null): BuyableCodesByBot {
+// A→C 份额替换表（scripts/gen-share-class-map.py 生成）。缺失 / 损坏 → 空表，不做任何替换。
+export function loadShareClassMap(worldRoot: string): Record<string, string> {
+  try {
+    const raw = JSON.parse(readFileSync(P.shareClassMapFile(worldRoot), 'utf8')) as { map?: unknown }
+    if (!raw.map || typeof raw.map !== 'object') return {}
+    const out: Record<string, string> = {}
+    for (const [a, c] of Object.entries(raw.map as Record<string, unknown>)) {
+      if (typeof c === 'string' && c) out[a] = c
+    }
+    return out
+  } catch { return {} }
+}
+
+// C 已在池 → 映射后与原 C 去重合并（池子缩小）；C 不在池 → 1:1 顶替（池子不变）。
+export function applyShareClassSwap(codes: string[], swap: Record<string, string>): string[] {
+  return [...new Set(codes.map(c => swap[c] ?? c))].sort()
+}
+
+// A→C 替换必须落在**每一条**通往 data/buyable/<runId>.json 的路径上，不能只放在这里：
+// 写盘处在 config 没有 botAssignments 时会绕开本函数、直接写 config.buyableFundCodes，
+// 那条路径必须自己再过一遍 applyShareClassSwap（漏掉时 shadow METHODOLOGY 宣传 C、
+// 而 MCP 买入闸门只认原始 A，两边互相打架）。
+// 卖单不过池子闸门，所以「A 出池」= 新建仓强制 C + 存量 A 仓位不强制退。
+export function buildBuyableCodesByBot(config: WorldConfig, lib: StrategyLibrary | null, worldRoot: string): BuyableCodesByBot {
+  const swap = loadShareClassMap(worldRoot)
   const out: BuyableCodesByBot = {}
   for (const botId of config.bots) {
     const codes = buyableCodesForBot(config, lib, botId)
-    if (codes && codes.length) out[botId] = [...new Set(codes)].sort()
+    if (codes && codes.length) out[botId] = applyShareClassSwap(codes, swap)
   }
   return out
+}
+
+// 实际写进 data/buyable/<runId>.json（= fund-portfolio-mcp 的买入闸门）的那一份。
+// 没有 botAssignments 时写的是全局扁平池，这条路径**绕开** buildBuyableCodesByBot，
+// 所以必须在这里自己再过一遍 A→C——漏掉的话 shadow METHODOLOGY 向 bot 宣传 C、
+// 而闸门只认原始 A，bot 会被自己的方法论指向一个下单必被拒的代码。
+export function buildBuyableWritePayload(
+  config: WorldConfig,
+  byBot: BuyableCodesByBot,
+  swap: Record<string, string>,
+): string[] | BuyableCodesByBot {
+  if (config.botAssignments) return byBot
+  if (config.buyableFundCodes) return applyShareClassSwap(config.buyableFundCodes, swap)
+  return byBot
 }
 
 function installStrategyLibraryInShadow(opts: {
@@ -460,7 +521,13 @@ export function writeResearchLoopYaml(config: WorldConfig, botId: string, shadow
   // 防 dashboard 临时配置显式列了隐藏工具时 always_load 去预激活一个 proxy 不暴露的名字。
   if (config.simworldTools && config.simworldTools.length) {
     const toolsCfg = (typeof base.tools === 'object' && base.tools ? base.tools : {}) as Record<string, unknown>
-    toolsCfg.always_load = config.simworldTools.filter(t => !HIDDEN_TOOLS.has(t.name)).map(t => `mcp__simworld_data__${t.name}`)
+    // 与 rl_config_base 里预置的 always_load 取并集（例如 lucidvole 交易工具）。原实现是直接覆盖，
+    // 导致只有 simworld 数据工具被预激活、交易工具仍需每次先 discover_tools（实测单 run 47 次，
+    // 高频 query 就是 select:portfolio_place_buy_order / submit_satellite_review）。
+    // 模板没预置时结果与旧行为逐字相同。
+    const presetAlwaysLoad = Array.isArray(toolsCfg.always_load) ? (toolsCfg.always_load as string[]) : []
+    const simworldAlwaysLoad = config.simworldTools.filter(t => !HIDDEN_TOOLS.has(t.name)).map(t => `mcp__simworld_data__${t.name}`)
+    toolsCfg.always_load = [...new Set([...presetAlwaysLoad, ...simworldAlwaysLoad])]
     base.tools = toolsCfg
   }
   const dst = join(shadow, 'config', 'research-loop.yaml')
@@ -631,7 +698,15 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
   }
   const templateVars: Record<string, string> = { SIMWORLD_PROXY_URL: simworldProxy.url }
   const strategyLibrary = config.strategyLibraryRoot ? loadStrategyLibrary(config.strategyLibraryRoot) : null
-  const buyableCodesByBot = buildBuyableCodesByBot(config, strategyLibrary)
+  const buyableCodesByBot = buildBuyableCodesByBot(config, strategyLibrary, worldRoot)
+  {
+    // 换池审计：本轮各 bot 原始池里有多少 A 被换成 C。真正的不变量检查在写盘处
+    // （只有实际写进买入闸门文件的那份才算数），这里只报加载量与命中量。
+    const swap = loadShareClassMap(worldRoot)
+    const raw = new Set(config.bots.flatMap(b => buyableCodesForBot(config, strategyLibrary, b) ?? []))
+    const swapped = [...raw].filter(c => swap[c])
+    log(worldRoot, runId, `share-class map: ${Object.keys(swap).length} A→C entries loaded; ${swapped.length} swapped in this run's pools`)
+  }
 
   // fund-portfolio-mcp 代理（仅当 fundMcpCli 配置时启用——基金 run 才需要）：
   //   - 强制注入 run_id 到所有 writer 工具的 arguments
@@ -742,10 +817,16 @@ async function setup(opts: RunWorldOptions): Promise<SetupResult> {
     // FUND_BUYABLE_CODES_DIR env 保持一致。
     if (Object.keys(buyableCodesByBot).length > 0) {
       try {
-        const writePayload = config.botAssignments ? buyableCodesByBot : (config.buyableFundCodes ?? buyableCodesByBot)
+        const swap = loadShareClassMap(worldRoot)
+        const writePayload = buildBuyableWritePayload(config, buyableCodesByBot, swap)
         const written = writeBuyableCodesFile(worldRoot, runId, writePayload)
-        const union = [...new Set(Object.values(buyableCodesByBot).flat())].sort()
-        log(worldRoot, runId, `fund buyable codes pinned (${union.length} union): ${union.slice(0, 8).join(',')}${union.length > 8 ? ',…' : ''} -> ${written}`)
+        // union / leaked 都必须从实际写盘的那份算——从 buyableCodesByBot 算的话，
+        // 上面那条绕行分支永远查不出来（leaked 恒为 0，虚假安全感）。
+        const union = Array.isArray(writePayload)
+          ? [...new Set(writePayload)].sort()
+          : [...new Set(Object.values(writePayload).flat())].sort()
+        const leaked = union.filter(c => swap[c])
+        log(worldRoot, runId, `fund buyable codes pinned (${union.length} union): ${union.slice(0, 8).join(',')}${union.length > 8 ? ',…' : ''} -> ${written}${leaked.length ? ` — WARNING mapped A leaked into buy gate: ${leaked.join(',')}` : ''}`)
       } catch (err) {
         log(worldRoot, runId, `fund buyable codes write FAILED: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -795,7 +876,7 @@ export function writeBuyableCodesFile(worldRoot: string, runId: string, codes: s
   return p
 }
 
-interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean; accountDrawdownActive?: boolean; successfulBuys?: SuccessfulFundAction[]; successfulSells?: SuccessfulFundAction[]; commitmentPlan?: { kind: 'deep_research' | 'min_hold'; buys: Array<SuccessfulFundAction & { minHoldingDays: number }> } }
+interface DayBotStatus { bot: string; status: 'ok' | 'error' | 'timeout' | 'dead'; iterations?: number; usage?: number; ms: number; error?: string; toolCalls?: number; deepResearchFired?: boolean; accountDrawdownActive?: boolean; accountDrawdownLevel?: number; successfulBuys?: SuccessfulFundAction[]; successfulSells?: SuccessfulFundAction[]; commitmentPlan?: { kind: 'deep_research' | 'min_hold'; buys: Array<SuccessfulFundAction & { minHoldingDays: number }> } }
 
 async function chatOneBot(worldRoot: string, runId: string, date: string, message: string, perBotTimeoutMs: number, b: { botId: string; server: BotServer }, opts?: { maxToolCalls?: number }): Promise<DayBotStatus> {
   const dir = P.botDayDir(worldRoot, runId, date, b.botId)
@@ -969,6 +1050,7 @@ export async function runWorld(opts: RunWorldOptions): Promise<void> {
     last_deep_research_date: prev?.last_deep_research_date,
     last_deep_research_dates: prev?.last_deep_research_dates,
     deep_research_drawdown_active_by_bot: prev?.deep_research_drawdown_active_by_bot,
+    deep_research_drawdown_level_by_bot: prev?.deep_research_drawdown_level_by_bot,
     deep_research_commitments_by_bot: prev?.deep_research_commitments_by_bot,
     pid: process.pid,
   }
@@ -1068,17 +1150,25 @@ export interface DeepResearchStateInput {
   /** 从未深研过时的锚点（run 首个交易日）。tradingDates 传完整日历后，
    *  tradingDaysBetween 内部的 dates[0] 兜底会落到日历开头，锚错了。 */
   runStartDate?: string
-  /** 提前深研信号：投资目标单日大幅波动，或 bot 账户当前回撤首次跌破阈值。 */
+  /** 提前深研信号：投资目标单日大幅波动，或 bot 账户当前回撤跨入更深的阈值倍数档位。 */
   crashSignal?: {
     targetDailyMovePct: number | null
     accountDrawdownPct: number | null // <=0；账户最新净值相对历史峰值
-    accountDrawdownWasActive: boolean // 上一决策日是否已在阈值内，用于边沿触发
+    accountDrawdownWasActive: boolean // 兼容老状态；无 previousLevel 时映射为 0/1
+    accountDrawdownPreviousLevel?: number // 上一决策日档位：0 / 1 / 2 / ...
     dailyMoveThreshold: number     // 正数，如 3
     drawdownThreshold: number      // 正数，如 8
+    portfolioDailyReturnPct?: number | null
+    worstHoldingDailyMovePct?: number | null
+    riskBasketWorstDailyMovePct?: number | null
+    portfolioDailyLossThreshold?: number
+    worstHoldingDailyLossThreshold?: number
+    riskBasketDailyLossThreshold?: number
   }
 }
+export type DeepResearchReason = 'max-gap' | 'ordinal' | 'target-move' | 'account-drawdown' | 'portfolio-loss' | 'holding-drop' | 'risk-basket'
 export interface DeepResearchStateOut {
-  /** 是否允许 bot 今日调 start_research（达到间隔或命中崩盘信号才放行）。 */
+  /** 是否允许 bot 今日调 start_research。agent-triggered 模式下普通日也允许自主判断。 */
   authorized: boolean
   /** 是否强制（forced 日不做 = 违反调度纪律）。 */
   forced: boolean
@@ -1086,24 +1176,93 @@ export interface DeepResearchStateOut {
    *  仅当日期不在交易日历中（数据异常）才为 MAX_SAFE_INTEGER。 */
   gapDays: number
   /** 触发原因，用于日志和 prompt 明示，避免把事件触发误写成“达到调度上限”。 */
-  reasons: Array<'max-gap' | 'ordinal' | 'target-move' | 'account-drawdown'>
+  reasons: DeepResearchReason[]
   accountDrawdownActive: boolean
+  accountDrawdownLevel: number
 }
 
-/** 当前账户是否处于回撤阈值内。历史最大回撤不参与此判断。 */
+function previousAccountDrawdownLevel(s: NonNullable<DeepResearchStateInput['crashSignal']>): number {
+  if (s.accountDrawdownPreviousLevel != null && Number.isFinite(s.accountDrawdownPreviousLevel)) {
+    return Math.max(0, Math.floor(s.accountDrawdownPreviousLevel))
+  }
+  return s.accountDrawdownWasActive ? 1 : 0
+}
+
+/** 当前账户所在回撤倍数档位。历史最大回撤不参与，只看相对最新净值峰值的 current drawdown。 */
+export function accountDrawdownLevel(s?: DeepResearchStateInput['crashSignal']): number {
+  if (!s) return 0
+  if (s.accountDrawdownPct == null) return previousAccountDrawdownLevel(s)
+  if (s.accountDrawdownPct >= 0 || s.drawdownThreshold <= 0) return 0
+  return Math.max(0, Math.floor((-s.accountDrawdownPct + 1e-9) / s.drawdownThreshold))
+}
+
+/** 当前账户是否至少处于第一档回撤阈值内。 */
 export function isAccountDrawdownActive(s?: DeepResearchStateInput['crashSignal']): boolean {
-  if (!s) return false
-  if (s.accountDrawdownPct == null) return s.accountDrawdownWasActive
-  return s.accountDrawdownPct <= -s.drawdownThreshold
+  return accountDrawdownLevel(s) > 0
 }
 
-/** 事件触发原因。账户回撤只在“阈值外 → 阈值内”的穿越日触发一次。 */
-export function deepResearchEventReasons(s?: DeepResearchStateInput['crashSignal']): Array<'target-move' | 'account-drawdown'> {
+/** 事件触发原因。账户回撤每跨入一个更深档位触发一次，同一档内不重复。 */
+export function deepResearchEventReasons(s?: DeepResearchStateInput['crashSignal']): Array<Exclude<DeepResearchReason, 'max-gap' | 'ordinal'>> {
   if (!s) return []
-  const reasons: Array<'target-move' | 'account-drawdown'> = []
+  const reasons: Array<Exclude<DeepResearchReason, 'max-gap' | 'ordinal'>> = []
   if (s.targetDailyMovePct != null && Math.abs(s.targetDailyMovePct) >= s.dailyMoveThreshold) reasons.push('target-move')
-  if (isAccountDrawdownActive(s) && !s.accountDrawdownWasActive) reasons.push('account-drawdown')
+  if (accountDrawdownLevel(s) > previousAccountDrawdownLevel(s)) reasons.push('account-drawdown')
+  if (s.portfolioDailyReturnPct != null && s.portfolioDailyLossThreshold != null
+      && s.portfolioDailyReturnPct <= -s.portfolioDailyLossThreshold) reasons.push('portfolio-loss')
+  if (s.worstHoldingDailyMovePct != null && s.worstHoldingDailyLossThreshold != null
+      && s.worstHoldingDailyMovePct <= -s.worstHoldingDailyLossThreshold) reasons.push('holding-drop')
+  if (s.riskBasketWorstDailyMovePct != null && s.riskBasketDailyLossThreshold != null
+      && s.riskBasketWorstDailyMovePct <= -s.riskBasketDailyLossThreshold) reasons.push('risk-basket')
   return reasons
+}
+
+export interface DeepResearchAnomalyReadings {
+  portfolioDailyReturnPct: number | null
+  worstHoldingDailyMovePct: number | null
+  worstHoldingCode: string | null
+  riskBasketWorstDailyMovePct: number | null
+  riskBasketWorstCode: string | null
+}
+
+/** 从已预取的 PIT 日度数据构造异常读数，不额外发请求。持仓基金同时充当其板块载体代理。 */
+export function deriveDeepResearchAnomalyReadings(
+  dailyContext: DailyContextData,
+  riskBasketCodes: string[],
+): DeepResearchAnomalyReadings {
+  const portfolioSeries = dailyContext.performance?.dailySeries ?? []
+  const portfolioLast = portfolioSeries.length ? portfolioSeries[portfolioSeries.length - 1] : null
+
+  let worstHoldingDailyMovePct: number | null = null
+  let worstHoldingCode: string | null = null
+  for (const fund of dailyContext.fundSeries ?? []) {
+    const points = fund.nav_series ?? []
+    const last = points.length ? points[points.length - 1] : null
+    if (!last || !Number.isFinite(last.daily_return_pct)) continue
+    if (worstHoldingDailyMovePct == null || last.daily_return_pct < worstHoldingDailyMovePct) {
+      worstHoldingDailyMovePct = last.daily_return_pct
+      worstHoldingCode = fund.fund_code
+    }
+  }
+
+  const basket = new Set(riskBasketCodes)
+  let riskBasketWorstDailyMovePct: number | null = null
+  let riskBasketWorstCode: string | null = null
+  for (const index of dailyContext.indices ?? []) {
+    const move = index.daily_move_pct
+    if (!basket.has(index.code) || move == null || !Number.isFinite(move)) continue
+    if (riskBasketWorstDailyMovePct == null || move < riskBasketWorstDailyMovePct) {
+      riskBasketWorstDailyMovePct = move
+      riskBasketWorstCode = index.code
+    }
+  }
+
+  return {
+    portfolioDailyReturnPct: portfolioLast && Number.isFinite(portfolioLast.daily_return_pct) ? portfolioLast.daily_return_pct : null,
+    worstHoldingDailyMovePct,
+    worstHoldingCode,
+    riskBasketWorstDailyMovePct,
+    riskBasketWorstCode,
+  }
 }
 
 /** 保留原导出名，供现有调用方判断是否命中任一提前触发事件。 */
@@ -1113,7 +1272,7 @@ export function isCrashForced(s?: DeepResearchStateInput['crashSignal']): boolea
 
 /** 三分支判定：
  *   ordinal：authorized = forced = isDeepResearchDay(ordinal, every)；等价老行为。
- *   agent-triggered：未达间隔不授权；达到 maxGapDays 后授权并强制。
+ *   agent-triggered：普通日授权 agent 按异常条件自主深研；达到 maxGapDays 或硬异常时强制。
  *   两分支均可被崩盘信号强制。 */
 export function computeDeepResearchState(inp: DeepResearchStateInput): DeepResearchStateOut {
   const gapDays = tradingDaysBetween(inp.tradingDates, inp.lastDeepDate ?? inp.runStartDate, inp.todayDate)
@@ -1126,12 +1285,14 @@ export function computeDeepResearchState(inp: DeepResearchStateInput): DeepResea
   if (inp.mode === 'agent-triggered') {
     const reasons: DeepResearchStateOut['reasons'] = scheduleDue ? ['max-gap', ...eventReasons] : eventReasons
     const forced = reasons.length > 0
-    return { authorized: forced, forced, gapDays, reasons, accountDrawdownActive: isAccountDrawdownActive(inp.crashSignal) }
+    const drawdownLevel = accountDrawdownLevel(inp.crashSignal)
+    return { authorized: true, forced, gapDays, reasons, accountDrawdownActive: drawdownLevel > 0, accountDrawdownLevel: drawdownLevel }
   }
   const isDR = isDeepResearchDay(inp.ordinal, inp.every)
   const reasons: DeepResearchStateOut['reasons'] = isDR ? ['ordinal', ...eventReasons] : eventReasons
   const forced = reasons.length > 0
-  return { authorized: forced, forced, gapDays, reasons, accountDrawdownActive: isAccountDrawdownActive(inp.crashSignal) }
+  const drawdownLevel = accountDrawdownLevel(inp.crashSignal)
+  return { authorized: forced, forced, gapDays, reasons, accountDrawdownActive: drawdownLevel > 0, accountDrawdownLevel: drawdownLevel }
 }
 
 
@@ -1352,8 +1513,15 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           simworldUrl: config.simworldUpstreamUrl,
           code: bench.code,
           asOfDate: date,
+          // 目标代码（含旧 run 固化的错误后缀）不可用时，用宽基代理兜住市场级暴跌；
+          // fetchBenchmarkDailyState 会先尝试同指数 alias，再尝试本列表。
+          fallbackCodes: ['000300.SH'],
         }).catch(() => null)
-        log(worldRoot, runId, `target-move-check ${date} target=${bench.code} move=${targetDailyState?.lastDayMovePct?.toFixed(2) ?? 'n/a'}%`)
+        const source = targetDailyState?.sourceCode ?? 'none'
+        const fallbackTag = targetDailyState?.sourceKind && targetDailyState.sourceKind !== 'requested'
+          ? ` fallback=${targetDailyState.sourceKind}`
+          : ''
+        log(worldRoot, runId, `target-move-check ${date} target=${bench.code} source=${source}${fallbackTag} move=${targetDailyState?.lastDayMovePct?.toFixed(2) ?? 'n/a'}%`)
       }
       const stepTag = config.chatStepMode === 'weekly' ? `[weekly@dow${config.chatWeekday ?? 1}]`
         : config.chatStepMode === 'monthly' ? `[monthly#${config.chatMonthlyNth ?? 1}]`
@@ -1393,14 +1561,24 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
           ? stateNow.last_deep_research_dates[b.botId]
           : stateNow.last_deep_research_date
         const previousDrawdownActive = stateNow.deep_research_drawdown_active_by_bot?.[b.botId] ?? false
+        const previousDrawdownLevel = stateNow.deep_research_drawdown_level_by_bot?.[b.botId]
+          ?? (previousDrawdownActive ? 1 : 0)
         const accountDrawdownPct = dailyContext.performance?.summary?.current_drawdown_pct ?? null
-        const crashSignal: Parameters<typeof computeDeepResearchState>[0]['crashSignal'] = config.crashTriggerEnabled
+        const anomaly = deriveDeepResearchAnomalyReadings(dailyContext, (config.deepResearchRiskBasket ?? []).map(x => x.code))
+        const crashSignal: Parameters<typeof computeDeepResearchState>[0]['crashSignal'] = (config.crashTriggerEnabled || config.accountDrawdownTriggerEnabled || config.deepResearchAnomalyTriggerEnabled)
           ? {
-              targetDailyMovePct: targetDailyState?.lastDayMovePct ?? null,
-              accountDrawdownPct,
+              targetDailyMovePct: config.crashTriggerEnabled ? (targetDailyState?.lastDayMovePct ?? null) : null,
+              accountDrawdownPct: config.accountDrawdownTriggerEnabled ? accountDrawdownPct : null,
               accountDrawdownWasActive: previousDrawdownActive,
+              accountDrawdownPreviousLevel: previousDrawdownLevel,
               dailyMoveThreshold: config.crashTriggerDailyMovePct ?? 3,
               drawdownThreshold: config.crashTriggerDrawdownPct ?? 8,
+              portfolioDailyReturnPct: config.deepResearchAnomalyTriggerEnabled ? anomaly.portfolioDailyReturnPct : null,
+              worstHoldingDailyMovePct: config.deepResearchAnomalyTriggerEnabled ? anomaly.worstHoldingDailyMovePct : null,
+              riskBasketWorstDailyMovePct: config.deepResearchAnomalyTriggerEnabled ? anomaly.riskBasketWorstDailyMovePct : null,
+              portfolioDailyLossThreshold: config.deepResearchPortfolioDailyLossPct ?? 3,
+              worstHoldingDailyLossThreshold: config.deepResearchWorstHoldingDailyLossPct ?? 5,
+              riskBasketDailyLossThreshold: config.deepResearchRiskBasketDailyLossPct ?? 3,
             }
           : undefined
         const drState = computeDeepResearchState({
@@ -1423,7 +1601,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         // 强制深研时置真——它解 min_hold 与 deep_research 两轨；主动深研只解 deep_research 轨。
         setupRes.deepResearchCommitmentGate.unlockedByResearch[b.botId] = false
         setupRes.deepResearchCommitmentGate.unlockedByForcedRiskControl[b.botId] =
-          drState.reasons.some(r => r === 'target-move' || r === 'account-drawdown')
+          drState.reasons.some(r => r === 'target-move' || r === 'account-drawdown' || r === 'portfolio-loss' || r === 'holding-drop' || r === 'risk-basket')
         const isDeepAuthorized = drState.authorized
         const timeoutMs = drState.forced
           ? deepResearchTimeoutMs
@@ -1431,7 +1609,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
               ? Math.max(Math.floor(deepResearchTimeoutMs / 2), perBotTimeoutMs * 2)
               : (useExtendedBudget ? researchDayTimeoutMs : perBotTimeoutMs))
         const reasonTag = drState.reasons.join('+') || 'none'
-        log(worldRoot, runId, `bot ${b.botId} deep-research-check ${date}: reason=${reasonTag} gap=${drState.gapDays} target_move=${crashSignal?.targetDailyMovePct?.toFixed(2) ?? 'n/a'}% account_dd=${crashSignal?.accountDrawdownPct?.toFixed(2) ?? 'n/a'}% timeout=${Math.floor(timeoutMs / 1000)}s`)
+        log(worldRoot, runId, `bot ${b.botId} deep-research-check ${date}: reason=${reasonTag} gap=${drState.gapDays} target_move=${crashSignal?.targetDailyMovePct?.toFixed(2) ?? 'n/a'}% portfolio_day=${crashSignal?.portfolioDailyReturnPct?.toFixed(2) ?? 'n/a'}% worst_holding=${crashSignal?.worstHoldingDailyMovePct?.toFixed(2) ?? 'n/a'}%(${anomaly.worstHoldingCode ?? 'n/a'}) risk_basket=${crashSignal?.riskBasketWorstDailyMovePct?.toFixed(2) ?? 'n/a'}%(${anomaly.riskBasketWorstCode ?? 'n/a'}) account_dd=${crashSignal?.accountDrawdownPct?.toFixed(2) ?? 'n/a'}% account_dd_level=${drState.accountDrawdownLevel} timeout=${Math.floor(timeoutMs / 1000)}s`)
 
         // 滚动 history window：从前几个交易日的 session jsonl 抽 digest（去掉工具结果原文），
         // 按 20000 字符预算切割。超 budget 时用主模型（openclaw.json 的 default route）按 5 维度
@@ -1596,6 +1774,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         if (brokenBots.has(b.botId)) {
           const status = writeSkippedDeadBot(worldRoot, runId, date, message, b)
           status.accountDrawdownActive = drState.accountDrawdownActive
+          status.accountDrawdownLevel = drState.accountDrawdownLevel
           return status
         }
         // Per-day tool-call cap（世界侧硬闸门，防跨日决策失控）：
@@ -1606,6 +1785,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         const maxToolCalls = drState.forced ? 80 : drState.authorized ? 60 : 40
         const status = await chatOneBot(worldRoot, runId, date, message, timeoutMs, b, { maxToolCalls })
         status.accountDrawdownActive = drState.accountDrawdownActive
+        status.accountDrawdownLevel = drState.accountDrawdownLevel
         status.commitmentPlan = planCommitmentUpsert({
           botId: b.botId,
           deepResearchFired: status.deepResearchFired ?? false,
@@ -1665,13 +1845,19 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
       const st = readState(worldRoot, runId)
       const nextLastDeepByBot = { ...(st.last_deep_research_dates ?? {}) }
       const nextDrawdownActiveByBot = { ...(st.deep_research_drawdown_active_by_bot ?? {}) }
+      const nextDrawdownLevelByBot = { ...(st.deep_research_drawdown_level_by_bot ?? {}) }
       let nextDeepCommitments = st.deep_research_commitments_by_bot ?? {}
       for (const status of statuses) {
         if (status.deepResearchFired === true) {
           nextLastDeepByBot[status.bot] = date
           log(worldRoot, runId, `bot ${status.bot} ${date}: start_research fired — last deep date updated`)
         }
-        if (typeof status.accountDrawdownActive === 'boolean') nextDrawdownActiveByBot[status.bot] = status.accountDrawdownActive
+        if (typeof status.accountDrawdownLevel === 'number') {
+          nextDrawdownLevelByBot[status.bot] = status.accountDrawdownLevel
+          nextDrawdownActiveByBot[status.bot] = status.accountDrawdownLevel > 0
+        } else if (typeof status.accountDrawdownActive === 'boolean') {
+          nextDrawdownActiveByBot[status.bot] = status.accountDrawdownActive
+        }
         if (status.commitmentPlan) {
           nextDeepCommitments = upsertDeepResearchCommitments(nextDeepCommitments, status.bot, date, status.commitmentPlan.buys, status.commitmentPlan.kind)
           log(worldRoot, runId, 'bot ' + status.bot + ' ' + date + ': ' + status.commitmentPlan.kind + ' holding commitment created for ' + status.commitmentPlan.buys.map(b => b.fundCode).join(','))
@@ -1684,6 +1870,7 @@ export async function runLoop(args: RunLoopArgs): Promise<void> {
         last_deep_research_date: anyFired ? date : st.last_deep_research_date,
         last_deep_research_dates: nextLastDeepByBot,
         deep_research_drawdown_active_by_bot: nextDrawdownActiveByBot,
+        deep_research_drawdown_level_by_bot: nextDrawdownLevelByBot,
         deep_research_commitments_by_bot: nextDeepCommitments,
       })
     }

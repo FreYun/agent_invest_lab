@@ -103,6 +103,36 @@ if BOT_ONLY:
     mcp.tool = _filtered_mcp_tool
 
 
+# NO_BOT_WRITE: 只观察、不动账本。
+#
+# READONLY 只摘掉 @writer_tool 那批系统级写工具；下面 C0 段那 6 个 bot 自助写工具是裸
+# @mcp.tool() 注册的，只读端照样能下单——这是回测的刚需（bot 得自己按当日净值成交），
+# 但对「共用实盘库的旁观者」就是个洞。开这个开关后它们连 tools/list 都不出现，不用指望
+# 调用方的 deny 名单写全、也不怕以后谁再加一个写工具忘了标记。
+# 通常和 FUND_DB_READONLY=1 一起用（后者在 sqlite 层再拦一道）。
+_BOT_WRITE_TOOLS = {
+    "portfolio_place_buy_order",
+    "portfolio_place_sell_order",
+    "portfolio_close_my_day",
+    "portfolio_init_my_account",
+    "portfolio_declare_charter",
+    "portfolio_submit_satellite_review",
+}
+NO_BOT_WRITE = os.getenv("FUND_MCP_NO_BOT_WRITE", "0") == "1"
+if NO_BOT_WRITE:
+    # 包在当前的 mcp.tool 之上，所以和上面的 BOT_ONLY 过滤可以叠加。
+    _pre_no_write_tool = mcp.tool
+
+    def _no_write_mcp_tool(*args, **kwargs):
+        def decorator(func):
+            if func.__name__ in _BOT_WRITE_TOOLS:
+                return func
+            return _pre_no_write_tool(*args, **kwargs)(func)
+        return decorator
+
+    mcp.tool = _no_write_mcp_tool
+
+
 def writer_tool(func):
     """用在写工具上：READONLY / BOT_ONLY 模式下不注册到 MCP，bot 调用会得到 tool not found。
 
@@ -196,6 +226,7 @@ CHARTER_CLASS_BOUNDS = {
 CHARTER_AMEND_COOLDOWN_TDAYS = 20
 CHARTER_TOLERANCE = 0.05           # 结构闸门 ±5pp 容忍带
 CHARTER_REVIEW_GRACE_TDAYS = 2     # 复评过期宽限（交易日）
+REVERSE_ORDER_COOLDOWN_TDAYS = 7   # 同一标的反向交易硬冷却
 
 
 def _trading_days_between(conn, d1: str, d2: str) -> int:
@@ -204,6 +235,51 @@ def _trading_days_between(conn, d1: str, d2: str) -> int:
         "SELECT COUNT(DISTINCT nav_date) AS n FROM fund_nav WHERE nav_date > ? AND nav_date <= ?",
         (d1, d2)).fetchone()
     return int(row["n"] or 0)
+
+
+def _reverse_order_gate(conn, *, bot_id: str, run_id: str, fund_code: str,
+                        order_type: str, trade_date: str) -> str | None:
+    """同一 bot/run/标的的反向下单硬闸门。
+
+    上一笔反向委托后未满 7 个交易日，新委托直接拒绝。这是服务端
+    物理约束，不依赖 prompt 或 reason 文本，也不提供 bot 可自行声明的豁免。
+    同向委托不在此闸门范围内。
+    """
+    opposite = "sell" if order_type == "buy" else "buy"
+    previous = conn.execute(
+        "SELECT order_id, order_date, status FROM fund_bot_orders "
+        "WHERE bot_id=? AND order_run_id=? AND fund_code=? AND order_type=? "
+        "AND order_date<=? AND COALESCE(status, '') NOT IN ('cancelled', 'rejected') "
+        "ORDER BY order_date DESC, order_id DESC LIMIT 1",
+        (bot_id, run_id, fund_code, opposite, trade_date),
+    ).fetchone()
+    if not previous:
+        return None
+
+    elapsed = _trading_days_between(conn, previous["order_date"], trade_date)
+    if elapsed >= REVERSE_ORDER_COOLDOWN_TDAYS:
+        return None
+
+    remaining = REVERSE_ORDER_COOLDOWN_TDAYS - elapsed
+    return json.dumps({
+        "success": False,
+        "gate": "reverse_order_cooldown",
+        "message": (
+            f"反向交易硬闸门：{fund_code} 上次 {opposite} 为 {previous['order_date']}，"
+            f"仅过 {elapsed} 个交易日；同一标的 {REVERSE_ORDER_COOLDOWN_TDAYS} "
+            f"个交易日内禁止反向 {order_type}，还需 {remaining} 个交易日。"
+        ),
+        "bot_id": bot_id,
+        "run_id": run_id,
+        "fund_code": fund_code,
+        "attempted_order_type": order_type,
+        "previous_order_type": opposite,
+        "previous_order_id": previous["order_id"],
+        "previous_order_date": previous["order_date"],
+        "elapsed_trading_days": elapsed,
+        "required_trading_days": REVERSE_ORDER_COOLDOWN_TDAYS,
+        "remaining_trading_days": remaining,
+    }, ensure_ascii=False)
 
 
 def _load_active_charter(conn, bot_id: str, run_id: str) -> dict | None:
@@ -749,7 +825,8 @@ def _replay_fund_account_state(conn, bot_id: str, trade_date: str, run_id: str =
             proportion = min(sell_shares / shares_before, 1.0)
             current["cost"] -= current["cost"] * proportion
             current["shares"] -= sell_shares
-            if current["shares"] <= 1e-6:
+            residual_nav = nav_used if nav_used > 0 else _get_nav(conn, fund_code, action_date)[0]
+            if _is_dust_shares(current["shares"], residual_nav):
                 current["shares"] = 0.0
                 current["cost"] = 0.0
                 last_exit_dates[fund_code] = action_date
@@ -978,6 +1055,23 @@ def _share_epsilon(shares: float) -> float:
     shortfalls must still block settlement.
     """
     return max(0.05, abs(float(shares or 0.0)) * 1e-7)
+
+
+_DUST_VALUE_CNY = 1.0
+
+
+def _is_dust_shares(shares: float, nav: float) -> bool:
+    """卖出后的残留份额是否只是零头（不算真实持仓）。
+
+    卖单份额由 bot 照抄持仓展示值，常比实际持有量少零点几份（如持 192856.84
+    份、分两笔卖 71000+121856）。残留既不是有意保留的仓位，也不该被宪章复评
+    当成一只卫星仓要求逐只交代。口径与 world daily-context 的「市值 ≥ ¥1」一致。
+    """
+    s = float(shares or 0.0)
+    if s <= _share_epsilon(s):
+        return True
+    n = float(nav or 0.0)
+    return 0 < n and s * n < _DUST_VALUE_CNY
 
 
 def _consume_lots_fifo(conn, *, bot_id, fund_code, run_id, sell_shares,
@@ -1776,14 +1870,25 @@ async def portfolio_place_buy_order(
         info = conn.execute("SELECT fund_name FROM fund_info WHERE fund_code=?", (fund_code,)).fetchone()
         if not info:
             return json.dumps({"success": False, "message": f"基金 {fund_code} 不在 fund_info"}, ensure_ascii=False)
+        reverse_gate_err = _reverse_order_gate(
+            conn, bot_id=bot_id, run_id=run_id, fund_code=fund_code,
+            order_type="buy", trade_date=trade_date,
+        )
+        if reverse_gate_err:
+            return reverse_gate_err
         nav = _strict_nav(conn, fund_code, trade_date)
         pricing_status = "priced" if nav is not None else "awaiting_nav"
         pricing_nav_date = trade_date if nav is not None else None
         priced_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if nav is not None else None
+        # 幂等键：同 bot + 同 run + 同交易日 + 同标的 + 同向 + 同金额 → 认定为同一个决策被重复执行。
+        # 不限 pending/confirmed：第一笔可能已被 settle 翻成 confirmed（dash 交互 run 会在盘中
+        # 触发结算），早先只查 status='pending' 正是漏网的原因。
+        # 但要排除 cancelled——撤单后重下是合法的首单，不是重复。
         existing = conn.execute(
-            "SELECT order_id, reference_nav, pricing_status FROM fund_bot_orders "
+            "SELECT order_id, reference_nav, pricing_status, status FROM fund_bot_orders "
             "WHERE bot_id=? AND order_run_id=? AND fund_code=? AND order_type='buy' "
-            "AND order_date=? AND status='pending' AND ABS(COALESCE(order_amount, 0) - ?) < 0.01 "
+            "AND order_date=? AND status != 'cancelled' "
+            "AND ABS(COALESCE(order_amount, 0) - ?) < 0.01 "
             "ORDER BY order_id DESC LIMIT 1",
             (bot_id, run_id, fund_code, trade_date, float(amount)),
         ).fetchone()
@@ -1799,10 +1904,12 @@ async def portfolio_place_buy_order(
                 "reference_nav": _r(existing["reference_nav"], 6) if existing["reference_nav"] is not None else None,
                 "pricing_status": existing["pricing_status"] or pricing_status,
                 "amount": _r(amount),
-                "status": "pending",
+                "status": existing["status"] or "pending",
                 "cash_after": _r(float(view["cash_available"])),
                 "cash_in_transit_after": _r(float(view["cash_in_transit"])),
-                "note": "相同 pending 买入单已存在，未重复新增订单",
+                "note": f"本交易日已有一笔完全相同的买入单（order_id={existing['order_id']}，{fund_code}，¥{_r(amount)}），"
+                        "未重复新增订单——你之前已经做过这个决策了，它已经生效，不要再下一次。"
+                        "继续走完今天剩下的流程即可。",
             }, ensure_ascii=False)
         view = _bot_run_cash_view(conn, bot_id, run_id, trade_date)
         cash = float(view["cash_available"])
@@ -1900,6 +2007,42 @@ async def portfolio_place_sell_order(
         holding = _get_active_holding(conn, bot_id, fund_code, run_id=run_id)
         if not holding:
             return json.dumps({"success": False, "message": f"bot {bot_id} 无 {fund_code} 的活跃持仓"}, ensure_ascii=False)
+        reverse_gate_err = _reverse_order_gate(
+            conn, bot_id=bot_id, run_id=run_id, fund_code=fund_code,
+            order_type="sell", trade_date=trade_date,
+        )
+        if reverse_gate_err:
+            return reverse_gate_err
+        # 幂等键：同 bot + 同 run + 同交易日 + 同标的 + 同向 + 同份额 → 同一个决策被重复执行。
+        # 与买入侧对称。卖出侧的 order_amount 列存的是 shares，不是金额。
+        # 不限 pending/confirmed：第一笔若已被 settle（份额已扣、pending_sell_shares 已释放），
+        # 下面的 sellable 校验就拦不住第二笔——这正是卖出侧重复单的主要来源。
+        # 同样排除 cancelled——撤单后重下是合法首单。
+        dup = conn.execute(
+            "SELECT order_id, reference_nav, pricing_status, status FROM fund_bot_orders "
+            "WHERE bot_id=? AND order_run_id=? AND fund_code=? AND order_type='sell' "
+            "AND order_date=? AND status != 'cancelled' "
+            "AND ABS(COALESCE(order_amount, 0) - ?) < 0.000001 "
+            "ORDER BY order_id DESC LIMIT 1",
+            (bot_id, run_id, fund_code, trade_date, _r(shares, 6)),
+        ).fetchone()
+        if dup:
+            return json.dumps({
+                "success": True,
+                "duplicate": True,
+                "order_id": dup["order_id"],
+                "bot_id": bot_id,
+                "fund_code": fund_code,
+                "trade_date": trade_date,
+                "reference_nav": _r(dup["reference_nav"], 6) if dup["reference_nav"] is not None else None,
+                "pricing_status": dup["pricing_status"] or "awaiting_nav",
+                "shares": _r(shares, 6),
+                "status": dup["status"] or "pending",
+                "pending_sell_shares_after": _r(float(holding["pending_sell_shares"] or 0.0), 6),
+                "note": f"本交易日已有一笔完全相同的卖出单（order_id={dup['order_id']}，{fund_code}，{_r(shares, 6)} 份），"
+                        "未重复新增订单——你之前已经做过这个决策了，它已经生效，不要再下一次。"
+                        "继续走完今天剩下的流程即可。",
+            }, ensure_ascii=False)
         nav = _strict_nav(conn, fund_code, trade_date)
         total_shares = float(holding["shares"] or 0.0)
         already_pending = float(holding["pending_sell_shares"] or 0.0)
@@ -2176,7 +2319,7 @@ async def portfolio_get_my_performance(
       run_id              必填，proxy 自动注入；缺失时返回错误。
 
     返回 5 块：
-      summary            起始/最新日、累计收益、最大回撤、年化、波动、夏普(rf=0)、最好/最差日、胜负平
+      summary            起始/最新日、累计收益、最大/当前回撤、峰值利润回吐、年化、波动、夏普(rf=0)、最好/最差日、胜负平
       trades_summary     已成交的 buy / sell 数量 / 总额 / 总手续费 / 完整轮次数
       completed_positions  已平仓持仓（每笔 round-trip 的进出 / 持有天数 / 单笔收益率）
       daily_series       逐日净值时间序列（限量取最近 N 天，按 trade_date 升序）
@@ -2253,6 +2396,33 @@ async def portfolio_get_my_performance(
         peak_nav = max(navs_from_start)
         current_drawdown_pct = ((float(last["net_value"] or 1.0) / peak_nav) - 1) * 100 \
             if peak_nav > 0 else 0.0
+
+        # 方法论里的 6% 降档闸门使用“最近 20 个交易日峰值”，不能拿本 run
+        # 全历史高水位回撤代替。两个口径同时返回，并附峰值日期，避免调用方混用。
+        rolling_20d_snaps = snaps[-20:]
+        rolling_20d_peak_row = max(
+            rolling_20d_snaps, key=lambda s: float(s["total_value"] or 0.0)
+        )
+        rolling_20d_peak_total_value = float(rolling_20d_peak_row["total_value"] or 0.0)
+        rolling_20d_drawdown_pct = (
+            (float(last["total_value"] or 0.0) / rolling_20d_peak_total_value - 1) * 100
+            if rolling_20d_peak_total_value > 0 else 0.0
+        )
+
+        # “峰值利润回吐”与标准回撤并列：前者回答从初始本金口径吐掉了多少累计收益，
+        # 后者回答当前资产相对峰值跌了多少。账户短期大涨后，两者的经济含义差异很大。
+        latest_total_value = float(last["total_value"] or 0.0)
+        peak_row = max(snaps, key=lambda s: float(s["total_value"] or 0.0))
+        peak_total_value = max(initial_capital, float(peak_row["total_value"] or 0.0))
+        peak_total_value_date = peak_row["trade_date"] if peak_total_value > initial_capital else None
+        profit_giveback_amount = max(0.0, peak_total_value - latest_total_value)
+        profit_giveback_pct_of_initial = (
+            profit_giveback_amount / initial_capital * 100 if initial_capital > 0 else 0.0
+        )
+        peak_profit_amount = max(0.0, peak_total_value - initial_capital)
+        peak_profit_giveback_ratio_pct = (
+            profit_giveback_amount / peak_profit_amount * 100 if peak_profit_amount > 1e-9 else None
+        )
 
         # 日收益序列 → 波动 / 夏普 (assume rf=0)
         daily_returns = [float(s["daily_return_pct"] or 0.0) for s in snaps if s["daily_return_pct"] is not None]
@@ -2444,13 +2614,25 @@ async def portfolio_get_my_performance(
             "last_date": last["trade_date"],
             "trading_days": trading_days,
             "initial_capital": _r(initial_capital),
-            "latest_total_value": _r(float(last["total_value"] or 0.0)),
+            "latest_total_value": _r(latest_total_value),
             "latest_net_value": _r(float(last["net_value"] or 1.0), 6),
             "total_return_pct": _r(total_return_pct, 4),
             "annualized_return_pct": _r(annualized_return_pct, 4),
             "max_drawdown_pct": _r(max_dd, 4),
             "max_drawdown_date": max_dd_row["trade_date"] if max_dd_row else None,
             "current_drawdown_pct": _r(current_drawdown_pct, 4),
+            "rolling_20d_drawdown_pct": _r(rolling_20d_drawdown_pct, 4),
+            "rolling_20d_peak_total_value": _r(rolling_20d_peak_total_value),
+            "rolling_20d_peak_total_value_date": rolling_20d_peak_row["trade_date"],
+            "rolling_20d_observations": len(rolling_20d_snaps),
+            "peak_total_value": _r(peak_total_value),
+            "peak_total_value_date": peak_total_value_date,
+            "profit_giveback_amount": _r(profit_giveback_amount),
+            "profit_giveback_pct_of_initial": _r(profit_giveback_pct_of_initial, 4),
+            "peak_profit_giveback_ratio_pct": (
+                _r(peak_profit_giveback_ratio_pct, 4)
+                if peak_profit_giveback_ratio_pct is not None else None
+            ),
             "volatility_pct_annualized": _r(volatility_pct, 4),
             "sharpe_ratio_rf0": _r(sharpe_ratio, 4),
             "win_days": win,
@@ -2615,7 +2797,15 @@ async def portfolio_get_my_charter(bot_id: str, run_id: str = "") -> str:
 
 def _satellite_codes(conn, bot_id: str, run_id: str, trade_date: str, charter: dict) -> set[str]:
     state = _replay_fund_account_state(conn, bot_id, trade_date, run_id=run_id)
-    return {c for c in state["positions"] if c not in charter["core_fund_codes"]}
+    codes = set()
+    for code, pos in state["positions"].items():
+        if code in charter["core_fund_codes"]:
+            continue
+        nav, _ = _get_nav(conn, code, trade_date)
+        if _is_dust_shares(pos["shares"], nav):
+            continue
+        codes.add(code)
+    return codes
 
 
 @mcp.tool()
@@ -3374,7 +3564,13 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                 cost_consumed = sum(c["cost_consumed"] for c in consumptions)
                 cash += gross - fee
                 share_eps = _share_epsilon(sell_shares)
-                full_exit = (want >= cur_shares - share_eps) or (cur_shares - actual_sell_shares <= share_eps)
+                # 残留按「值不值一块钱」判，不按固定份额容差判。bot 的卖单份额是从持仓展示
+                # 抄的，小数位不定：抄两位（持 206483.584555 卖 206483.58）残留 0.005 尚在
+                # 0.05 容差内，抄一位（持 41622.269579 卖 41622.2）残留 0.0696 就越线，于是
+                # 被判成部分卖出，holding 侧后来按 ¥1 口径置 closed，lot 侧却留下一个 open
+                # 零头 lot。下面 3414 的清仓守卫是按整只基金汇总 lot 的，一旦留过零头，这只
+                # 基金以后任何一次真清仓都会被永久挡住（bot105d 019633 即如此）。
+                full_exit = (want >= cur_shares - share_eps) or _is_dust_shares(cur_shares - actual_sell_shares, nav)
                 new_pending = 0.0 if full_exit else max(0.0, cur_pending - actual_sell_shares)
                 new_shares = 0.0 if full_exit else cur_shares - actual_sell_shares
                 if full_exit:
@@ -3385,7 +3581,8 @@ async def settle_pending_fund_orders(bot_id: str, as_of_date: str = "", run_id: 
                         (bot_id, fc, holding_run_id),
                     ).fetchone()
                     residual_shares = float(residual_row["s"] if hasattr(residual_row, "keys") else residual_row[0])
-                    if residual_shares > share_eps:
+                    # 同口径放行存量零头：真实缺口（值 ≥ ¥1）照旧抛错，零头交给下面的 sweep 清掉。
+                    if not _is_dust_shares(residual_shares, nav):
                         raise ValueError(
                             f"full-exit lot residue too large: remaining={residual_shares:.6f} "
                             f"eps={share_eps:.6f} (bot={bot_id} fund={fc} run={holding_run_id})"

@@ -60,5 +60,8 @@ export const buyableCodesFile = (w: string, runId: string) => join(buyableCodesD
 // '..','..','data','fund.db' 落到 <repo>/data/fund.db）。strategy-server 的 market_reports
 // 读写、backtest-dashboard 等都指向这一份。
 export const fundDbFile = (w: string) => join(w, '..', '..', 'data', 'fund.db')
+// A 类 → C 类份额映射表（scripts/gen-share-class-map.py 生成）。同款 GLOBAL data 路径。
+// buildBuyableCodesByBot 用它把可买池里的 A 类换成 C 类；TS 侧读不了 sqlite，只能吃预生成的表。
+export const shareClassMapFile = (w: string) => join(w, '..', '..', 'data', 'share-class-map.json')
 // 历史受污染 run 的标记文件（scripts/detect-universe-contamination.py 写入；dashboard 贴标读取）。
 export const universeContaminationFile = (w: string, runId: string) => join(runDir(w, runId), 'universe-contamination.json')

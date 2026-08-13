@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>处境图书馆 · 底率 / 谓词 / 关系边</title>
+<style>
+:root{
+  --bg:#080d18;--panel:#0e1625;--panel2:#111c2e;--panel3:#162238;--line:#243451;
+  --text:#e8eef8;--muted:#8997af;--faint:#596983;--cyan:#66d9e8;--green:#69dfa8;
+  --amber:#ffbd73;--red:#ff718d;--violet:#a994ff;--radius:12px
+}
+*{box-sizing:border-box}html{color-scheme:dark}
+body{margin:0;background:radial-gradient(circle at 14% -10%,rgba(102,217,232,.12),transparent 30%),radial-gradient(circle at 85% 0,rgba(169,148,255,.08),transparent 28%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif;font-size:14px}
+button,input,select{font:inherit}button{color:inherit}a{color:var(--cyan);text-decoration:none}
+.shell{max-width:1780px;margin:auto;padding:20px}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:16px}
+.crumb{font-size:12px;color:var(--muted);letter-spacing:.04em}.crumb a{color:var(--muted)}
+h1{font-size:27px;margin:5px 0 0;letter-spacing:-.03em}
+.sub{font-size:13px;color:var(--muted);margin-top:6px;line-height:1.6;max-width:900px}
+.db-state{display:flex;gap:8px;align-items:center;border:1px solid var(--line);background:rgba(14,22,37,.75);border-radius:999px;padding:7px 11px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+.notice{display:flex;align-items:flex-start;gap:12px;border:1px solid rgba(255,189,115,.32);background:rgba(255,189,115,.07);border-radius:var(--radius);padding:13px 15px;margin-bottom:14px;font-size:13.5px;line-height:1.65}
+.notice strong{color:var(--amber)}.notice .icon{font-size:17px;line-height:1.3}
+.notice.cool{border-color:rgba(102,217,232,.3);background:rgba(102,217,232,.06)}.notice.cool strong{color:var(--cyan)}
+.metrics{display:grid;grid-template-columns:repeat(7,minmax(90px,1fr));gap:9px;margin-bottom:14px}
+.metric{border:1px solid var(--line);background:linear-gradient(180deg,rgba(22,34,56,.9),rgba(14,22,37,.9));border-radius:10px;padding:12px}
+.metric .label{color:var(--muted);font-size:11px}
+.metric .value{font-size:23px;font-weight:730;margin-top:5px;font-variant-numeric:tabular-nums}
+.metric .hint{color:var(--faint);font-size:10.5px;margin-top:3px;line-height:1.45}
+.metric.warn .value{color:var(--amber)}.metric.safe .value{color:var(--green)}.metric.bad .value{color:var(--red)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.tab{border:1px solid var(--line);background:rgba(14,22,37,.86);border-radius:99px;padding:8px 15px;font-size:12.5px;cursor:pointer;transition:.13s;color:var(--muted)}
+.tab:hover{background:rgba(255,255,255,.04)}
+.tab.active{border-color:rgba(102,217,232,.5);background:rgba(102,217,232,.09);color:var(--text)}
+.panel{border:1px solid var(--line);background:rgba(14,22,37,.92);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.panel h2{font-size:15px;margin:0 0 4px}
+.panel .lede{font-size:12.5px;color:var(--muted);line-height:1.7;margin:0 0 14px;max-width:1000px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
+.control{display:flex;flex-direction:column;gap:5px}
+.control label{font-size:10.5px;color:var(--muted);letter-spacing:.06em}
+.control input,.control select{height:34px;border:1px solid var(--line);background:#0a1220;border-radius:8px;color:var(--text);padding:0 10px;font-size:12.5px;outline:none}
+.control input:focus,.control select:focus{border-color:var(--cyan)}
+.control.req input{border-color:rgba(255,189,115,.5)}
+.btn{height:34px;border:1px solid var(--line);background:rgba(102,217,232,.1);border-radius:8px;padding:0 14px;font-size:12.5px;cursor:pointer}
+.btn:hover{background:rgba(102,217,232,.18)}
+/* --- 处境地图 --- */
+.gridwrap{overflow:auto}
+table.grid{border-collapse:separate;border-spacing:6px;margin:0}
+table.grid th{font-size:11px;color:var(--muted);font-weight:600;padding:2px 6px}
+.cell{width:158px;height:96px;border:1px solid var(--line);border-radius:10px;padding:9px 10px;cursor:pointer;transition:.13s;background:#0a1220;text-align:left;display:block}
+.cell:hover{border-color:rgba(102,217,232,.5)}
+.cell.active{border-color:var(--cyan);background:rgba(102,217,232,.08)}
+.cell .cn{font-size:11px;color:var(--muted)}
+.cell .cd{font-size:21px;font-weight:720;font-variant-numeric:tabular-nums;margin-top:3px}
+.cell .cc{font-size:11px;color:var(--amber);margin-top:3px}
+.cell .bar{height:4px;border-radius:3px;background:rgba(102,217,232,.75);margin-top:7px}
+.cell.empty{opacity:.4}
+/* --- 表 --- */
+table.data{width:100%;border-collapse:collapse;font-size:12.5px}
+table.data th{text-align:right;color:var(--muted);font-size:11px;font-weight:600;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.data th:first-child,table.data td:first-child{text-align:left}
+table.data th.l,table.data td.l{text-align:left}
+table.data td{padding:7px 9px;border-bottom:1px solid rgba(36,52,81,.5);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.data tr:hover td{background:rgba(255,255,255,.022)}
+table.data td.wide{white-space:normal;line-height:1.6}
+/* 只有边表用固定布局：它的 id 很长，不固定列宽的话 basis 那一列会被挤出右边缘，
+   而 basis 恰恰是这张表最不能藏的一列。 */
+table.data.fixed{table-layout:fixed}
+table.data.fixed td.trunc{max-width:0;overflow:hidden;text-overflow:ellipsis}
+.outmap{color:var(--amber);font-size:12px;white-space:normal!important;text-align:left!important}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+.muted{color:var(--muted)}.faint{color:var(--faint)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.badge{display:inline-flex;align-items:center;border-radius:99px;padding:2px 8px;font-size:10.5px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.badge.vio{color:var(--red);border-color:rgba(255,113,141,.4);background:rgba(255,113,141,.07)}
+.badge.sit{color:var(--cyan);border-color:rgba(102,217,232,.4);background:rgba(102,217,232,.07)}
+.badge.flaw{color:var(--amber);border-color:rgba(255,189,115,.4);background:rgba(255,189,115,.07)}
+.badge.proc{color:var(--violet);border-color:rgba(169,148,255,.4);background:rgba(169,148,255,.07)}
+.badge.weak{color:var(--amber);border-color:rgba(255,189,115,.35)}
+.legend{font-size:12px;color:var(--muted);line-height:1.75;border-left:2px solid var(--line);padding-left:12px;margin:10px 0}
+.legend b{color:var(--text);font-weight:640}
+.cardrow{border:1px solid var(--line);border-radius:10px;padding:13px 14px;margin-bottom:9px;background:rgba(10,18,32,.65)}
+.cardrow .ct{font-size:14px;font-weight:660;line-height:1.5}
+.cardrow .cid{font:11px ui-monospace,monospace;color:var(--faint);word-break:break-all}
+.cardrow .cm{font-size:12.5px;color:var(--muted);line-height:1.7;margin-top:7px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.section{border-top:1px solid var(--line);padding-top:14px;margin-top:16px}
+.section-title{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:9px}
+.scrollbox{max-height:460px;overflow:auto;scrollbar-color:#344664 transparent;scrollbar-width:thin}
+.hidden{display:none}
+.empty{padding:34px 20px;text-align:center;color:var(--muted);font-size:12.5px}
+details summary{cursor:pointer;color:var(--cyan);font-size:12px;margin:6px 0}
+pre.raw{white-space:pre-wrap;font:11px/1.65 ui-monospace,monospace;background:#080e19;border:1px solid var(--line);border-radius:8px;padding:10px;color:#b9c7da;max-height:300px;overflow:auto}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:1250px){.metrics{grid-template-columns:repeat(4,1fr)}.split{grid-template-columns:1fr}}
+@media(max-width:900px){.shell{padding:12px}.metrics{grid-template-columns:repeat(2,1fr)}.db-state{display:none}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div>
+      <div class="crumb"><a href="../">回测看板</a> / <a href="/experience-library.html">经验图书馆</a> / 处境层</div>
+      <h1>处境图书馆</h1>
+      <div class="sub">同一件事问三遍：<b>你现在在哪个处境格里</b>（坐标）、<b>历史上落在这个格里的先例后来怎么样</b>（底率）、<b>哪张卡凭什么说它管这件事</b>（谓词与关系边）。三个问题的答案都必须能点开看到它的凭据。</div>
+    </div>
+    <div class="db-state"><span class="dot" id="dbDot"></span><span id="dbState">正在读取只读数据库…</span></div>
+  </header>
+
+  <div class="notice">
+    <div class="icon">⚠</div>
+    <div><strong>先说清楚这里的「后来怎么样」是什么。</strong> 它是<b>该 bot 自己净值在窗口内的走势</b>，<b>不是这次动作的归因</b>。仓位、行情、其它持仓、当天没做的事全混在里面。任何把它读成「这么干能赚多少」的看法都是在改口径。所有收益列都以 <span class="mono">fwd_</span> 打头就是在提醒这件事。</div>
+  </div>
+
+  <section class="metrics" id="metrics"></section>
+
+  <nav class="tabs" id="tabs">
+    <div class="tab active" data-tab="map">处境地图</div>
+    <div class="tab" data-tab="rates">底率（分布）</div>
+    <div class="tab" data-tab="cards">卡片与谓词</div>
+    <div class="tab" data-tab="edges">关系边</div>
+    <div class="tab" data-tab="coverage">结果覆盖</div>
+    <div class="tab" data-tab="pit">PIT 闸门实证</div>
+  </nav>
+
+  <!-- ================= 处境地图 ================= -->
+  <section class="panel view" id="view-map">
+    <h2>处境地图 · 16 个格子</h2>
+    <p class="lede">
+      纵轴是<b>市场压力</b>（平静 / 偏紧 / 紧张 / 极端），横轴是<b>近 20 日回撤</b>（无 / 浅 / 中 / 深）。
+      格子里第一行大字是<b>日级先例数</b>（1,619 个交易日摊进来的），底下橙色一行是<b>案例数</b>（121 例）。
+      这两个数<b>永远不相加</b>——案例不是交易日的随机抽样，它们是被挑出来写成案例的日子，本身就带选择偏差。并排放是为了让你看见两者差多少。
+      点任意格子看它里面到底是些什么日子。
+    </p>
+    <div class="gridwrap"><div id="gridHost"></div></div>
+    <div id="cellDetail"></div>
+  </section>
+
+  <!-- ================= 底率 ================= -->
+  <section class="panel view hidden" id="view-rates">
+    <h2>底率 · 每个处境格的后续净值分布</h2>
+    <p class="lede">
+      <b>只出分布，不出均值。</b> 均值会被一两个极端值拖着走，而在 n=7 的格子里，一个极端值就是全部。
+      下面每格给 p10 / p25 / 中位 / p75 / p90 和胜率，画成一条带；带子有多宽，不确定性就有多大，这件事必须让你一眼看见。
+      <br><b>分母给三个数：</b><span class="mono">n行</span> 是命中的交易日数，<span class="mono">n独立</span> 是互不重叠的窗口数（20 日窗口在相邻两天之间重合 19/20，1,246 个日子远不是 1,246 个独立观测），<span class="mono">nbot</span> 是涉及几个 bot——全部来自同一个 bot 的「底率」只是那个 bot 的历史。<b>够不够格出数字，只认 n独立。</b>
+    </p>
+    <div class="toolbar">
+      <div class="control req"><label>AS-OF（必填，没有默认值）</label><input type="date" id="asof"></div>
+      <div class="control"><label>窗口</label><select id="horizon"><option value="5">5 交易日</option><option value="10">10 交易日</option><option value="20" selected>20 交易日</option></select></div>
+      <div class="control"><label>主体线</label><select id="kind"><option value="backtest_day">日级（1,619 日）</option><option value="case">案例线（121 例）</option></select></div>
+      <div class="control"><label>当日动作</label><select id="dtype"><option value="">不切</option><option value="加仓">加仓</option><option value="减仓">减仓</option><option value="不动">不动</option><option value="换仓">换仓</option></select></div>
+      <button class="btn" id="runRates">重新计算</button>
+    </div>
+    <div class="notice cool" style="margin-bottom:14px">
+      <div class="icon">🔒</div>
+      <div><strong>as-of 是闸门，不是筛选器。</strong> 一条 D 日的处境，它的 20 日后果要到 D+20 才知道。查询里强制写着 <span class="mono">outcome_available_at &lt;= as-of</span>，所以你把 as-of 调到 2025 年，能看到的样本就会变少——<b>这正是它在工作的样子</b>。去掉这一行就是拿 8 月的结果去解释 5 月的决策。想看它到底有没有在工作，去「PIT 闸门实证」页。</div>
+    </div>
+    <div id="ratesHost"><div class="empty">选好 as-of 后点「重新计算」</div></div>
+  </section>
+
+  <!-- ================= 卡片 ================= -->
+  <section class="panel view hidden" id="view-cards">
+    <h2>卡片与谓词 · 哪张卡凭什么说它管这件事</h2>
+    <p class="lede">
+      一张卡要参与判定，先得把「什么情况下算适用」写成<b>可复算的谓词</b>。写不出来的卡不是不好，是还不能被机器判、也不能被证伪——它们不进判定表、不产生边、不出现在处境格里。这个区分必须显示出来，否则会让人以为整个库都已经机械化了。
+      <br>每张卡都声明了<b>命中意味着什么</b>（<span class="badge vio">违反</span> 卡说别这么干 / <span class="badge sit">处境</span> 只是描述处境 / <span class="badge flaw">缺陷</span> 指向一个缺陷 / <span class="badge proc">流程</span> 流程问题）。
+      这是<b>声明的，不是推断的</b>：如果默认「命中 = 违反」，有一张卡的 1,246 次日级命中会当场变成 1,246 次凭空捏造的违规。
+    </p>
+    <div id="cardsHost"><div class="empty">加载中…</div></div>
+  </section>
+
+  <!-- ================= 边 ================= -->
+  <section class="panel view hidden" id="view-edges">
+    <h2>关系边 · 每一条都要回答「这条边凭什么」</h2>
+    <p class="lede">
+      <b><span class="mono">basis</span> 这一列是这张表的主键级信息</b>，前端必须显示它。两种凭据绝不能混着读：
+      <span class="mono">mechanical_predicate</span> 是机械判定，可复算可证伪，改一行代码结论就会变；
+      <span class="mono">card_provenance</span> 是卡片自报的出处，机器一个字都没验过，只是把卡里写的原话搬了过来。
+      把它们放进同一列而不标注来源，就是让没验过的东西冒充验过的东西。
+    </p>
+    <div class="toolbar">
+      <div class="control"><label>边类型</label><select id="edgeType"></select></div>
+      <div class="control"><label>显示条数</label><select id="edgeLimit"><option>100</option><option selected>200</option><option>500</option><option>2000</option></select></div>
+    </div>
+    <div id="edgeLegend"></div>
+    <div id="edgesHost" class="scrollbox"><div class="empty">加载中…</div></div>
+  </section>
+
+  <!-- ================= 覆盖 ================= -->
+  <section class="panel view hidden" id="view-coverage">
+    <h2>结果覆盖 · 有多少主体根本没有后续结果</h2>
+    <p class="lede">
+      这个数必须摆在前面，否则底率会看起来比实际扎实。<b>窗口不够就留白，不许拿最后一天顶数</b>——写 0 或者用现有的最后一天替代，等于把「还没发生」记成「发生了且没动」。
+      案例写在 run 的<b>活边缘</b>上（写案例的那天往往就是这个 run 目前的最后几天），所以案例线的留白比例天然远高于日级线。这是结构性的，不是数据缺口，补不了。
+    </p>
+    <div class="toolbar">
+      <div class="control"><label>窗口</label><select id="covHorizon"><option value="5">5 交易日</option><option value="10">10 交易日</option><option value="20" selected>20 交易日</option></select></div>
+    </div>
+    <div id="coverageHost"><div class="empty">加载中…</div></div>
+  </section>
+
+  <!-- ================= PIT ================= -->
+  <section class="panel view hidden" id="view-pit">
+    <h2>PIT 闸门实证 · 断言不算证据</h2>
+    <p class="lede">
+      「我在 SQL 里写了 PIT」是一句断言。下面这张表是证据：<b>同一条查询，只改 as-of，样本数必须单调不减</b>；把 as-of 放到 2099 年应当正好等于全量。
+      如果哪一段没变，说明那段时间确实没有新结果变得可见——也照实打出来，不修饰。
+    </p>
+    <div class="toolbar">
+      <div class="control"><label>窗口</label><select id="pitHorizon"><option value="5">5 交易日</option><option value="10">10 交易日</option><option value="20" selected>20 交易日</option></select></div>
+      <div class="control"><label>主体线</label><select id="pitKind"><option value="backtest_day">日级</option><option value="case">案例线</option></select></div>
+    </div>
+    <div id="pitHost"><div class="empty">加载中…</div></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s)
+const el = (t, c, h) => { const n = document.createElement(t); if (c) n.className = c; if (h !== undefined) n.innerHTML = h; return n }
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d)
+const int = v => (v === null || v === undefined) ? '—' : Number(v).toLocaleString('en-US')
+const sign = (v, d = 2) => v === null || v === undefined ? '<span class="faint">—</span>'
+  : `<span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(d)}</span>`
+
+async function api(path) {
+  const r = await fetch(path)
+  const j = await r.json()
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status))
+  return j
+}
+
+let OVERVIEW = null
+let activeCell = null
+
+// ---------------- tabs ----------------
+// 用 hash 记住当前页，这样「看第 3 屏那张表」可以直接发一个链接过去，
+// 不用口头描述「点第三个标签」。
+function showTab(tab) {
+  const t = document.querySelector(`.tab[data-tab="${tab}"]`)
+  if (!t) return
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t))
+  document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'))
+  $('#view-' + tab).classList.remove('hidden')
+  if (tab === 'cards') loadCards()
+  if (tab === 'edges') loadEdges()
+  if (tab === 'coverage') loadCoverage()
+  if (tab === 'pit') loadPit()
+}
+$('#tabs').addEventListener('click', e => {
+  const t = e.target.closest('.tab'); if (!t) return
+  location.hash = t.dataset.tab
+  showTab(t.dataset.tab)
+})
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1) || 'map'))
+
+// ---------------- overview ----------------
+async function boot() {
+  let o
+  try { o = await api('/api/situation/overview') }
+  catch (err) { $('#dbState').textContent = '读取失败：' + err.message; $('#dbDot').style.background = 'var(--red)'; return }
+  if (!o.available) {
+    $('#dbState').textContent = o.reason
+    $('#dbDot').style.background = 'var(--red)'
+    $('#metrics').innerHTML = `<div class="notice"><div class="icon">✗</div><div>${esc(o.reason)}</div></div>`
+    return
+  }
+  OVERVIEW = o
+  $('#dbState').textContent = `${o.source.filename} · 只读 · 求值器 ${o.source.evaluatorVersion || '—'} · 谓词 ${o.source.predicateVersion || '—'}`
+  renderMetrics(o)
+  renderGrid(o)
+  // as-of 默认给数据 vintage，但控件是必填的：用户改它才会重算。
+  $('#asof').value = (o.source.dataVintage || '').replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') || new Date().toISOString().slice(0, 10)
+  loadRates()
+  if (location.hash.slice(1)) showTab(location.hash.slice(1))
+}
+
+function renderMetrics(o) {
+  const h = o.headline
+  const caseOnly = (o.cardTiers || []).filter(t => t.status === 'case_only').reduce((a, b) => a + b.n, 0)
+  const generalizable = h.cards - caseOnly
+  const m = [
+    ['卡片总数', int(h.cards), `${generalizable} 张可推广 + ${caseOnly} 张仅限本案`, ''],
+    ['写得出谓词', int(h.cardsWithPredicate), `其余 ${h.cards - h.cardsWithPredicate} 张只能靠人读`, 'warn'],
+    ['案例', int(h.cases), '被挑出来写成案例的日子', ''],
+    ['日级先例', int(h.dayRows), `案例数的 ${(h.dayRows / Math.max(1, h.cases)).toFixed(1)} 倍`, 'safe'],
+    ['判定格', int(h.verdicts), '三态：命中 / 不适用 / 无法判定', ''],
+    ['关系边', int(h.edges), '每条都带 basis', ''],
+    ['同日多 bot', int(h.cohortDays), `最多同日 ${h.cohortMaxBots} 个 bot 在做决定`, ''],
+  ]
+  $('#metrics').innerHTML = m.map(([l, v, hint, cls]) =>
+    `<div class="metric ${cls}"><div class="label">${esc(l)}</div><div class="value">${v}</div><div class="hint">${esc(hint)}</div></div>`).join('')
+}
+
+function renderGrid(o) {
+  const byId = new Map(o.grid.map(g => [g.cellId, g]))
+  const maxDay = Math.max(1, ...o.grid.map(g => g.nDay))
+  let html = '<table class="grid"><tr><th></th>' + o.ddOrder.map(d => `<th>回撤 ${esc(d)}</th>`).join('') + '</tr>'
+  for (const s of o.stressOrder) {
+    html += `<tr><th>${esc(s)}</th>`
+    for (const d of o.ddOrder) {
+      const id = s + '|' + d
+      const g = byId.get(id) || { nDay: 0, nCase: 0 }
+      const w = Math.max(2, Math.round(g.nDay / maxDay * 100))
+      html += `<td><div class="cell ${g.nDay === 0 && g.nCase === 0 ? 'empty' : ''}" data-cell="${esc(id)}">
+        <div class="cn">${esc(id)}</div>
+        <div class="cd">${int(g.nDay)}<span class="muted" style="font-size:11px;font-weight:400"> 日</span></div>
+        <div class="cc">案例 ${int(g.nCase)}</div>
+        <div class="bar" style="width:${w}%"></div></div></td>`
+    }
+    html += '</tr>'
+  }
+  $('#gridHost').innerHTML = html + '</table>'
+  $('#gridHost').addEventListener('click', e => {
+    const c = e.target.closest('.cell'); if (!c) return
+    document.querySelectorAll('.cell').forEach(x => x.classList.toggle('active', x === c))
+    loadCell(c.dataset.cell)
+  })
+}
+
+// ---------------- cell drill ----------------
+async function loadCell(cellId) {
+  activeCell = cellId
+  $('#cellDetail').innerHTML = '<div class="empty">读取中…</div>'
+  const asof = $('#asof').value || '2099-01-01'
+  const h = $('#horizon').value || 20
+  let d
+  try { d = await api(`/api/situation/cell?cell_id=${encodeURIComponent(cellId)}&horizon=${h}&asof=${asof}`) }
+  catch (err) { $('#cellDetail').innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`; return }
+
+  const rows = d.subjects.map(s => {
+    const masked = !s.visibleAtAsof
+    const ret = s.outcomeStatus !== 'ok'
+      ? `<span class="faint">${s.outcomeStatus === 'truncated' ? '窗口不够，留白' : s.outcomeStatus === 'no_nav' ? '无净值' : '无结果行'}</span>`
+      : masked
+        ? `<span class="faint" title="结果要到 ${esc(s.availableAt)} 才可见">as-of 之后才可见</span>`
+        : sign(s.fwdReturnPct)
+    return `<tr>
+      <td class="l"><span class="badge ${s.subjectKind === 'case' ? 'flaw' : ''}">${s.subjectKind === 'case' ? '案例' : '日级'}</span></td>
+      <td class="l mono">${esc(s.tradeDate)}</td>
+      <td class="l mono">${esc(s.botId ?? '—')}</td>
+      <td class="l">${esc(s.decisionType ?? '未知')}</td>
+      <td>${s.actionCount ?? '—'}</td>
+      <td>${ret}</td>
+      <td>${s.outcomeStatus === 'ok' && !masked ? sign(s.fwdExcessPct) : '<span class="faint">—</span>'}</td>
+      <td class="l mono faint">${esc(s.availableAt ?? '')}</td>
+    </tr>`
+  }).join('')
+
+  $('#cellDetail').innerHTML = `
+  <div class="section">
+    <div class="section-title">格子下钻 · ${esc(cellId)}</div>
+    <div class="legend">
+      共 <b>${int(d.counts.total)}</b> 条先例：日级 <b>${int(d.counts.day)}</b>、案例 <b>${int(d.counts.case)}</b>。
+      其中在 as-of <b>${esc(d.asof)}</b> 这天<b>结果已经可见</b>的有 <b>${int(d.counts.outcomeVisible)}</b> 条——
+      其余那些不是缺数据，是<b>那天还没到</b>。as-of 之后才可见的收益值<b>在服务端就没有下发</b>，不是在页面上盖住的。
+      ${d.counts.truncated ? `<br><b>下面这张表只列出最近 ${int(d.counts.shown)} 条</b>（上限 ${int(d.counts.cap)}），
+        不是全部 ${int(d.counts.total)} 条。上面那三个计数是全量真值，表是截断的——两者不一样，所以分开写。` : ''}
+    </div>
+    ${d.cards.length ? `<div class="chips">${d.cards.map(c =>
+      `<span class="badge sit" title="${esc(c.cardId)}">${esc(c.title)} · 本格命中 ${c.n}</span>`).join('')}</div>` : ''}
+    ${d.coOccurs.length ? `<div class="legend" style="margin-top:10px">本格有 <b>${d.coOccurs.length}</b> 对卡同时出现。
+      <b>这只是共现，不是冲突</b>——要判冲突还需要「两张卡在这个格里给出相反指令」，而指令方向目前只有卡里的文字，没有机械口径。硬把共现升级成冲突，等于用一个测得到的东西冒充一个测不到的东西。</div>` : ''}
+    <div class="scrollbox" style="margin-top:12px"><table class="data">
+      <thead><tr><th class="l">线</th><th class="l">日期</th><th class="l">bot</th><th class="l">当日动作</th><th>笔数</th>
+        <th>${esc(String(d.horizon))}日净值%</th><th>超额%</th><th class="l">结果可见于</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="8" class="empty">本格没有先例</td></tr>'}</tbody>
+    </table></div>
+  </div>`
+}
+
+// ---------------- base rates ----------------
+$('#runRates').addEventListener('click', loadRates)
+;['#horizon', '#kind', '#dtype'].forEach(s => $(s).addEventListener('change', loadRates))
+
+/**
+ * 从当前这批数据里挑一个「刚过线」的格子当例子，说明胜率算在 n行 上、n独立 只当闸门。
+ * 刻意不写死数字：写死的例子换个窗口档就会变成假话，而没人会去改它。
+ */
+function thinExample(d) {
+  const c = (d.cells || [])
+    .filter(x => x.nInd >= d.minN && x.nInd < d.minN * 2 && typeof x.winRate === 'number' && x.nRet)
+    .sort((a, b) => a.nInd - b.nInd)[0]
+  if (!c) return ''
+  return `举这批数据里最薄的一格：<span class="mono">${esc(c.cellId)}</span> 胜率 <b>${num(c.winRate, 1)}%</b>，
+    那是 <b>${int(c.nRet)}</b> 行里 <b>${int(c.win)}</b> 行上涨；而这 ${int(c.nRet)} 行只来自 <b>${int(c.nInd)}</b> 段互不重叠的行情。`
+}
+
+function band(q, lo, hi) {
+  // 一条带子：p10–p90 淡，p25–p75 实，中位一根线。刻意不画均值。
+  const W = 210, H = 22
+  const sc = v => (v - lo) / Math.max(1e-9, hi - lo) * W
+  if (q['0.1'] === null) return `<svg width="${W}" height="${H}"></svg>`
+  const zero = sc(0)
+  return `<svg width="${W}" height="${H}">
+    <line x1="${zero}" y1="0" x2="${zero}" y2="${H}" stroke="#243451" stroke-width="1"/>
+    <rect x="${sc(q['0.1'])}" y="${H / 2 - 3}" width="${Math.max(1, sc(q['0.9']) - sc(q['0.1']))}" height="6" fill="rgba(102,217,232,.22)" rx="3"/>
+    <rect x="${sc(q['0.25'])}" y="${H / 2 - 6}" width="${Math.max(1, sc(q['0.75']) - sc(q['0.25']))}" height="12" fill="rgba(102,217,232,.45)" rx="3"/>
+    <line x1="${sc(q['0.5'])}" y1="${H / 2 - 9}" x2="${sc(q['0.5'])}" y2="${H / 2 + 9}" stroke="#e8eef8" stroke-width="2"/>
+  </svg>`
+}
+
+async function loadRates() {
+  const asof = $('#asof').value
+  if (!asof) {
+    $('#ratesHost').innerHTML = `<div class="notice"><div class="icon">⚠</div><div><strong>必须给 as-of。</strong>
+      这一层没有默认 as-of 是故意的：一个能省略的 as-of，迟早会被省略，然后就是未来信息。</div></div>`
+    return
+  }
+  $('#ratesHost').innerHTML = '<div class="empty">计算中…</div>'
+  let d
+  try {
+    d = await api(`/api/situation/base-rates?asof=${asof}&horizon=${$('#horizon').value}&kind=${$('#kind').value}&decision_type=${encodeURIComponent($('#dtype').value)}`)
+  } catch (err) { $('#ratesHost').innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`; return }
+
+  const withQ = d.cells.filter(c => c.enough)
+  const all = withQ.flatMap(c => [c.q['0.1'], c.q['0.9']]).filter(x => x !== null)
+  const lo = Math.min(0, ...all), hi = Math.max(0, ...all)
+
+  const rows = d.cells.map(c => {
+    if (!c.enough) {
+      return `<tr>
+        <td class="l mono">${esc(c.cellId)}</td>
+        <td>${int(c.nRows)}</td><td>${int(c.nInd)}</td><td>${int(c.nBot)}</td>
+        <td colspan="8" class="outmap">${esc(c.outOfMap)}</td></tr>`
+    }
+    // 刚过线的格子要看得出来。n独立=6 和 n独立=53 在表里长得一模一样，
+    // 而它们的可信程度差着一个数量级——「过线」不是「够用」，只是「不到不出数字的地步」。
+    const thin = c.nInd < d.minN * 2
+    return `<tr>
+      <td class="l mono">${esc(c.cellId)}</td>
+      <td>${int(c.nRows)}</td>
+      <td class="${thin ? 'outmap' : ''}" title="${thin ? `刚过线：独立窗口 ${c.nInd}，门槛 ${d.minN}。这一格实际只有 ${c.nInd} 段互不重叠的行情——右边那排数字虽然是在 ${c.nRows} 行上算的，但那 ${c.nRows} 行来回讲的就是这 ${c.nInd} 段事，换一两段就会变样。` : ''}">${int(c.nInd)}${thin ? ' ⚠' : ''}</td>
+      <td>${int(c.nBot)}</td>
+      <td class="${thin ? 'faint' : ''}">${num(c.winRate, 1)}%</td>
+      <td>${band(c.q, lo, hi)}</td>
+      <td>${sign(c.q['0.1'])}</td><td>${sign(c.q['0.25'])}</td>
+      <td><b>${sign(c.q['0.5'])}</b></td><td>${sign(c.q['0.75'])}</td><td>${sign(c.q['0.9'])}</td>
+      <td>${sign(c.excessMedian)}</td></tr>`
+  }).join('')
+
+  const t = d.totals
+  // 这段话不是写死的，是从上面这张表里算出来的。表变了它就跟着变。
+  // 之所以要单独说一遍：读者的眼睛会自动滑向有数字的那几行，而
+  // 「哪几格没有数字」往往才是这张表最要紧的信息。
+  const byStress = {}
+  for (const c of d.cells) {
+    byStress[c.stress] = byStress[c.stress] || { n: 0, out: 0, rows: 0 }
+    byStress[c.stress].n++
+    byStress[c.stress].rows += c.nRows
+    if (!c.enough) byStress[c.stress].out++
+  }
+  const worst = Object.entries(byStress).filter(([, v]) => v.out === v.n).map(([k]) => k)
+  const outRows = d.cells.filter(c => !c.enough).reduce((a, c) => a + c.nRows, 0)
+  const callout = t.nCellsOutOfMap === 0 ? '' : `
+    <div class="notice" style="margin-bottom:14px"><div class="icon">🗺</div><div>
+      <strong>先看哪几格是空的，再看哪几格有数字。</strong>
+      ${t.nCells} 个有先例的格里，<b>${t.nCellsOutOfMap} 个出不了数字</b>（合计 ${int(outRows)} 行先例在这些格里，但折成独立窗口后不够 ${d.minN} 个）。
+      ${worst.length ? `其中<b>压力等级「${worst.map(esc).join('、')}」的格子一个都出不了数字</b>——
+        也就是说，<b>越是要紧的处境，我们手上的先例越少</b>。这不是可以靠调阈值绕过去的，是真的没观测到过。` : ''}
+      <br>这一条摆在表前面，是因为读者的眼睛会自动滑向有数字的那几行，而空格子才是这张表最要紧的信息。
+    </div></div>`
+  $('#ratesHost').innerHTML = callout + `
+    <table class="data">
+      <thead><tr><th class="l">处境格</th><th>n行</th><th>n独立</th><th>nbot</th><th>胜率</th>
+        <th style="text-align:center">分布（p10–p90，粗段 p25–p75，白线中位）</th>
+        <th>p10</th><th>p25</th><th>中位</th><th>p75</th><th>p90</th><th>超额中位</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="12" class="empty">该 as-of 下没有任何结果可见</td></tr>'}</tbody>
+    </table>
+    <div class="legend" style="margin-top:14px">
+      as-of <b>${esc(d.asof)}</b> · 窗口 <b>${d.horizon}</b> 交易日 · 主体线 <b>${d.kind === 'case' ? '案例' : '日级'}</b>${d.decisionType ? ' · 当日动作 <b>' + esc(d.decisionType) + '</b>' : ''}<br>
+      共 <b>${t.nCells}</b> 个格有先例，其中 <b class="${t.nCellsOutOfMap ? 'outmap' : ''}">${t.nCellsOutOfMap}</b> 个格样本不足不出数字，<b>${t.nCells - t.nCellsOutOfMap}</b> 个格出数字。
+      闸门内共 <b>${int(t.nRows)}</b> 行、折成 <b>${int(t.nInd)}</b> 个独立窗口；不设闸门时该主体线共 <b>${int(t.visibleOfAllOk)}</b> 行。<br>
+      <b>给一个 n=2 的中位数，比不给更糟。</b>所以样本不足的格子这里一个数字都不会出现，而不是出一个灰色小字。<br>
+      n独立后面带 <b class="outmap">⚠</b> 的格子是<b>刚过线</b>（独立窗口不足 ${d.minN * 2} 个）：它出了数字，但背后只有个位数段互不重叠的行情。<b>过线不等于够用</b>，只等于「还不到不出数字的地步」——这类格子的胜率已经调淡，鼠标停上去有说明。<br>
+      <b>还有一件必须说清的事：胜率和五个分位数是在「n行」上算的，不是在「n独立」上算的。</b>
+      n独立<b>只当闸门</b>，决定这一格出不出数字，不参与计算。这样做是因为点估计本身不会因为窗口重叠而偏掉（每一行都是一次真实的「这天之后 ${d.horizon} 天怎么走」），
+      但<b>它的可信度会</b>——722 行里真正独立的只有几十段。所以三个分母永远一起给：<b>n行决定数字怎么算，n独立决定数字给不给</b>。
+      ${thinExample(d)}
+    </div>`
+}
+
+// ---------------- cards ----------------
+let cardsLoaded = false
+async function loadCards() {
+  if (cardsLoaded) return
+  let d
+  try { d = await api('/api/situation/cards') }
+  catch (err) { $('#cardsHost').innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`; return }
+  cardsLoaded = true
+  const cls = { '违反': 'vio', '处境': 'sit', '缺陷': 'flaw', '流程': 'proc' }
+  const meaning = {
+    '违反': '卡说「别这么干」——命中 = 有人这么干了',
+    '处境': '卡只是描述一种处境——命中不代表任何人做错了什么',
+    '缺陷': '卡指向一个缺陷——命中 = 这个缺陷的条件成立',
+    '流程': '卡讲流程——命中 = 流程上出了这个问题',
+  }
+  const body = d.cards.map(c => {
+    const day = c.byKind.find(k => k.subjectKind === 'backtest_day')
+    const cs = c.byKind.find(k => k.subjectKind === 'case')
+    const ev = c.evidence
+    const hasDir = c.hitMeans === '违反'
+    return `<div class="cardrow">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div style="flex:1">
+          <div class="ct">${esc(c.title)}</div>
+          <div class="cid">${esc(c.cardId)}</div>
+        </div>
+        <span class="badge ${cls[c.hitMeans] || ''}">命中意味着：${esc(c.hitMeans)}</span>
+      </div>
+      <div class="cm">${esc(meaning[c.hitMeans] || '')}</div>
+      <div class="chips">
+        ${day ? `<span class="badge">日级 ${int(day.nTrue)} 命中 / ${int(day.nFalse)} 不适用 / ${int(day.nNull)} 无法判定</span>` : ''}
+        ${cs ? `<span class="badge">案例 ${int(cs.nTrue)} 命中 / ${int(cs.nFalse)} 不适用 / ${int(cs.nNull)} 无法判定</span>` : ''}
+      </div>
+      ${c.power ? `<div class="cm"><b>判别力：</b>${esc(c.power.reading)}${c.power.truePct >= 70
+        ? '　<span class="badge weak">这是降级信号，不是覆盖广=重要</span>' : ''}</div>` : ''}
+      ${day && day.nNull / day.n > 0.2 ? `<div class="cm"><b>可判定率：</b>
+        ${num((1 - day.nNull / day.n) * 100, 0)}%——有 <b>${int(day.nNull)}</b> 天（${num(day.nNull / day.n * 100, 0)}%）这张卡<b>根本判不了</b>，
+        因为判它需要的坐标那天算不出来。
+        <br><span class="faint">判不了和不适用是两件事，这里没有合并：把「不知道」记成「不适用」会让这张卡看起来比实际适用面窄，也会让它的命中率虚高。
+        所以三态是三列，不是两列。</span></div>` : ''}
+      ${c.scopeConcentration ? `<div class="cm"><b>实测范围：</b>先例落在 ${c.scopeConcentration.nCells} 个格里，
+        最大的一格是 <span class="mono">${esc(c.scopeConcentration.topCell)}</span>，占 ${num(c.scopeConcentration.share, 0)}%。
+        ${c.scopeConcentration.flag ? `<span class="badge weak">⚠ ${esc(c.scopeConcentration.flag)}</span>` : ''}
+        <br><span class="faint">这是实测出来的范围，不是卡片作者声明的适用范围。两者常常不一样，而差异本身就是信息。</span></div>` : ''}
+      <div class="cm">${hasDir && ev.corroborates + ev.refutes === 0
+        ? `<b>方向性证据：</b><span class="badge weak">一条都没有</span>
+           <br><span class="faint">这张卡说得出方向，但它的先例目前<b>没有一条</b>拿得到 20 日后果。
+           不是证据弱，是<b>没有证据</b>——这两件事不能显示成同一个样子。</span>`
+        : hasDir
+        ? `<b>方向性证据：</b>同向 ${ev.corroborates} 条 / 反向 ${ev.refutes} 条。
+           <span class="badge weak">弱证据</span>
+           <br><span class="faint">口径：卡说「别这么干」，那么「这么干了之后净值跌了」才算与主张同向。但后续走势是 bot 净值不是归因，且样本极小。<b>同向和反向两种都建了</b>——只建支持的那一半，就是在给卡片挑好看的证据。</span>`
+        : `<b>方向性证据：</b><span class="faint">不建。这张卡命中意味着「${esc(c.hitMeans)}」，没有方向可言，硬凑一个方向出来只会造出假证据。</span>`}</div>
+    </div>`
+  }).join('')
+  $('#cardsHost').innerHTML = body + `
+    <div class="notice" style="margin-top:14px"><div class="icon">📚</div><div>${esc(d.note)}</div></div>`
+}
+
+// ---------------- edges ----------------
+let edgesInit = false
+async function loadEdges() {
+  if (!edgesInit) {
+    const types = [...new Set((OVERVIEW?.edgeTypes || []).map(e => e.edgeType))]
+    $('#edgeType').innerHTML = '<option value="">全部</option>' + types.map(t => `<option>${esc(t)}</option>`).join('')
+    $('#edgeType').addEventListener('change', () => { edgesInit = true; fetchEdges() })
+    $('#edgeLimit').addEventListener('change', fetchEdges)
+    edgesInit = true
+  }
+  fetchEdges()
+}
+async function fetchEdges() {
+  $('#edgesHost').innerHTML = '<div class="empty">读取中…</div>'
+  let d
+  try { d = await api(`/api/situation/edges?type=${encodeURIComponent($('#edgeType').value)}&limit=${$('#edgeLimit').value}`) }
+  catch (err) { $('#edgesHost').innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`; return }
+  const used = [...new Set(d.edges.map(e => e.basis))]
+  $('#edgeLegend').innerHTML = '<div class="legend">' + used.map(b =>
+    `<div><span class="mono">${esc(b)}</span> — ${esc(d.basisLegend[b] || '（未登记的凭据类型，需要补说明）')}</div>`).join('') + '</div>'
+  // 条数放在表格**上面**：这个框只有 460px 高，放在下面就得先滚过 200 行才知道自己在看什么。
+  $('#edgesHost').innerHTML = `<div class="legend" style="margin:0 0 8px">显示 ${int(d.edges.length)} / 共 ${int(d.total)} 条${d.edges.length < d.total ? '——<b>这一屏不是全部</b>，框内可上下滚动；要一次看更多请调「显示条数」' : ''}。鼠标停在被截断的格子上可以看全文。</div>
+    <table class="data fixed">
+    <colgroup><col style="width:150px"><col style="width:210px"><col style="width:76px">
+      <col><col><col style="width:150px"><col style="width:78px"></colgroup>
+    <thead><tr><th class="l">类型</th><th class="l">凭据 basis</th><th class="l">角色</th>
+      <th class="l">从</th><th class="l">到</th><th class="l">日期 / 处境格</th><th class="l">明细</th></tr></thead>
+    <tbody>${d.edges.map(e => `<tr>
+      <td class="l"><span class="badge">${esc(e.edgeType)}</span></td>
+      <td class="l mono trunc ${e.basis === 'card_provenance' ? 'outmap' : ''}" title="${esc(e.basis)}">${esc(e.basis)}</td>
+      <td class="l">${esc(e.role)}</td>
+      <td class="l mono trunc" title="${esc(e.src.id)}">${esc(e.src.title || e.src.id)}</td>
+      <td class="l mono trunc" title="${esc(e.dst.id)}">${esc(e.dst.title || e.dst.id)}</td>
+      <td class="l mono faint trunc">${esc(e.tradeDate || '')} ${esc(e.cellId || '')}</td>
+      <td class="l"><details><summary>展开</summary><pre class="raw" style="position:absolute;z-index:9;width:640px;margin-left:-560px">${esc(JSON.stringify(e.detail, null, 2))}</pre></details></td>
+    </tr>`).join('')}</tbody></table>`
+}
+
+// ---------------- coverage ----------------
+$('#covHorizon').addEventListener('change', () => { coverageLoaded = false; loadCoverage() })
+let coverageLoaded = false
+async function loadCoverage() {
+  if (coverageLoaded) return
+  let d
+  try { d = await api('/api/situation/coverage?horizon=' + $('#covHorizon').value) }
+  catch (err) { $('#coverageHost').innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`; return }
+  coverageLoaded = true
+  $('#coverageHost').innerHTML = `<table class="data">
+    <thead><tr><th class="l">主体线</th><th>有结果</th><th>窗口不够（留白）</th><th>无净值</th><th>合计</th><th>有结果占比</th></tr></thead>
+    <tbody>${d.byKind.map(k => `<tr>
+      <td class="l">${k.subjectKind === 'case' ? '案例线' : '日级线'}</td>
+      <td>${int(k.ok)}</td><td class="${k.truncated ? 'outmap' : ''}" style="text-align:right">${int(k.truncated)}</td>
+      <td>${int(k.no_nav)}</td><td>${int(k.total)}</td>
+      <td class="${k.okPct < 50 ? 'neg' : ''}">${num(k.okPct, 1)}%</td></tr>`).join('')}</tbody></table>
+    <div class="legend">${esc(d.note)}</div>
+    ${d.excessGaps.length ? `<div class="section"><div class="section-title">有净值收益、但超额留空</div>
+      <div class="legend">窗口终点当天基准指数还没落库（账户快照当天就写，行情要等收盘）。
+      <b>不做就近回退</b>：那会把两段长度不等的区间相减——bot 算 20 天、指数算 19 天——得到一个看起来完全正常、实际上多算了一天 bot 收益的超额。这种错不会报警、不会留痕，只会让超额整体偏高。宁可留空。</div>
+      <table class="data"><thead><tr><th class="l">窗口终点</th><th>条数</th><th class="l">原因</th></tr></thead>
+      <tbody>${d.excessGaps.map(g => `<tr><td class="l mono">${esc(g.endDate)}</td><td>${int(g.n)}</td>
+        <td class="l wide faint">${esc(g.note)}</td></tr>`).join('')}</tbody></table></div>` : ''}`
+}
+
+// ---------------- pit ----------------
+;['#pitHorizon', '#pitKind'].forEach(s => $(s).addEventListener('change', () => { pitLoaded = false; loadPit() }))
+let pitLoaded = false
+async function loadPit() {
+  if (pitLoaded) return
+  let d
+  try { d = await api(`/api/situation/pit?horizon=${$('#pitHorizon').value}&kind=${$('#pitKind').value}`) }
+  catch (err) { $('#pitHost').innerHTML = `<div class="empty">读取失败：${esc(err.message)}</div>`; return }
+  pitLoaded = true
+  $('#pitHost').innerHTML = `<table class="data">
+    <thead><tr><th class="l">as-of（问：截至这天能看到什么）</th><th>闸门内样本</th><th>占全量</th><th class="l">单调</th></tr></thead>
+    <tbody>${d.rows.map(r => `<tr><td class="l mono">${esc(r.asof)}</td><td>${int(r.n)}</td>
+      <td>${num(r.share, 1)}%</td><td class="l">${r.monotone ? '<span class="pos">✓</span>' : '<span class="neg">✗</span>'}</td></tr>`).join('')}</tbody></table>
+    <div class="legend">
+      结果可见区间 <b>${esc(d.span.from || '—')}</b> ~ <b>${esc(d.span.to || '—')}</b>；不设闸门时全量 <b>${int(d.full)}</b> 行。<br>
+      单调性：<b class="${d.monotone ? 'pos' : 'neg'}">${d.monotone ? '✓ 通过' : '✗ 失败'}</b>　·
+      as-of 放到 2099 年应当正好等于全量：<b class="${d.reachesFull ? 'pos' : 'neg'}">${d.reachesFull ? '✓ 相等' : '✗ 不等，说明闸门以外还有别的东西在滤，需要查'}</b><br>
+      <b>这张表是可以自己复算的</b>：换个窗口、换条主体线，数会变，但单调性不会破。破了就说明闸门坏了。
+    </div>`
+}
+
+boot()
+</script>
+</body>
+</html>

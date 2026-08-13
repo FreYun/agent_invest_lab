@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { acquireSlot, gateStats } from './global-gate.ts'
 import type { AddressInfo } from 'node:net'
 
 // simworld-data MCP (streamable-http) wrapper:
@@ -170,7 +171,7 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ status: 'ok', upstream: opts.upstreamUrl }))
+      res.end(JSON.stringify({ status: 'ok', upstream: opts.upstreamUrl, gate: gateStats() }))
       return
     }
     if (req.method !== 'POST') {
@@ -250,7 +251,10 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     // 中被原样带过，这里强制以 proxy 配置值覆盖，确保日志里看到的是真实 run）。
     if (opts.clientId) headers['x-client-id'] = opts.clientId
 
-    const init: RequestInit = { method: req.method ?? 'GET', headers, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) }
+    // ★ 注意:signal 【不】在这里创建。AbortSignal.timeout() 是创建即计时,
+    //   而这里距离真正 fetch 还隔着一道串行闸门 + 一道全局限流。在此创建会让
+    //   7 秒预算被排队吃光 —— 并发时请求还没发出就被判超时(七秒指纹的根因)。
+    const init: RequestInit = { method: req.method ?? 'GET', headers }
     if (body !== null) init.body = body
 
     // Funnel the upstream round-trip through the 1-at-a-time gate. The upstream is
@@ -261,9 +265,18 @@ export async function createSimworldProxy(opts: SimworldProxyOptions): Promise<S
     // gate is already resolved. We hold the gate across fetch + body read (the
     // upstream connection is busy until the body drains).
     const run = upstreamGate.then(async () => {
-      const resp = await fetch(opts.upstreamUrl, init)
-      const text = await resp.text()
-      return { resp, text }
+      // 跨进程全局限流:per-bot 闸门只保证单 bot 不并发,管不了 N 个 run 之间。
+      // 实测 simworld 并发悬崖在 15(10 并发 p50 444ms → 20 并发 p50 5262ms),
+      // 所以全局钳在 12。取不到槽位会 fail-open 放行,不会卡死 agent。
+      const slot = await acquireSlot()
+      try {
+        // ★ signal 在这里才创建 —— 计时从真正发起 fetch 开始,不含排队
+        const resp = await fetch(opts.upstreamUrl, { ...init, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) })
+        const text = await resp.text()
+        return { resp, text }
+      } finally {
+        slot.release()
+      }
     })
     upstreamGate = run.then(() => undefined, () => undefined)
     const { resp: upstream, text } = await run

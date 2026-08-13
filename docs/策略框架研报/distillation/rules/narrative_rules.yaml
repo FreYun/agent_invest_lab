@@ -1,0 +1,155 @@
+# =====================================================================
+# narrative_rules —— 政策 + 龙头 + 硬件催化 → 主题确立/衰减
+# =====================================================================
+# 蒸馏自 3 份招商 A 股周报的 §观策·论市 + §主题·风向 段
+#
+# 2026-07-30 修订：
+#   1) 顶层加 rules: 键（修 YAML 语法）
+#   2) 07-12 与 07-19 §主题·风向 章节主题彻底张冠李戴，全部互换：
+#        · 07-12 §主题·风向 = 商业航天（p20-23，图 45-49）
+#              长征十号乙海上回收、蓝箭朱雀三号、SpaceX 星舰对标
+#        · 07-19 §主题·风向 = Kimi K3 登顶全球开源模型第一（p27-29，图 53-59）
+#              WAIC 2026、Atlas 950 SuperPoD、Kimi K3 2.8T 参数、
+#              发改委 AI 合作发展行动计划
+# =====================================================================
+
+meta:
+  version: 0.2
+  distilled_at: 2026-07-29
+  revised_at: 2026-07-30
+  source_reports: [cms_20260705, cms_20260712, cms_20260719]
+
+rules:
+
+  # -------------------------------------------------------------------
+  # 主题确立类
+  # -------------------------------------------------------------------
+  - id: theme_established_triple_catalyst
+    when:
+      all_of:
+        - "policy_doc: 部委级支持文件 (发改委/工信部/国务院)"
+        - "hardware_catalyst: 龙头产品/技术首发"
+        - "market_signal: 相关板块领涨 或 龙头股连续涨停"
+    verdict: "主题确立，具备中期配置价值"
+    phrases:
+      - "{{theme_name}}主线在'政策 + 产品首发 + 市场资金'三重催化下确立"
+      - "从叙事逻辑看，{{theme_name}}已进��产业化拐点，中期具备配置价值"
+    confidence: 0.90
+    sources:
+      - {report: cms_20260719, page: [27, 28, 29, 31], evidence: "AI 合作发展行动计划(发改委) + Atlas 950 SuperPoD 首秀 + Kimi K3 登顶开源第一 → '国产算力确立'"}
+      - {report: cms_20260712, page: [20, 21, 22, 23], evidence: "长征十号乙海上回收 + 蓝箭朱雀三号计划 + SpaceX 对标 → '商业航天'"}
+
+  - id: theme_domestic_ai_computing
+    when:
+      all_of:
+        - "event: WAIC 或类似顶级 AI 峰会窗口"
+        - "hardware: 华为/其他龙头超节点 或 千亿+级模型发布"
+        - "policy: 算力基建/工业互联网 顶层文件"
+    verdict: "国产算力主线，短期强催化 + 中长期渗透率驱动"
+    phrases:
+      - "以{{hardware_flagship}}为代表的国产算力硬件迎来密集催化窗口"
+      - "在算力基建 + 模型突破 + 政策扶持三重共振下，国产算力主线获资金重点关注"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260719, page: [27, 28, 29], evidence: "WAIC 2026 + Atlas 950 SuperPoD + Kimi K3 2.8T 参数 + 384 超节点商用 750 套"}
+      - {report: cms_20260719, page: 前段, evidence: "海外算力 + 国产算力 双主线"}
+
+  - id: theme_earnings_preview_screening
+    when:
+      all_of:
+        - "calendar_window: 4 月 15 日前后 或 7 月 15 日前后 (中报/一季报预告窗口)"
+        - "signal: 业绩预告集中披露 + 分析师一致预期上调"
+    verdict: "业绩兑现主线，中报/一季报预告窗口切换到'业绩确定性'"
+    phrases:
+      - "在中报预告窗口，关注业绩预告改善 + 一致预期上调的方向"
+      - "从业绩驱动的确定性角度，{{sector_list}}值得布局"
+    confidence: 0.80
+    sources:
+      - {report: cms_20260705, page: 前段, evidence: "关注中报业绩双主线"}
+      - {report: cms_20260719, page: 前段, evidence: "中报预期改善 → 底部布局方向之一"}
+
+  # -------------------------------------------------------------------
+  # 主题衰减/未成立类
+  # -------------------------------------------------------------------
+  - id: theme_single_news_no_leader
+    when:
+      all_of:
+        - "news_events_7d: 1"        # 只有单条新闻
+        - "leader_stock_consecutive_up: false"
+        - "policy_doc: null"
+    verdict: "叙事未成立，仅事件性扰动，不具备中期配置价值"
+    phrases:
+      - "{{event}}属单点事件，尚未看到板块联动或政策承接，不构成中期主线"
+    confidence: 0.60
+    sources:
+      - {logic_only: true}
+
+  - id: theme_valuation_extreme_overheating
+    when:
+      all_of:
+        - "sector_pe_percentile: >= 0.95"
+        - "capital_net_inflow_recent_week: negative"
+        - "leader_stock_high_turnover: true"
+    verdict: "主题过热信号，从'配置'转'兑现'"
+    phrases:
+      - "{{sector_name}} PE 分位{{pe_pct}}%已至极高位，本周资金转为净流出且龙头换手率高企"
+      - "从估值 + 资金 + 换手三维度看，主题进入过热阶段，建议逐步兑现"
+    confidence: 0.75
+    sources:
+      - {report: cms_20260719, page: 前段, evidence: "强势板块补跌 → '空间上'需消化"}
+
+  # -------------------------------------------------------------------
+  # 海外叙事传导类（招商体最爱写的一段）
+  # -------------------------------------------------------------------
+  - id: overseas_ai_deleveraging_transmission
+    when:
+      signal: us_mega_cap_ai_narrative_shift
+    verdict: "海外 AI 龙头叙事变化通过'情绪 + 资金 + 估值锚'向 A 股半导体链传导"
+    phrases:
+      - "美股{{giant}} {{event}}引发市场对 AI 定价框架的重估，A 股相关板块估值锚受到扰动"
+      - "在海外 AI 定价重估阶段，国内相关方向短期承压，中期需回归产业景气"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260705, page: 前段, evidence: "Meta 出售算力 → 市场担忧 AI 见顶"}
+      - {report: cms_20260712, page: 前段, evidence: "Meta 折返跑 + 韩国杠杆 ETF 强平 → A 股 TMT 承压"}
+      - {report: cms_20260719, page: 前段, evidence: "美股 AI 去杠杆同步向 A 股传导"}
+
+  - id: overseas_geopolitics_commodity
+    when:
+      all_of:
+        - "geo_event: 中东/美伊/俄乌 escalation"
+        - "commodity: 原油周涨幅 > 3%"
+    verdict: "地缘扰动 + 大宗上行，压制全球风险资产 + 利多资源股"
+    phrases:
+      - "{{geo_event}}反复引发原油价格{{direction}}{{pct}}%，风险资产承压，资源股相对占优"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260712, page: 前段, evidence: "美伊冲突反复 → 原油持续回升 → 全球风险资产承压"}
+
+  # -------------------------------------------------------------------
+  # 中期主线选择框架（chief_strategist 的固定"方向选择"章节）
+  # -------------------------------------------------------------------
+  - id: bottom_dual_direction_framework
+    usage: "§观策·论市 段'方向选择'固定二选一或二取一"
+    frameworks:
+      - id: earnings_certainty
+        key: 业绩确定性
+        trigger: "指数进入中枢下沿 或 情绪极值区间"
+        picking_criteria:
+          - 中报预告业绩改善
+          - 一致预期上调
+          - PE 分位处于中低区间
+      - id: industry_trend
+        key: 产业趋势
+        trigger: "存在硬件催化 + 政策文件 + 龙头股启动"
+        picking_criteria:
+          - 海外算力（Nvidia/Meta 相关链）
+          - 国产算力（华为超节点 + 国产大模型）
+          - 商业航天
+          - 创新药/CXO
+          - 氟化工/半导体材料
+    confidence: 0.95
+    must_be_given_in_pair: true
+    sources:
+      - {report: cms_20260705, page: 前段, evidence: "科技修复 + 中报业绩双主线"}
+      - {report: cms_20260719, page: 前段, evidence: "中报预期改善 + 海外算力 + 国产算力"}

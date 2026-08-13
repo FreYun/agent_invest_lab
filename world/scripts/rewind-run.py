@@ -315,7 +315,7 @@ def db_cleanup(bot_id: str, run_id: str, cutoff: str, last_keep: str, apply: boo
     conn.close()
 
 
-def _rebuild_lots(conn, bot_id: str, run_id: str) -> None:
+def _rebuild_lots(conn, bot_id: str, run_id: str, as_of_date: str, srv) -> None:
     """Rebuild fund_bot_holding_lots for every active holding from action replay.
 
     Walks fund_bot_actions (ADD/REDUCE, ordered by date/id) for each active
@@ -335,24 +335,43 @@ def _rebuild_lots(conn, bot_id: str, run_id: str) -> None:
 
     for h in holdings:
         actions = conn.execute(
-            "SELECT action_id, action_type, action_date, nav_used, amount, shares "
+            "SELECT action_id, action_type, action_date, nav_used, amount, shares, fee "
             "FROM fund_bot_actions WHERE bot_id=? AND run_id=? AND fund_code=? "
             "AND action_type IN ('ADD','REDUCE') ORDER BY action_date, action_id",
             (bot_id, run_id, h["fund_code"])).fetchall()
 
         lots: list[dict] = []
         for a in actions:
+            # Use the exact same point-in-time NAV reconstruction as the canonical
+            # holdings replay.  Using action.shares directly here used to diverge
+            # whenever a historical REDUCE stored rounded shares but replay derived
+            # amount / real_nav (e.g. 019633: 39702 vs 39701.996959).  That made
+            # sum(open lots) larger than holdings.shares and blocked the next full
+            # exit with "full-exit lot residue too large".
+            effective_shares, effective_nav = srv._effective_action_shares(
+                conn,
+                h["fund_code"],
+                a["amount"],
+                a["shares"],
+                a["nav_used"],
+                a["fee"],
+                a["action_date"],
+                as_of_date,
+                a["action_type"],
+            )
+            effective_shares = float(effective_shares or 0.0)
+            effective_nav = float(effective_nav or a["nav_used"] or 0.0)
             if a["action_type"] == "ADD":
                 lots.append({
                     "entry_date": a["action_date"],
-                    "entry_nav": float(a["nav_used"] or 0),
-                    "shares_initial": float(a["shares"] or 0),
-                    "shares_remaining": float(a["shares"] or 0),
+                    "entry_nav": effective_nav,
+                    "shares_initial": effective_shares,
+                    "shares_remaining": effective_shares,
                     "cost_initial": float(a["amount"] or 0),
                     "cost_remaining": float(a["amount"] or 0),
                 })
             else:  # REDUCE — FIFO consume open lots
-                want = float(a["shares"] or 0)
+                want = effective_shares
                 for lot in lots:
                     if want <= 1e-6:
                         break
@@ -363,8 +382,45 @@ def _rebuild_lots(conn, bot_id: str, run_id: str) -> None:
                     lot["shares_remaining"] -= take
                     lot["cost_remaining"] -= ratio * lot["cost_initial"]
                     want -= take
+                # Canonical holdings replay closes a position cycle when the
+                # post-REDUCE remainder is worth less than ¥1.  Mirror that
+                # here immediately; otherwise an old dust lot survives and is
+                # incorrectly merged into a later re-entry in the same fund.
+                remaining = sum(
+                    lot["shares_remaining"] for lot in lots
+                    if lot["shares_remaining"] > 1e-6
+                )
+                if remaining > 0 and srv._is_dust_shares(remaining, effective_nav):
+                    for lot in lots:
+                        if lot["shares_remaining"] > 1e-6:
+                            lot["shares_remaining"] = 0.0
+                            lot["cost_remaining"] = 0.0
 
-        open_sum = sum(l["shares_remaining"] for l in lots if l["shares_remaining"] > 1e-6)
+        open_lots = [l for l in lots if l["shares_remaining"] > 1e-6]
+        open_sum = sum(l["shares_remaining"] for l in open_lots)
+        target_shares = float(h["shares"] or 0.0)
+        delta = target_shares - open_sum
+        invariant_eps = max(1e-5, abs(target_shares) * 1e-10)
+        if abs(delta) > invariant_eps:
+            current_nav, _ = srv._get_nav(conn, h["fund_code"], as_of_date)
+            # Match settlement's economic dust rule: a sub-¥1 discrepancy is
+            # harmless historical rounding and may be reconciled; a material
+            # discrepancy must stop the rewind instead of corrupting inventory.
+            if not srv._is_dust_shares(abs(delta), float(current_nav or 0.0)):
+                raise RuntimeError(
+                    f"lot rebuild invariant failed: bot={bot_id} fund={h['fund_code']} "
+                    f"holding={target_shares:.9f} lots={open_sum:.9f} delta={delta:.9f}"
+                )
+        # holdings.shares is persisted at 6 decimals while replay math is full
+        # precision.  Put the sub-epsilon rounding delta into the final open lot
+        # so the persisted rows sum to the persisted holding exactly.
+        if open_lots and abs(delta) > 0:
+            lot = open_lots[-1]
+            unit_cost = (lot["cost_initial"] / lot["shares_initial"]
+                         if lot["shares_initial"] > 0 else 0.0)
+            lot["shares_remaining"] += delta
+            lot["cost_remaining"] = max(0.0, lot["cost_remaining"] + delta * unit_cost)
+            open_sum = target_shares
         n_open = sum(1 for l in lots if l["shares_remaining"] > 1e-6)
         # If open_sum < 1 share, treat as float residue (e.g. 100000/1.1578 -
         # 86370.7 = 0.003058) and auto-close the holding + all its lots. Real
@@ -485,7 +541,7 @@ def replay_repair(bot_id: str, run_id: str, last_keep: str, apply: bool):
     # corruption. sell orders route through _consume_lots_fifo which reads lots,
     # so if lots disagree with holdings.shares, sells will stay stuck in pending
     # forever. Rebuild ensures sum(open lots.shares_remaining) == holdings.shares.
-    _rebuild_lots(conn, bot_id, run_id)
+    _rebuild_lots(conn, bot_id, run_id, dates[-1], srv)
     conn.commit()
 
     acc = conn.execute(
@@ -630,14 +686,17 @@ def fs_cleanup(run_dir: Path, workspace_research: Path, cutoff: str, apply: bool
 
 
 def state_update(state_file: Path, new_cursor: int, cutoff: str,
-                 last_deep_research: str | None, apply: bool):
+                 last_deep_research_by_bot: dict[str, str | None], apply: bool):
     print(f"\n=== state.json update ===")
     with open(state_file) as f:
         s = json.load(f)
     print(f"  cursor        : {s['cursor']} -> {new_cursor}")
     print(f"  current_date  : {s['current_date']} -> {cutoff}")
     print(f"  status        : {s['status']} -> paused")
+    kept_deep_dates = [d for d in last_deep_research_by_bot.values() if d]
+    last_deep_research = max(kept_deep_dates) if kept_deep_dates else None
     print(f"  last_deep_research_date: {s.get('last_deep_research_date')} -> {last_deep_research}")
+    print(f"  last_deep_research_dates: {s.get('last_deep_research_dates')} -> {last_deep_research_by_bot}")
     print(f"  pid / aborted_reason   : drop if present")
     if not apply:
         return
@@ -648,6 +707,11 @@ def state_update(state_file: Path, new_cursor: int, cutoff: str,
         s['last_deep_research_date'] = last_deep_research
     else:
         s.pop('last_deep_research_date', None)
+    s['last_deep_research_dates'] = {
+        bot_id: deep_date
+        for bot_id, deep_date in last_deep_research_by_bot.items()
+        if deep_date is not None
+    }
     s['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())
     s.pop('pid', None)
     s.pop('aborted_reason', None)
@@ -711,19 +775,16 @@ def main():
     prune_prediction_tracker(prediction_tracker, cutoff, apply)
 
     # process each bot in the run (usually one)
-    last_deep_research_overall = None
+    last_deep_research_by_bot: dict[str, str | None] = {}
     for bot_id in bots:
         workspace_research = run_dir / "workspaces" / bot_id / "memory" / "research"
         db_cleanup(bot_id, run_id, cutoff, last_keep, apply)
         fs_cleanup(run_dir, workspace_research, cutoff, apply)
         rl_openclaw_cleanup(run_dir, bot_id, cutoff, apply)
         replay_repair(bot_id, run_id, last_keep, apply)
-        # per-bot last research; keep the max across bots
-        d = latest_research_before(workspace_research, cutoff)
-        if d and (last_deep_research_overall is None or d > last_deep_research_overall):
-            last_deep_research_overall = d
+        last_deep_research_by_bot[bot_id] = latest_research_before(workspace_research, cutoff)
 
-    state_update(state_file, cutoff_index, cutoff, last_deep_research_overall, apply)
+    state_update(state_file, cutoff_index, cutoff, last_deep_research_by_bot, apply)
     print("\n=== done ===")
 
 

@@ -54,13 +54,22 @@ export interface WorldConfig {
   // 里下强制指令）。仅 agent-triggered 生效；缺省=5。
   deepResearchMaxGapDays?: number
   // 事件阈值强制深研（字段名为兼容旧配置保留 crashTrigger）：投资目标指数
-  // |上一交易日涨跌%| >= crashTriggerDailyMovePct，或 bot 账户当前净值回撤首次跌破
-  // crashTriggerDrawdownPct 时触发。账户持续位于阈值下方不会重复触发。
+  // |上一交易日涨跌%| >= crashTriggerDailyMovePct 时触发。
   // 目标指数默认沪深300，单指数 bot 应配置成自己的投资目标指数。
   crashTriggerEnabled?: boolean
   crashTriggerDailyMovePct?: number
+  // 账户当前净值回撤跨过 crashTriggerDrawdownPct 的新整数倍档位时触发
+  //（如 8% / 16% / 24%），同一档内不重复。与目标行情开关解耦；agent-triggered 默认开启。
+  accountDrawdownTriggerEnabled: boolean
   crashTriggerDrawdownPct?: number
   crashTriggerBenchmark?: { code: string; name: string }
+  // 多指数/多基金 bot 的异常深研兜底。开启后，组合单日损失、最差持仓单日跌幅、
+  // 多指数风险篮子中的最差单日跌幅均可在 7 日固定间隔内提前强制深研。
+  deepResearchAnomalyTriggerEnabled?: boolean
+  deepResearchPortfolioDailyLossPct?: number
+  deepResearchWorstHoldingDailyLossPct?: number
+  deepResearchRiskBasketDailyLossPct?: number
+  deepResearchRiskBasket?: { code: string; name: string }[]
   // bot chat 频率（交易日步长）。1 = 每个交易日都唤起 bot（默认）。N > 1 = 每 N 个交易日唤起
   // 一次 bot chat（cursor 0, N, 2N, …），中间天系统侧 settle_pending_orders + close_my_day 仍
   // 按日推进，simulated_datetime 和 currentDateRef 同样每天更新——只是 bot 不被叫起。用于
@@ -331,8 +340,36 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
   const deepResearchMode: 'ordinal' | 'agent-triggered' = rawDrMode === 'agent-triggered' ? 'agent-triggered' : 'ordinal'
   const deepResearchMaxGapDays = typeof raw.deep_research_max_gap_days === 'number' && raw.deep_research_max_gap_days >= 1 ? Math.floor(raw.deep_research_max_gap_days) : 5
   const explicitCrashTriggerEnabled = typeof raw.crash_trigger_enabled === 'boolean' ? raw.crash_trigger_enabled : undefined
+  const explicitAccountDrawdownTriggerEnabled = typeof raw.account_drawdown_trigger_enabled === 'boolean' ? raw.account_drawdown_trigger_enabled : undefined
   const crashTriggerDailyMovePct = typeof raw.crash_trigger_daily_move_pct === 'number' && raw.crash_trigger_daily_move_pct > 0 ? raw.crash_trigger_daily_move_pct : 3
   const crashTriggerDrawdownPct = typeof raw.crash_trigger_drawdown_pct === 'number' && raw.crash_trigger_drawdown_pct > 0 ? raw.crash_trigger_drawdown_pct : 8
+  const deepResearchAnomalyTriggerEnabled = raw.deep_research_anomaly_trigger_enabled === true
+  const deepResearchPortfolioDailyLossPct = typeof raw.deep_research_portfolio_daily_loss_pct === 'number' && raw.deep_research_portfolio_daily_loss_pct > 0
+    ? raw.deep_research_portfolio_daily_loss_pct : 3
+  const deepResearchWorstHoldingDailyLossPct = typeof raw.deep_research_worst_holding_daily_loss_pct === 'number' && raw.deep_research_worst_holding_daily_loss_pct > 0
+    ? raw.deep_research_worst_holding_daily_loss_pct : 5
+  const deepResearchRiskBasketDailyLossPct = typeof raw.deep_research_risk_basket_daily_loss_pct === 'number' && raw.deep_research_risk_basket_daily_loss_pct > 0
+    ? raw.deep_research_risk_basket_daily_loss_pct : 3
+  const defaultRiskBasket = [
+    { code: '000300.SH', name: '沪深300' },
+    { code: '399006.SZ', name: '创业板指' },
+    { code: '000688.SH', name: '科创50' },
+    { code: '000852.SH', name: '中证1000' },
+  ]
+  let deepResearchRiskBasket = defaultRiskBasket
+  if (raw.deep_research_risk_basket !== undefined) {
+    if (!Array.isArray(raw.deep_research_risk_basket) || raw.deep_research_risk_basket.length === 0) {
+      throw new Error('world config: "deep_research_risk_basket" must be a non-empty list')
+    }
+    deepResearchRiskBasket = raw.deep_research_risk_basket.map((entry, i) => {
+      if (!entry || typeof entry !== 'object') throw new Error(`world config: deep_research_risk_basket[${i}] must be an object`)
+      const e = entry as Record<string, unknown>
+      if (typeof e.code !== 'string' || !e.code.trim() || typeof e.name !== 'string' || !e.name.trim()) {
+        throw new Error(`world config: deep_research_risk_basket[${i}] requires non-empty code/name`)
+      }
+      return { code: e.code.trim(), name: e.name.trim() }
+    })
+  }
   const ctb = raw.crash_trigger_benchmark as { code?: unknown; name?: unknown } | undefined
   const explicitCrashTriggerBenchmark = (ctb && typeof ctb === 'object' && typeof ctb.code === 'string' && typeof ctb.name === 'string')
     ? { code: ctb.code, name: ctb.name }
@@ -494,8 +531,11 @@ export function parseWorldConfig(raw: Record<string, unknown>, baseDir?: string)
     ?? { code: '000300.SH', name: '沪深300' }
   const crashTriggerEnabled = explicitCrashTriggerEnabled
     ?? (deepResearchMode === 'agent-triggered' && inferredCrashTriggerBenchmark !== undefined)
+  const accountDrawdownTriggerEnabled = explicitAccountDrawdownTriggerEnabled
+    ?? explicitCrashTriggerEnabled
+    ?? (deepResearchMode === 'agent-triggered')
 
-  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, crashTriggerDrawdownPct, crashTriggerBenchmark, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, singleFundBriefingRes, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat, charterEnforcement }
+  return { researchLoop, researchLoopRustBin, botsRoot, openclawJson, skillsRoot, bots, replay: { from, to }, calendar, concurrency, perBotTimeoutSeconds, researchDayEvery, researchDayTimeoutSeconds, deepResearchEvery, deepResearchTimeoutSeconds, deepResearchMode, deepResearchMaxGapDays, crashTriggerEnabled, crashTriggerDailyMovePct, accountDrawdownTriggerEnabled, crashTriggerDrawdownPct, crashTriggerBenchmark, deepResearchAnomalyTriggerEnabled, deepResearchPortfolioDailyLossPct, deepResearchWorstHoldingDailyLossPct, deepResearchRiskBasketDailyLossPct, deepResearchRiskBasket, chatStepDays, chatStepMode, chatWeekday, chatMonthlyNth, singleFundBriefingRes, reporterMode, rlConfigBase, rlOpenclawDir, shadowInclude, loop, openclawRoot, piServerEntry, fundMcpCli, fundInitialCapital, fundInitReset, enableUserSelfEdit, strategyLibraryRoot, botAssignments, buyableFundCodes, simworldUpstreamUrl, simworldTools, fundPortfolioUpstreamUrl, botModels, skipClose, skipChat, charterEnforcement }
 }
 
 export function loadWorldConfig(path: string): WorldConfig {

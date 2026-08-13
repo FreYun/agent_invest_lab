@@ -252,7 +252,7 @@ export const SCHEMA_REQUIREMENT_BLOCK = `【信念契约 · Belief Schema v1】
 - \`schema: v1\` — 版本号，固定
 - \`target_index\` — 你这只 bot 最关心的标的代号 (自由字符串)。示例: \`hs300\` / \`zz1000\` / \`csi_dividend\` / \`csi_new_energy\` / \`fund:000051\` / \`sw_biotech\`。**应与你 bot 的实际操作池一致**，避免对一个指数下注却用另一个指数算校准。
 - \`horizons.t+1\` / \`horizons.t+5\` / \`horizons.t+20\` — 三档时间窗，每档含 \`p_up\` ∈ [0,1] (上涨概率)、\`prior_p_up\` (昨日值，首日填 null)、\`delta\` (今日 - 昨日，首日填 null)
-- \`evidence\` — 至少 **2 条**证据，且 **至少 1 条 \`type: research\`** 且 \`ref\` 形如 \`20260601_xxx\` (日期前缀+slug)，证明你看了真东西
+- \`evidence\` — 至少 **2 条**证据，且 **至少 1 条 \`type: research\`** 且 \`ref\` 形如 \`20260601_xxx\` (日期前缀+slug)，证明你看了真东西。**今天没做深度研究不是豁免**——引用最近一次深研笔记即可，\`ref\` 用**那次深研的日期**作前缀，并在 \`summary\` 里注明「距今 N 个交易日」。研究越旧，这条信念的支撑越弱，这正是要暴露出来的东西，不要靠省略掩盖。
 - 每条 evidence: \`type\` ∈ {research,news,macro,technical,flow}、\`ref\`、\`summary\` (≤30 字)、\`polarity\` ∈ {+,-,neutral}
 
 ### 活性自查 (可选但强烈建议)
@@ -260,6 +260,7 @@ export const SCHEMA_REQUIREMENT_BLOCK = `【信念契约 · Belief Schema v1】
 若 |Δt+1| < 0.03 且无新证据 → 标 \`ok: false\` (诚实记账)，**胜过**捏造小数装样子。
 
 ### 防伪铁律
+- **键名逐字照抄下面的示例**：\`schema\` / \`target_index\` / \`horizons\` / \`t+1\` / \`t+5\` / \`t+20\` / \`evidence\`，一个字都不要改写、意译或增删顶层键。**不要**用 \`p_up\` 当顶层键代替 \`horizons\`、**不要**把 \`t+20\` 写成 \`t_plus_20\` 或 \`t20\`、**不要**把概率拆成 tactical/strategic 两套。结构一改系统就解析不出来，这一天的信念等于没写，也进不了校准样本。
 - p_up 用真实概率 (0.50 = 完全不知道；不准全填 0.55 装活)
 - ref 不能编 — 若被反查发现日期前缀和文件名对不上，直接判信念失效
 - evidence summary 必须能在你的研究 MD / 当日 news 工具调用里找到对应原文

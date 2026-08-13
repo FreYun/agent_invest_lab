@@ -14,7 +14,7 @@ def call(m,p,sid=None):
 _,sid=call("initialize",{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"d2","version":"1"}})
 NAMES={"云计算":["930851.CSI"],"动漫游戏":["930901.CSI"],"CS电池":["931719.CSI","931719.SH"],
  "电力":["930713.CSI","399994.SZ"],"细分化工":["000813.SH","000813.CSI"],"自由现金流":["932365.CSI","932367.CSI"],
- "通信":["931160.CSI","399970.SZ"],"中证A500":["000510.SH","930050.CSI"],"800消费":["000964.SH"],
+ "通信":["931160.CSI","399970.SZ"],"中证A500":["000510.CSI","930050.CSI"],"800消费":["000964.SH"],
  "电网设备":["931596.CSI"],"绿色电力":["931151.CSI"],"机器人":["931494.CSI"],"军工龙头":["931066.CSI"]}
 alls=[s for v in NAMES.values() for s in v]
 res,_=call("tools/call",{"name":"market_index_quote","arguments":{"market":"cn","symbols":alls,"start_date":"2014-01-01","end_date":"2026-06-05","simulated_datetime":"2026-06-05 15:00:00"}},sid)

@@ -116,6 +116,17 @@ def _rows(conn, sql, args=()):
     return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
 
+def _seed_order(conn, *, bot_id, fund_code, order_type, order_date, run_id,
+                status="confirmed"):
+    conn.execute(
+        "INSERT INTO fund_bot_orders "
+        "(bot_id, fund_code, fund_name, order_type, order_date, order_amount, "
+        " action_reason, status, order_run_id) "
+        "VALUES (?, ?, '测试基金', ?, ?, 100, 'seed', ?, ?)",
+        (bot_id, fund_code, order_type, order_date, status, run_id),
+    )
+
+
 def _setup_standard(reload_server, bot_id="botT", fund="000001",
                     entry_date="2026-04-10", entry_nav=1.0, shares=10_000.0,
                     cost=10_000.0, sell_date="2026-05-11", sell_nav=1.20,
@@ -658,6 +669,11 @@ def test_sell_and_buy_at_same_t_day_both_defer_to_settle(reload_server):
         _seed_fund(conn, fund)
         _seed_nav(conn, fund, "2026-04-10", 1.00)
         _seed_nav(conn, fund, "2026-04-11", 1.00)
+        # 反向交易闸门用 fund_nav distinct nav_date 作全局交易日历；
+        # 该场景实际跨一个月，测试库需显式补足至少 7 个交易日。
+        for d in ["2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16",
+                  "2026-04-17", "2026-04-20"]:
+            _seed_nav(conn, fund, d, 1.00)
         _seed_nav(conn, fund, "2026-05-11", 1.20)
         _seed_nav(conn, fund, "2026-05-12", 1.20)
         _seed_fund(conn, "000002", name="基金B")
@@ -1021,3 +1037,218 @@ def test_settle_closes_remaining_lot_dust_on_full_liquidation(reload_server):
     assert h["shares"] == 0
     assert all(l["status"] == "closed" for l in lots)
     assert all(l["shares_remaining"] == 0 and l["cost_remaining"] == 0 for l in lots)
+
+
+# =============================================================================
+#  清仓残留按「值不值 ¥1」判，不按固定份额容差判（bot105d 019633 回归）
+# =============================================================================
+
+def _seed_extra_lot(conn, bot_id, fund_code, run_id, holding_id, entry_date,
+                    entry_nav, shares, cost):
+    conn.execute(
+        "INSERT INTO fund_bot_holding_lots "
+        "(bot_id, fund_code, run_id, holding_id, entry_date, entry_nav, "
+        " shares_initial, shares_remaining, cost_initial, cost_remaining, "
+        " source_order_id, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'open')",
+        (bot_id, fund_code, run_id, holding_id, entry_date, entry_nav,
+         shares, shares, cost, cost),
+    )
+
+
+def test_settle_full_exit_when_residue_worth_under_one_yuan(reload_server):
+    """bot 把份额抄成一位小数：残留 0.0696 份越过 0.05 容差，但只值 ¥0.19 → 仍判全清。
+
+    旧口径判成部分卖出，holding 侧后来按 ¥1 口径置 closed，lot 侧留下 open 零头，
+    这只基金以后任何一次真清仓都会被 full-exit 守卫永久挡住。
+    """
+    s, db_path = _setup_standard(
+        reload_server, bot_id="botCopy1", fund="019633", shares=41622.269579,
+        cost=83244.5, entry_date="2026-04-10", entry_nav=2.0,
+        sell_date="2026-05-11", sell_nav=2.7871, settle_date="2026-05-12",
+        run_id="run-C1",
+    )
+
+    placed = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botCopy1", fund_code="019633", shares=41622.2,
+        trade_date="2026-05-11", reason="clear", run_id="run-C1",
+    )))
+    assert placed["success"], placed
+
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botCopy1", as_of_date="2026-05-12", run_id="run-C1",
+    )))
+    assert settled["success"], settled
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h = _row(conn, "SELECT status, shares FROM fund_bot_holdings WHERE bot_id='botCopy1'")
+        lots = _rows(conn, "SELECT status, shares_remaining FROM fund_bot_holding_lots WHERE bot_id='botCopy1'")
+    assert h["status"] == "closed", "残留只值 ¥0.19，应判全清"
+    assert abs(h["shares"] or 0.0) < 1e-9
+    assert all(l["status"] == "closed" and l["shares_remaining"] == 0 for l in lots), lots
+
+
+def test_settle_keeps_partial_when_residue_worth_over_one_yuan(reload_server):
+    """真实剩仓（值 ≥ ¥1）不能被零头口径误吞：holding 保持 active、lot 保持 open。"""
+    s, db_path = _setup_standard(
+        reload_server, bot_id="botCopy2", fund="019633", shares=41622.269579,
+        cost=83244.5, entry_date="2026-04-10", entry_nav=2.0,
+        sell_date="2026-05-11", sell_nav=2.7871, settle_date="2026-05-12",
+        run_id="run-C2",
+    )
+
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botCopy2", fund_code="019633", shares=41621.0,
+        trade_date="2026-05-11", reason="trim", run_id="run-C2",
+    ))
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botCopy2", as_of_date="2026-05-12", run_id="run-C2",
+    )))
+    assert settled["success"], settled
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h = _row(conn, "SELECT status, shares FROM fund_bot_holdings WHERE bot_id='botCopy2'")
+        lots = _rows(conn, "SELECT status, shares_remaining FROM fund_bot_holding_lots WHERE bot_id='botCopy2'")
+    # 残留 1.269579 份 × 2.7871 ≈ ¥3.54 ≥ ¥1
+    assert h["status"] == "active"
+    assert abs(h["shares"] - 1.269579) < 1e-6
+    assert any(l["status"] == "open" for l in lots), lots
+
+
+def test_settle_full_exit_tolerates_legacy_dust_lot(reload_server):
+    """库里已有的孤儿零头 lot 不该永久挡住这只基金的清仓——放行并顺手 sweep 掉。"""
+    s, db_path = _setup_standard(
+        reload_server, bot_id="botCopy3", fund="019633", shares=10_000.0,
+        cost=20_000.0, entry_date="2026-04-10", entry_nav=2.0,
+        sell_date="2026-05-11", sell_nav=2.7871, settle_date="2026-05-12",
+        run_id="run-C3",
+    )
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        hid = _row(conn, "SELECT holding_id FROM fund_bot_holdings WHERE bot_id='botCopy3'")["holding_id"]
+        # entry_date 更晚 → FIFO 先吃主 lot，这条零头留到最后
+        _seed_extra_lot(conn, "botCopy3", "019633", "run-C3", hid,
+                        "2026-04-20", 2.0, 0.069579, 0.139)
+        conn.commit()
+
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botCopy3", fund_code="019633", shares=10_000.0,
+        trade_date="2026-05-11", reason="clear", run_id="run-C3",
+    ))
+    settled = json.loads(asyncio.run(s.settle_pending_fund_orders(
+        bot_id="botCopy3", as_of_date="2026-05-12", run_id="run-C3",
+    )))
+    assert settled["success"], settled
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        h = _row(conn, "SELECT status FROM fund_bot_holdings WHERE bot_id='botCopy3'")
+        lots = _rows(conn, "SELECT status, shares_remaining FROM fund_bot_holding_lots WHERE bot_id='botCopy3'")
+    assert h["status"] == "closed"
+    assert all(l["status"] == "closed" and l["shares_remaining"] == 0 for l in lots), lots
+
+
+def test_settle_full_exit_still_rejects_material_lot_residue(reload_server):
+    """守卫不能被削弱：残留值 ≥ ¥1 的 lot 缺口仍要抛错，不能默默抹平。"""
+    s, db_path = _setup_standard(
+        reload_server, bot_id="botCopy4", fund="019633", shares=10_000.0,
+        cost=20_000.0, entry_date="2026-04-10", entry_nav=2.0,
+        sell_date="2026-05-11", sell_nav=2.7871, settle_date="2026-05-12",
+        run_id="run-C4",
+    )
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        hid = _row(conn, "SELECT holding_id FROM fund_bot_holdings WHERE bot_id='botCopy4'")["holding_id"]
+        _seed_extra_lot(conn, "botCopy4", "019633", "run-C4", hid,
+                        "2026-04-20", 2.0, 5.0, 10.0)  # 5 份 ≈ ¥13.9
+        conn.commit()
+
+    asyncio.run(s.portfolio_place_sell_order(
+        bot_id="botCopy4", fund_code="019633", shares=10_000.0,
+        trade_date="2026-05-11", reason="clear", run_id="run-C4",
+    ))
+    with pytest.raises(ValueError, match="full-exit lot residue too large"):
+        asyncio.run(s.settle_pending_fund_orders(
+            bot_id="botCopy4", as_of_date="2026-05-12", run_id="run-C4",
+        ))
+
+
+# =============================================================================
+#  同一标的反向交易 7 交易日硬冷却
+# =============================================================================
+
+def test_reverse_order_gate_rejects_buy_within_7_trading_days_after_sell(reload_server):
+    s = reload_server
+    bot_id, fund, run_id = "botRGbuy", "009901", "run-RG"
+    calendar = [
+        "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04",
+        "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10",
+    ]
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_fund(conn, fund)
+        for d in calendar:
+            _seed_nav(conn, fund, d, 1.0)
+        _seed_account(conn, bot_id, cash=100_000.0, initial=100_000.0, run_id=run_id)
+        _seed_order(
+            conn, bot_id=bot_id, fund_code=fund, order_type="sell",
+            order_date=calendar[0], run_id=run_id,
+        )
+        conn.commit()
+
+    blocked = json.loads(asyncio.run(s.portfolio_place_buy_order(
+        bot_id=bot_id, fund_code=fund, amount=10_000.0,
+        trade_date=calendar[6], reason="reverse too early", run_id=run_id,
+    )))
+    assert blocked["success"] is False
+    assert blocked["gate"] == "reverse_order_cooldown"
+    assert blocked["elapsed_trading_days"] == 6
+    assert blocked["remaining_trading_days"] == 1
+
+    allowed = json.loads(asyncio.run(s.portfolio_place_buy_order(
+        bot_id=bot_id, fund_code=fund, amount=10_000.0,
+        trade_date=calendar[7], reason="cooldown complete", run_id=run_id,
+    )))
+    assert allowed["success"] is True, allowed
+
+
+def test_reverse_order_gate_rejects_sell_within_7_trading_days_after_buy(reload_server):
+    s = reload_server
+    bot_id, fund, run_id = "botRGsell", "009902", "run-RG"
+    calendar = [
+        "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04",
+        "2026-06-05", "2026-06-08", "2026-06-09", "2026-06-10",
+    ]
+    import db as db_mod
+    with sqlite3.connect(db_mod.DB_PATH) as conn:
+        _seed_fund(conn, fund)
+        for d in calendar:
+            _seed_nav(conn, fund, d, 1.0)
+        _seed_account(conn, bot_id, cash=0.0, initial=10_000.0, run_id=run_id)
+        _seed_holding(
+            conn, bot_id, fund, shares=10_000.0, cost=10_000.0,
+            entry_date=calendar[0], entry_nav=1.0, run_id=run_id,
+        )
+        _seed_order(
+            conn, bot_id=bot_id, fund_code=fund, order_type="buy",
+            order_date=calendar[0], run_id=run_id,
+        )
+        conn.commit()
+
+    blocked = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id=bot_id, fund_code=fund, shares=1_000.0,
+        trade_date=calendar[6], reason="reverse too early", run_id=run_id,
+    )))
+    assert blocked["success"] is False
+    assert blocked["gate"] == "reverse_order_cooldown"
+    assert blocked["previous_order_type"] == "buy"
+
+    allowed = json.loads(asyncio.run(s.portfolio_place_sell_order(
+        bot_id=bot_id, fund_code=fund, shares=1_000.0,
+        trade_date=calendar[7], reason="cooldown complete", run_id=run_id,
+    )))
+    assert allowed["success"] is True, allowed

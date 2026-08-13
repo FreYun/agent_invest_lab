@@ -17,7 +17,7 @@ NAMES={ "中证500":["000905.SH"],"中证军工":["399967.SZ"],"创新药":["931
  "中证白酒":["399997.SZ"],"有色金属":["000819.CSI"],"中证新能源":["930997.CSI"],
  "中证医疗":["399989.SZ"],"证券公司":["399975.SZ"],"中证银行":["399986.SZ"],
  "中证半导":["931865.CSI"],"中证煤炭":["399998.SZ"],"光伏产业":["931151.CSI"],
- "中证红利":["000922.CSI"],"国证芯片":["980017.SZ"],"中证消费":["000932.SH"]}
+ "中证红利":["000922.SH"],"国证芯片":["980017.SZ"],"中证消费":["000932.SH"]}
 allsyms=[s for v in NAMES.values() for s in v]
 res,_=call("tools/call",{"name":"market_index_quote","arguments":{"market":"cn","symbols":allsyms,"start_date":"2014-01-01","end_date":"2026-06-05","simulated_datetime":"2026-06-05 15:00:00"}},sid)
 items={it.get("指数标识"):it for it in json.loads(res["result"]["content"][0]["text"]).get("items",[])}

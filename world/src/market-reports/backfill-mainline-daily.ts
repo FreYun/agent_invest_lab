@@ -27,6 +27,16 @@ const ENGINE = join(REPO_ROOT, 'scripts', 'mainline_daily_plan.py')
 const TYPE_MAINLINE = 'market_mainline_daily'
 const TYPE_ROTATION = 'mainline_rotation_daily'
 
+// 纪律阈值必须与 scripts/mainline_daily_plan.py 的同名常量逐一对齐——渲染文本的职责是
+// 如实描述引擎将要做什么。历史上这里硬编码 5 而引擎按 10 触发，bot 被告知的规则与实际
+// 执行的规则差一倍（卫星纳入/剔除），据此写下的「距触发」全部偏小一半。
+const CORE_PROMOTE_DAYS = 40   // 连续 in_top5 且站 MA60 → 晋核心
+const SAT_ENTRY_DAYS = 10      // 连续 in_top3 → 纳卫星
+const SAT_EXIT_DAYS = 10       // 连续出 top5 → 剔卫星
+const BREAK_MA60_EXIT = 3      // 连续破 MA60 → 剔除（硬）
+const OUT_TOP15_EXIT = 20      // 核心连续出 top15 → 剔除
+const MIN_HOLD = 15            // 最小持有期（交易日）
+
 function argVal(argv: string[], flag: string): string | undefined {
   const i = argv.indexOf(flag)
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined
@@ -120,16 +130,30 @@ function renderBody(p: DailyPlan): string {
   lines.push(`- HS300 距 MA120(年线)：${fmtPct(rg.hs300_vs_ma120, 2)}（迟滞带：破 -3% 转防御 / 回 -1% 上方解除）`)
   lines.push(`- top15 分组计数：${Object.entries(conc.counts).map(([g, n]) => `${g}=${n}`).join('、') || '—'}`)
 
-  lines.push('', '## ③ 组合状态机（核心/卫星 + 日度计数器）')
-  if (p.holdings.length) {
-    lines.push('| 板块 | 角色 | rank | 站MA60 | 已持 | 最小持有余 | 连续in_top5 | 连续out_top5 | 连续out_top15 | 连续破MA60 |',
-               '|---|---|---|---|---|---|---|---|---|---|')
+  lines.push('', '## ③ 组合状态机（在管 + 当日 top5 候选 · 日度计数器）')
+  if (p.holdings.length || (p.candidates ?? []).length) {
+    lines.push('| 板块 | 状态 | rank | 站MA60 | 已持 | 最小持有余 | 连续in_top5 | 连续in_top3 | 连续out_top5 | 连续out_top15 | 连续破MA60 | 距触发 |',
+               '|---|---|---|---|---|---|---|---|---|---|---|---|')
     for (const h of p.holdings) {
       const c = h.counters
-      lines.push(`| ${h.code} ${h.name} | ${h.role} | ${h.rank ?? '—'} | ${h.above_ma60 ? '√' : '✗'} | ${h.held_days}日 | ${h.min_hold_left > 0 ? h.min_hold_left + '日' : '—'} | ${c.in_top5} | ${c.out_top5} | ${c.out_top15} | ${c.below_ma60} |`)
+      // 只对已起算的剔除时钟求最近距离（未起算的时钟不参与，避免误报）
+      const gaps: number[] = []
+      if (c.below_ma60 > 0) gaps.push(BREAK_MA60_EXIT - c.below_ma60)
+      if (h.role === '核心' && c.out_top15 > 0) gaps.push(OUT_TOP15_EXIT - c.out_top15)
+      if (h.role === '卫星' && c.out_top5 > 0) gaps.push(SAT_EXIT_DAYS - c.out_top5)
+      const trigger = gaps.length
+        ? `距剔除差${Math.max(0, Math.min(...gaps))}日${h.min_hold_left > 0 ? '（最小持有期保护中）' : ''}` : '安全'
+      lines.push(`| ${h.code} ${h.name} | 在管·${h.role} | ${h.rank ?? '—'} | ${h.above_ma60 ? '√' : '✗'} | ${h.held_days}日 | ${h.min_hold_left > 0 ? h.min_hold_left + '日' : '—'} | ${c.in_top5} | ${c.in_top3} | ${c.out_top5} | ${c.out_top15} | ${c.below_ma60} | ${trigger} |`)
+    }
+    for (const cd of p.candidates ?? []) {
+      const c = cd.counters
+      const note = cd.cooldown_left > 0 ? `冷却余${cd.cooldown_left}日`
+        : c.in_top3 > 0 ? `距卫星纳入(${SAT_ENTRY_DAYS}日top3)差${Math.max(0, SAT_ENTRY_DAYS - c.in_top3)}日`
+        : c.in_top5 > 0 ? `距核心晋升(${CORE_PROMOTE_DAYS}日top5)差${Math.max(0, CORE_PROMOTE_DAYS - c.in_top5)}日` : '—'
+      lines.push(`| ${cd.code} ${cd.name} | 候选·rank${cd.rank} | ${cd.rank} | — | — | — | ${c.in_top5} | ${c.in_top3} | ${c.out_top5} | ${c.out_top15} | ${c.below_ma60} | ${note} |`)
     }
   } else {
-    lines.push('- （状态机当前无在管板块）')
+    lines.push('- （状态机当前无在管板块，且当日无 top5 候选）')
   }
   if (!isMainline && p.portfolio.length) {
     const p0 = p.portfolio[0]
@@ -138,7 +162,7 @@ function renderBody(p: DailyPlan): string {
   if (p.cooldowns.length) {
     lines.push(`- 冷却中（剔除后 15 日内不纳回）：${p.cooldowns.map(c => `${c.code}(余${c.days_left}日)`).join('、')}`)
   }
-  lines.push(`> 纪律口径：连续≥40日top5且站MA60→晋核心；连续≥3日破MA60（硬）或核心连续≥20日出top15/卫星连续≥5日出top5（受15日最小持有期约束）→剔除；卫星连续≥5日top3纳入。`)
+  lines.push(`> 纪律口径：连续≥${CORE_PROMOTE_DAYS}日top5且站MA60→晋核心；连续≥${BREAK_MA60_EXIT}日破MA60（硬）或核心连续≥${OUT_TOP15_EXIT}日出top15/卫星连续≥${SAT_EXIT_DAYS}日出top5（受${MIN_HOLD}日最小持有期约束）→剔除；卫星连续≥${SAT_ENTRY_DAYS}日top3纳入。`)
 
   lines.push('', '## ④ 今日动作', `- ${p.today_action}`)
   if (p.today_action === '维持不动') {
@@ -175,6 +199,12 @@ function renderStructured(p: DailyPlan, runId: string): string {
       fund_code: (fm.get(h.code) as FundSel | null)?.code ?? null,
       fund_name: (fm.get(h.code) as FundSel | null)?.name ?? null,
       counters: h.counters,
+    })),
+    // 当日 top5 候选：原本只出现在 mainline_rotation_daily，该 report_type 下线后并入这里，
+    // 保证「哪个板块快被强制纳入/晋升」这条信息不丢。
+    candidates: (p.candidates ?? []).map(cd => ({
+      code: cd.code, name: cd.name, rank: cd.rank, above_ma60: cd.above_ma60,
+      cooldown_left: cd.cooldown_left, counters: cd.counters,
     })),
     portfolio: p.portfolio,
     today_action: p.today_action,

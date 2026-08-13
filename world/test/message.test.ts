@@ -201,6 +201,10 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
           first_date: '2024-03-15', last_date: '2024-03-16', trading_days: 2,
           initial_capital: 1_000_000, latest_total_value: 1_000_200, latest_net_value: 1.0002,
           total_return_pct: 0.02, annualized_return_pct: 2.5, max_drawdown_pct: -0.05, max_drawdown_date: '2024-03-15',
+          current_drawdown_pct: -4.75, peak_total_value: 1_050_000, peak_total_value_date: '2024-03-14',
+          rolling_20d_drawdown_pct: -1.25, rolling_20d_peak_total_value: 1_012_850,
+          rolling_20d_peak_total_value_date: '2024-03-12', rolling_20d_observations: 20,
+          profit_giveback_amount: 49_800, profit_giveback_pct_of_initial: 4.98, peak_profit_giveback_ratio_pct: 99.6,
           volatility_pct_annualized: 1.2, sharpe_ratio_rf0: 0.45,
           win_days: 1, loss_days: 1, flat_days: 0,
           best_day: { date: '2024-03-16', return_pct: 0.07 },
@@ -259,6 +263,10 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   assert.match(withCtx, /累计收益 \+0\.02%/)
   assert.match(withCtx, /Sharpe \(rf=0\) 0\.45/)
   assert.match(withCtx, /最大回撤 -0\.05%/)
+  assert.match(withCtx, /近20交易日高水位回撤 -1\.25%.*20日峰值 ¥1,?012,?850.*2024-03-12.*样本 20 日/)
+  assert.match(withCtx, /≥6% 降档只使用上一行“近20交易日高水位回撤”/)
+  assert.match(withCtx, /全历史高水位回撤 -4\.75%.*历史峰值 ¥1,?050,?000.*2024-03-14/)
+  assert.match(withCtx, /收益回吐 \+4\.98%.*¥49,?800.*峰值利润回吐率 \+99\.60%/)
   // 年化收益 / 日级胜负 / 最佳单日 also dropped from performanceBlock — guard against regression
   assert.doesNotMatch(withCtx, /年化 \+/)
   assert.doesNotMatch(withCtx, /日级胜负/)
@@ -274,8 +282,13 @@ test('prefetched daily context blocks (account / pnl / held NAV / indices) get i
   assert.match(withCtx, /区间业绩（截至 2024-03-16/)
   assert.match(withCtx, /按252交易日年化/)
   assert.match(withCtx, /年化收益%/)
-  assert.match(withCtx, /1m\s+\+0\.02%\s+\+5\.17%/)
-  assert.match(withCtx, /since_inception\s+\+0\.02%\s+\+5\.17%/)
+  assert.match(withCtx, /躺平%/)
+  assert.match(withCtx, /超额pp/)
+  // 滚动超额算术：基准 pointsByDate 是「相对 run 起点的累计%」，1m 窗口(data_points=2)
+  // 取 -0.30% → +0.10% 换算成区间收益 = +0.40%，超额 = 0.02 - 0.40 = -0.38pct。
+  assert.match(withCtx, /1m\s+\+0\.02%\s+\+0\.40%\s+-0\.38pct\s+\+5\.17%/)
+  // since_inception 的躺平列直接取基准累计 +0.10%，超额 = 0.02 - 0.10 = -0.08pct。
+  assert.match(withCtx, /since_inception\s+\+0\.02%\s+\+0\.10%\s+-0\.08pct\s+\+5\.17%/)
   assert.match(withCtx, /窗口数据不足/)
   // Held NAV block
   assert.match(withCtx, /持仓基金近 20 交易日 NAV/)
@@ -355,6 +368,8 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
   // Day N 必须带上 footer 的五条规则
   const brief = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: false, botId: 'bot-test', quotesPath: '/q.json' })
   assert.match(brief, /结束之前必做/)
+  assert.match(brief, /todo_write 是每日必做，不是可选优化/)
+  assert.match(brief, /第一项实质工具调用必须是 `todo_write`/)
   // 规则 1：决策必须当日执行——含执行工具名 + "决策从未发生" 反例
   assert.match(brief, /今天的决策今天就发生/)
   assert.match(brief, /portfolio_place_sell_order/)
@@ -384,6 +399,11 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
   assert.match(brief, /执行结果/)
   assert.match(brief, /总仓位/)
   assert.match(brief, /关键观察/)
+  assert.match(brief, /禁止每天固定写四项/)
+  assert.match(brief, /有买入写 `### 为什么买` \+ `### 买入动作`/)
+  assert.match(brief, /无买入只写 `### 为什么不买`/)
+  assert.match(brief, /有卖出写 `### 为什么卖` \+ `### 卖出动作`/)
+  assert.match(brief, /无卖出只写 `### 为什么不卖`/)
   assert.match(brief, /当日思考」卡片唯一展示的入口/)
   assert.match(brief, /决策完成/)
   assert.match(brief, /belief yaml/)
@@ -399,6 +419,13 @@ test('Day N footer (termination contract): decision-must-execute-today + forbids
   const first = renderDailyMessage({ worldRoot: w, date: '2024-03-19', isFirstDay: true, botId: 'bot-test', quotesPath: '/q.json' })
   // FOOTER_FULL 的两个 header 还在
   assert.match(first, /记忆与连续性/)
+  assert.match(first, /每日决策硬契约/)
+  assert.match(first, /第一项实质工具调用必须是 `todo_write`/)
+  assert.match(first, /不要每天固定写四项/)
+  assert.match(first, /有买入时只写 `### 为什么买` \+ `### 买入动作`/)
+  assert.match(first, /无买入时只写 `### 为什么不买`/)
+  assert.match(first, /有卖出时只写 `### 为什么卖` \+ `### 卖出动作`/)
+  assert.match(first, /无卖出时只写 `### 为什么不卖`/)
   assert.match(first, /边界】这是一次交易回合/)
   // FOOTER_BRIEF 的 header / 规则不该出现在 Day 1（Day 1 用 FOOTER_FULL，不双注入）
   assert.doesNotMatch(first, /结束之前必做/)
@@ -620,7 +647,7 @@ test('强制深研提示准确区分账户回撤事件与固定周期', () => {
     deepResearchGapDays: 2,
     deepResearchLastDate: '2024-03-18',
   })
-  assert.match(m, /账户当前净值回撤首次跌破阈值/)
+  assert.match(m, /账户当前净值回撤跨入更深的阈值倍数档位/)
   assert.doesNotMatch(m, /达调度硬上限/)
   rmSync(w, { recursive: true, force: true })
 })

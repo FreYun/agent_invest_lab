@@ -150,8 +150,13 @@ export async function validateBeliefMd(
         return validateBelief(belief);
       }
       // No fence with belief: found
-      if (body.includes("belief:")) {
-        return { ok: false, issues: ["reply contains 'belief:' but not in a parseable ```yaml fence"] };
+      // 半角/全角冒号都要认：模型写过 `**belief**：`（全角），旧判断只认半角，
+      // 结果报成笼统的 "missing"，掩盖了"其实写了、只是没放进围栏"这个真实原因。
+      if (/belief\s*[:：]/.test(body)) {
+        return { ok: false, issues: ["reply contains 'belief' but not in a parseable ```yaml fence"] };
+      }
+      if (body.includes("belief")) {
+        return { ok: false, issues: ["reply mentions belief but no structured block found"] };
       }
       return { ok: false, issues: ["missing belief block in reply.json"] };
     } catch (err) {

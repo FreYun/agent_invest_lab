@@ -36,6 +36,9 @@ export interface WorldState {
   last_deep_research_dates?: Record<string, string>
   /** 账户当前回撤是否已处于阈值内；用于把持续回撤电平转换成一次性的阈值穿越事件。 */
   deep_research_drawdown_active_by_bot?: Record<string, boolean>
+  /** 账户当前所在回撤档位：floor(|current_drawdown| / threshold)。用于 1x/2x/3x 阶梯触发。
+   *  老 run 没有该字段时由 deep_research_drawdown_active_by_bot 迁移为 0/1。 */
+  deep_research_drawdown_level_by_bot?: Record<string, number>
   /** 深研日成功买入形成的跨日承诺；普通日卖单由 proxy 按此状态拦截。 */
   deep_research_commitments_by_bot?: DeepResearchCommitmentsByBot
   /** PID of the world orchestrator process that owns this run. Stale across restarts

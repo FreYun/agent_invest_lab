@@ -5,5 +5,5 @@
 # 18888「新建回测」可为某次回测临时覆盖本选择；不覆盖时即用此默认。
 # 可选模型见 world/config/openclaw.json 的 models.providers[].models[]（qwen3.6-plus / gpt-5.4 / glm-5 / kimi-k2.5 …）。
 provider: openai_compatible
-model: qwen3.6-plus
-api_key_from_openclaw: kimi-volc
+model: qwen3.8-max
+api_key_from_openclaw: zai-coding-plan

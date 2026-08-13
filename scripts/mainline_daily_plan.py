@@ -232,7 +232,7 @@ def replay(asof_raw: str, emit_from_raw: str | None, include_funds: bool) -> lis
                 "above_ma60": bool(row and row["above_ma60"] == 1),
                 "since": dashed(dates[h["since_idx"]]),
                 "held_days": idx - h["since_idx"] + 1,
-                "min_hold_left": max(0, MIN_HOLD - (idx - h["since_idx"] + 1)),
+                "min_hold_left": max(0, MIN_HOLD + 1 - (idx - h["since_idx"] + 1)),
                 "counters": {"in_top5": st.in_top5, "in_top3": st.in_top3, "out_top5": st.out_top5,
                              "out_top15": st.out_top15, "below_ma60": st.below_ma60},
             })

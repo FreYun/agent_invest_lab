@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computeCrashSignalFromCloses } from '../src/daily-context.ts'
+import {
+  benchmarkLookupCandidates,
+  computeCrashSignalFromCloses,
+  selectBenchmarkDailyState,
+} from '../src/daily-context.ts'
 
 test('单日跌幅：最后两日 -3.5%', () => {
   const r = computeCrashSignalFromCloses([
@@ -33,4 +37,43 @@ test('空/单点序列返回 null 或 null 字段', () => {
   const one = computeCrashSignalFromCloses([{ date: '2025-01-02', close: 100 }])
   assert.equal(one?.lastDayMovePct, null)         // 无前一日 → 日涨跌 null
   assert.equal(one?.drawdownFromRecentHighPct, 0) // 单点回撤 0
+})
+
+test('旧 A500 后缀不可用时命中 000510.CSI alias，并包含当日暴跌', () => {
+  const candidates = benchmarkLookupCandidates('000510.SH', ['000300.SH'])
+  assert.deepEqual(candidates, [
+    { code: '000510.SH', sourceKind: 'requested' },
+    { code: '000510.CSI', sourceKind: 'alias' },
+    { code: '000300.SH', sourceKind: 'market-proxy' },
+  ])
+  const state = selectBenchmarkDailyState('000510.SH', candidates, [
+    { 指数标识: '000510.SH', 是否可用: false, 行情记录: [] },
+    { 指数标识: '000510.CSI', 是否可用: true, 行情记录: [
+      { 日期: '2025-04-03', 收盘: 4554.2481 },
+      { 日期: '2025-04-07', 收盘: 4199.0917 },
+    ] },
+    { 指数标识: '000300.SH', 是否可用: true, 行情记录: [
+      { 日期: '2025-04-03', 收盘: 100 },
+      { 日期: '2025-04-07', 收盘: 99 },
+    ] },
+  ])
+  assert.equal(state?.sourceCode, '000510.CSI')
+  assert.equal(state?.sourceKind, 'alias')
+  assert.equal(state?.lastDate, '2025-04-07')
+  assert.ok(state && state.lastDayMovePct !== null && state.lastDayMovePct < -7.7)
+})
+
+test('目标及 alias 都不可用时使用宽基代理，不再静默返回 n/a', () => {
+  const candidates = benchmarkLookupCandidates('000922.CSI', ['000300.SH'])
+  const state = selectBenchmarkDailyState('000922.CSI', candidates, [
+    { 指数标识: '000922.CSI', 是否可用: false, 行情记录: [] },
+    { 指数标识: '000922.SH', 是否可用: false, 行情记录: [] },
+    { 指数标识: '000300.SH', 是否可用: true, 行情记录: [
+      { 日期: '2025-04-03', 收盘: 100 },
+      { 日期: '2025-04-07', 收盘: 92 },
+    ] },
+  ])
+  assert.equal(state?.sourceCode, '000300.SH')
+  assert.equal(state?.sourceKind, 'market-proxy')
+  assert.equal(state?.lastDayMovePct, -8)
 })

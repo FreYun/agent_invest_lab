@@ -1,0 +1,155 @@
+# =====================================================================
+# flow_rules —— 融资 / ETF / 公募 / 股东 → 资金定性
+# =====================================================================
+# 蒸馏自 3 份招商 A 股周报的 §资金·众寡 段
+# 2026-07-30 修订：顶层加 rules: 键（修 YAML ���法）
+# =====================================================================
+
+meta:
+  version: 0.2
+  distilled_at: 2026-07-29
+  revised_at: 2026-07-30
+  source_reports: [cms_20260705, cms_20260712, cms_20260719]
+
+rules:
+
+  # -------------------------------------------------------------------
+  # 融资余额单边规则
+  # -------------------------------------------------------------------
+  - id: margin_persistent_decline
+    when:
+      metric: margin_balance_daily_change
+      condition: "连续 N 日下降且累计降幅 >= X 亿"
+      N_ge: 10
+      cumulative_ge_yi: 1000
+    verdict: "两融风险偏好显著回落，市场情绪进入极度谨慎区间"
+    phrases:
+      - "融资余额连续{{N}}日回落，累计降幅{{amount}}亿元，两融风险偏好显著回落"
+      - "融资净流出趋势延续，反映杠杆资金加速去化"
+    confidence: 0.95
+    sources:
+      - {report: cms_20260719, page: 前段总纲, evidence: "融资连续 11 日回落累计 1723 亿元"}
+
+  - id: margin_participation_extreme_low
+    when:
+      metric: margin_investor_pct
+      lt: 0.05
+    verdict: "参与两融投资者占比极致回落，市场情绪与估值出现极致背离"
+    phrases:
+      - "参与两融投资者数量占比降至{{pct}}%，接近历史极端低位"
+      - "融资参与度回落至历史底部区间，与估值高位形成显著背离，风险释放接近尾声"
+    confidence: 0.85
+    usage: 常与 pe_percentile_high 组合触发"底部布局"叙事
+    sources:
+      - {report: cms_20260719, page: 前段总纲, evidence: "参与两融投资者数量占比降至 4.6%"}
+
+  # -------------------------------------------------------------------
+  # ETF 单边规则
+  # -------------------------------------------------------------------
+  - id: etf_weekly_record_inflow
+    when:
+      metric: etf_net_inflow_week
+      ge_yi: 2000
+    verdict: "ETF 单周净流入创历史新高，被动配置资金显著回补"
+    phrases:
+      - "ETF 周净流入{{amount}}亿元，创历史新高"
+      - "宽基 ETF 单周净申购创近年新高，被动资金逆势承接"
+    confidence: 0.90
+    sources:
+      - {report: cms_20260719, page: 前段总纲, evidence: "ETF 周净流入 2037 亿元创历史新高"}
+
+  - id: broad_etf_absolute_dominance
+    when:
+      metric: broad_etf_share_of_total_etf_inflow
+      ge: 0.80
+    verdict: "宽基 ETF 主导资金承接，行业 ETF 参与度有限"
+    phrases:
+      - "宽基 ETF 净申购{{amount}}亿份，占 ETF 总净申购的绝对主体"
+    confidence: 0.75
+    sources:
+      - {report: cms_20260712, page: 25, evidence: "宽基 ETF 均为净申购，行业 ETF 申购参半"}
+
+  # -------------------------------------------------------------------
+  # 融资 vs ETF 组合规则（招商体最常用的资金结构定性）
+  # -------------------------------------------------------------------
+  - id: etf_hedges_margin_outflow
+    when:
+      condition_1: "margin_net_flow_week < 0"
+      condition_2: "etf_net_flow_week > 0"
+      condition_3: "abs(etf_net_flow_week) > abs(margin_net_flow_week)"
+    verdict: "ETF 净申购对冲融资净流出，被动资金承接主动资金撤离"
+    phrases:
+      - "融资净流出{{margin_amt}}亿元，同期 ETF 净申购{{etf_amt}}亿元，被动资金对冲主动资金撤离"
+      - "结构上呈现'融资撤离 + ETF 承接'的资金分化"
+    confidence: 0.95
+    usage: 常作为 §资金·众寡 段副标题
+    sources:
+      - {report: cms_20260712, page: 24, evidence: "ETF 净申购对冲融资净流出，基金发行回升"}
+
+  - id: full_capital_withdrawal
+    when:
+      condition_1: "margin_net_flow_week < 0"
+      condition_2: "etf_net_flow_week < 0"
+      condition_3: "new_fund_shares_week < 100"
+    verdict: "融资 + ETF + 新发'三线齐降'，资金全面撤离"
+    phrases:
+      - "融资净流出、ETF 净赎回、新发基金萎缩，市场资金面全面承压"
+    confidence: 0.60          # 3 份样本未见此组合，属逻辑外推，需回测校准
+    sources:
+      - {logic_only: true, cross_reference: valuation_rules#pe_percentile_high}
+
+  # -------------------------------------------------------------------
+  # 新发公募规则
+  # -------------------------------------------------------------------
+  - id: new_fund_recovery
+    when:
+      metric: new_equity_fund_shares_week
+      delta_wow_ge_yi: 30
+    verdict: "新成立公募基金规模回升，主动资金入场信号"
+    phrases:
+      - "本周新成立偏股类公募基金{{shares}}亿份，较前期上升{{delta}}亿份"
+      - "新发回暖反映渠道对权益资产的销售意愿改善"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260712, page: 24, evidence: "新成立偏股类公募基金 92.8 亿份，较前期上升 64.6 亿份"}
+
+  # -------------------------------------------------------------------
+  # 股东行为规则
+  # -------------------------------------------------------------------
+  - id: shareholder_net_reduction_narrowing
+    when:
+      metric: net_reduction_delta_wow
+      lt: 0     # 净减持规模在收窄
+    verdict: "重要股东净减持规模收窄，产业资本卖压边际缓解"
+    phrases:
+      - "本周重要股东净减持规模{{delta_desc}}，产业资本卖压边际改善"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260712, page: 26, evidence: "重要股东净减持规模缩小"}
+
+  - id: planned_reduction_shrinking
+    when:
+      metric: planned_reduction_amount
+      delta_wow: negative
+    verdict: "计划减持规模下降，中期供给压力缓解"
+    confidence: 0.80
+    sources:
+      - {report: cms_20260712, page: 26, evidence: "计划减持规模 24.4 亿元，较前期下降"}
+
+  # -------------------------------------------------------------------
+  # 复盘归因（§复盘·内观 的固定 3 因）
+  # -------------------------------------------------------------------
+  - id: market_sentiment_reasoning_template
+    usage: "§复盘·内观 段固定输出，3 因缺 1 不可"
+    reasons_pool:
+      - id: risk_appetite_shift
+        pattern: "市场风险偏好{{direction}}回落，前期{{highflier_sector}}涨幅较大，资金获利兑现导致{{highflier_sector}}回调，资金从{{high_beta}}板块流向{{low_beta}}方向"
+      - id: overseas_sync
+        pattern: "海外市场同步{{direction}}，{{overseas_market}}延续{{overseas_narrative}}，全球市场避险情绪升温"
+      - id: geopolitical_commodity
+        pattern: "{{geo_event}}反复，{{commodity}}价格持续{{direction}}，压制全球风险资产表现"
+    confidence: 1.00
+    sources:
+      - {report: cms_20260712, page: 21, evidence: "本周三大原因（美 AI 硬件回调 / 韩国去杠杆 / 美伊冲突 + 原油）"}
+      - {report: cms_20260705, page: 前段总纲, evidence: "Meta 出售算力叙事 + 中报预期分化"}
+      - {report: cms_20260719, page: 前段总纲, evidence: "日韩杠杆 / 美股 AI 去杠杆 / 融资余额出清"}

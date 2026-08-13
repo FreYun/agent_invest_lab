@@ -392,11 +392,16 @@ function err(text: string): ToolResult { return { content: [{ type: 'text', text
 const VALID_REPORT_TYPES = ['market_context', 'market_mainline', 'mainline_rotation'] as const
 type ReportType = (typeof VALID_REPORT_TYPES)[number]
 
-// 主线/rotation 的日度版 report_type（backfill-mainline-daily.ts 生成，skill 日度纪律确定性引擎）。
+// 主线的日度版 report_type（backfill-mainline-daily.ts 生成，skill 日度纪律确定性引擎）。
 // get_market_report 对非 reporter bot 按此表优先取日度、缺失回退月度；submit 端不受影响（仍只收月度三类）。
+//
+// 2026-08-04：`mainline_rotation` 从本表移除。别名的语义是「日度版更好，优先用」，但下面的取数是
+// 「命中即 break」——只要日度表里存在任意一行 <= 世界日的记录，月度回退就永远不会执行。
+// mainline_rotation_daily 只回补了 2025-01-02..01-22 共 15 天，于是整个 2025 回测里这条工具路径
+// 一直返回 2025-01-22 的快照，而完整的月度 mainline_rotation（395 期）一次都没被读到。
+// 移除别名后该 type 直接读月度真源；日度视角的组合状态机已并入 market_mainline_daily。
 const MAINLINE_DAILY_ALIAS: Record<string, string> = {
   market_mainline: 'market_mainline_daily',
-  mainline_rotation: 'mainline_rotation_daily',
 }
 // res7 资讯研究室「每日宏观资讯要点」独立 report_type：可单独 get_market_report 读，
 // 但**不进 'all'**（保持现有三份注入/读取语义不变，零回归）。由 res7/backfill 写入。

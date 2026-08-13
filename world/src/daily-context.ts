@@ -86,6 +86,8 @@ export interface IndexQuote {
   name: string
   latest_date: string
   latest_close: number
+  /** 最新两个可用交易日收盘计算的单日涨跌幅；用于多指数风险篮子。 */
+  daily_move_pct?: number | null
   ma5: number | null
   ma20: number | null
   vs_ma5_pct: number | null
@@ -154,6 +156,19 @@ export interface PerformanceSummary {
   max_drawdown_date: string
   /** 最新账户净值相对本 run 历史峰值的回撤；不同于永久保留的历史最大回撤。 */
   current_drawdown_pct?: number
+  /** 最近 20 个可用交易日内，最新账户总资产相对窗口峰值的回撤。 */
+  rolling_20d_drawdown_pct?: number
+  rolling_20d_peak_total_value?: number
+  rolling_20d_peak_total_value_date?: string
+  rolling_20d_observations?: number
+  /** 本 run 账户总资产历史峰值及日期（包含现金、在途与全部持仓）。 */
+  peak_total_value?: number
+  peak_total_value_date?: string
+  /** 峰值至今损失额，以及相对初始本金损失的累计收益百分点。 */
+  profit_giveback_amount?: number
+  profit_giveback_pct_of_initial?: number
+  /** 已回吐金额 / 峰值累计利润；峰值尚未盈利时为 null。 */
+  peak_profit_giveback_ratio_pct?: number | null
   volatility_pct_annualized: number
   sharpe_ratio_rf0: number
   win_days: number
@@ -212,6 +227,15 @@ export interface PerformanceData {
   trades: TradesSummary | null
   intervals: IntervalMetrics | null
   completedPositions: CompletedPosition[]
+  dailySeries?: PerformanceDailyPoint[]
+}
+
+export interface PerformanceDailyPoint {
+  trade_date: string
+  total_value: number
+  net_value: number
+  daily_return_pct: number
+  cumulative_return_pct: number
 }
 
 export interface DailyContextData {
@@ -365,11 +389,26 @@ async function fetchPerformance(opts: {
     const trades = parseTrades(d.trades_summary)
     const intervals = parseIntervalMetrics(d.interval_metrics)
     const completedPositions = parseCompletedPositions(d.completed_positions)
+    const dailySeries = parsePerformanceDailySeries(d.daily_series)
 
-    return { asOfDate: opts.asOfDate, summary, trades, intervals, completedPositions }
+    return { asOfDate: opts.asOfDate, summary, trades, intervals, completedPositions, dailySeries }
   } catch {
     return null
   }
+}
+
+function parsePerformanceDailySeries(raw: unknown): PerformanceDailyPoint[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+    .map(x => ({
+      trade_date: String(x.trade_date ?? ''),
+      total_value: Number(x.total_value ?? 0),
+      net_value: Number(x.net_value ?? 0),
+      daily_return_pct: Number(x.daily_return_pct ?? 0),
+      cumulative_return_pct: Number(x.cumulative_return_pct ?? 0),
+    }))
+    .filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x.trade_date) && Number.isFinite(x.daily_return_pct))
 }
 
 function parseSummary(raw: unknown): PerformanceSummary | null {
@@ -387,6 +426,17 @@ function parseSummary(raw: unknown): PerformanceSummary | null {
     max_drawdown_pct: Number(s.max_drawdown_pct ?? 0),
     max_drawdown_date: String(s.max_drawdown_date ?? ''),
     current_drawdown_pct: Number(s.current_drawdown_pct ?? 0),
+    rolling_20d_drawdown_pct: Number(s.rolling_20d_drawdown_pct ?? 0),
+    rolling_20d_peak_total_value: Number(s.rolling_20d_peak_total_value ?? 0),
+    rolling_20d_peak_total_value_date: String(s.rolling_20d_peak_total_value_date ?? ''),
+    rolling_20d_observations: Number(s.rolling_20d_observations ?? 0),
+    peak_total_value: Number(s.peak_total_value ?? 0),
+    peak_total_value_date: String(s.peak_total_value_date ?? ''),
+    profit_giveback_amount: Number(s.profit_giveback_amount ?? 0),
+    profit_giveback_pct_of_initial: Number(s.profit_giveback_pct_of_initial ?? 0),
+    peak_profit_giveback_ratio_pct: s.peak_profit_giveback_ratio_pct == null
+      ? null
+      : Number(s.peak_profit_giveback_ratio_pct),
     volatility_pct_annualized: Number(s.volatility_pct_annualized ?? 0),
     sharpe_ratio_rf0: Number(s.sharpe_ratio_rf0 ?? 0),
     win_days: Number(s.win_days ?? 0),
@@ -595,6 +645,7 @@ async function fetchIndexSnapshots(opts: {
         .filter(r => r.date && r.close > 0)
       if (closes.length === 0) continue
       const last = closes[closes.length - 1]
+      const prev = closes.length >= 2 ? closes[closes.length - 2] : null
       const maOf = (n: number) => closes.length >= n ? mean(closes.slice(-n).map(r => r.close)) : null
       const ma5 = mean(closes.slice(-5).map(r => r.close))
       const ma20 = maOf(20)
@@ -606,6 +657,7 @@ async function fetchIndexSnapshots(opts: {
         name: opts.indices.find(i => i.code === code)?.name ?? code,
         latest_date: last.date,
         latest_close: last.close,
+        daily_move_pct: prev ? pctChange(prev.close, last.close) : null,
         ma5,
         ma20,
         vs_ma5_pct: pctChange(ma5, last.close),
@@ -723,6 +775,39 @@ export interface BenchmarkDailyState {
   lastDate: string
   lastDayMovePct: number | null            // (close[n]-close[n-1])/close[n-1]*100；无前一日 → null
   drawdownFromRecentHighPct: number | null // <=0；窗口内 peak→trough，复用 maxDrawdownPct
+  /** 实际命中的行情代码。requested=原目标；alias=旧错误后缀的兼容代码；market-proxy=宽基降级。 */
+  sourceCode?: string
+  requestedCode?: string
+  sourceKind?: 'requested' | 'alias' | 'market-proxy'
+}
+
+export interface BenchmarkLookupCandidate {
+  code: string
+  sourceKind: 'requested' | 'alias' | 'market-proxy'
+}
+
+interface BenchmarkQuoteItem {
+  指数标识?: string
+  是否可用?: boolean
+  行情记录?: { 日期?: string; 收盘?: number }[]
+}
+
+// 兼容已经固化在历史/live run 快照里的旧错误后缀。新策略清单仍必须写数据源的正确 canonical code；
+// 这里是运行期保险丝，不让旧 run 因一个后缀静默退化成 move=n/a。
+const CRASH_BENCHMARK_CODE_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  '000510.SH': ['000510.CSI'], // 中证A500
+  '000922.CSI': ['000922.SH'], // 中证红利
+}
+
+export function benchmarkLookupCandidates(requestedCode: string, fallbackCodes: string[] = []): BenchmarkLookupCandidate[] {
+  const out: BenchmarkLookupCandidate[] = [{ code: requestedCode, sourceKind: 'requested' }]
+  for (const code of CRASH_BENCHMARK_CODE_ALIASES[requestedCode] ?? []) {
+    out.push({ code, sourceKind: 'alias' })
+  }
+  for (const code of fallbackCodes) {
+    if (!out.some(x => x.code === code)) out.push({ code, sourceKind: 'market-proxy' })
+  }
+  return out
 }
 
 /** 从收盘序列（升序）算崩盘判定的两个标量。纯函数，便于单测。 */
@@ -735,33 +820,50 @@ export function computeCrashSignalFromCloses(closes: { date: string; close: numb
   return { lastDate: last.date, lastDayMovePct, drawdownFromRecentHighPct }
 }
 
+/** 按 requested → alias → market-proxy 的顺序挑第一条可用行情。 */
+export function selectBenchmarkDailyState(
+  requestedCode: string,
+  candidates: BenchmarkLookupCandidate[],
+  items: BenchmarkQuoteItem[],
+): BenchmarkDailyState | null {
+  const byCode = new Map(items.map(item => [String(item['指数标识'] ?? ''), item]))
+  for (const candidate of candidates) {
+    const item = byCode.get(candidate.code)
+    if (!item?.['是否可用'] || !Array.isArray(item['行情记录'])) continue
+    const closes = item['行情记录']
+      .map(r => ({ date: String(r['日期'] ?? '').slice(0, 10), close: Number(r['收盘'] ?? 0) }))
+      .filter(r => r.date && r.close > 0)
+    const state = computeCrashSignalFromCloses(closes)
+    if (state) {
+      return { ...state, requestedCode, sourceCode: candidate.code, sourceKind: candidate.sourceKind }
+    }
+  }
+  return null
+}
+
 function shiftIsoDaysBack(iso: string, n: number): string {
   const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - n)
   return d.toISOString().slice(0, 10)
 }
 
-/** 拉基准指数近 lookbackDays 交易日收盘（PIT：end_date = asOfDate 前一交易日），
+/** 拉基准指数近 lookbackDays 交易日收盘（PIT：模拟时间为 15:00，包含 asOfDate 当日收盘），
  *  返回崩盘判定标量。复用 fetchIndexBenchmark 的 market_index_quote 路径。best-effort。 */
 export async function fetchBenchmarkDailyState(opts: {
-  simworldUrl: string; code: string; asOfDate: string; lookbackDays?: number
+  simworldUrl: string; code: string; asOfDate: string; lookbackDays?: number; fallbackCodes?: string[]
 }): Promise<BenchmarkDailyState | null> {
   const lookback = opts.lookbackDays ?? 60
   const startDate = shiftIsoDaysBack(opts.asOfDate, lookback * 2) // 日历日预估，够覆盖 lookback 交易日
   const simDt = `${opts.asOfDate} 15:00:00`
+  const candidates = benchmarkLookupCandidates(opts.code, opts.fallbackCodes)
   try {
     const raw = await callSimworldTool(opts.simworldUrl, 'market_index_quote', {
       market: 'cn',
-      symbols: [opts.code],
+      symbols: candidates.map(x => x.code),
       simulated_datetime: simDt,
       start_date: startDate,
-      end_date: priorDay(opts.asOfDate),
-    }) as { items?: { 是否可用?: boolean; 行情记录?: { 日期?: string; 收盘?: number }[] }[] } | null
-    const item = raw?.items?.[0]
-    if (!item || !item['是否可用'] || !Array.isArray(item['行情记录'])) return null
-    const closes = item['行情记录']
-      .map(r => ({ date: String(r['日期'] ?? '').slice(0, 10), close: Number(r['收盘'] ?? 0) }))
-      .filter(r => r.date && r.close > 0)
-    return computeCrashSignalFromCloses(closes)
+      end_date: opts.asOfDate,
+    }) as { items?: BenchmarkQuoteItem[] } | null
+    return selectBenchmarkDailyState(opts.code, candidates, raw?.items ?? [])
   } catch {
     return null
   }

@@ -258,10 +258,16 @@ simworld_upstream_url: http://127.0.0.1:18078/mcp
 `)
   const c = loadWorldConfig(p)
   assert.equal(c.crashTriggerEnabled, false)
+  assert.equal(c.accountDrawdownTriggerEnabled, false)
   assert.equal(c.deepResearchMaxGapDays, 5)
   assert.equal(c.crashTriggerDailyMovePct, 3)
   assert.equal(c.crashTriggerDrawdownPct, 8)
   assert.deepEqual(c.crashTriggerBenchmark, { code: '000300.SH', name: '沪深300' })
+  assert.equal(c.deepResearchAnomalyTriggerEnabled, false)
+  assert.equal(c.deepResearchPortfolioDailyLossPct, 3)
+  assert.equal(c.deepResearchWorstHoldingDailyLossPct, 5)
+  assert.equal(c.deepResearchRiskBasketDailyLossPct, 3)
+  assert.deepEqual(c.deepResearchRiskBasket?.map(x => x.code), ['000300.SH', '399006.SZ', '000688.SH', '000852.SH'])
 })
 
 test('loadWorldConfig 崩盘触发字段：显式覆盖', () => {
@@ -274,12 +280,25 @@ crash_trigger_enabled: true
 crash_trigger_daily_move_pct: 2.5
 crash_trigger_drawdown_pct: 10
 crash_trigger_benchmark: { code: "399989.SZ", name: "中证医疗" }
+deep_research_anomaly_trigger_enabled: true
+deep_research_portfolio_daily_loss_pct: 2.5
+deep_research_worst_holding_daily_loss_pct: 4.5
+deep_research_risk_basket_daily_loss_pct: 2.2
+deep_research_risk_basket:
+  - { code: "399006.SZ", name: "创业板指" }
+  - { code: "000688.SH", name: "科创50" }
 `)
   const c = loadWorldConfig(p)
   assert.equal(c.crashTriggerEnabled, true)
+  assert.equal(c.accountDrawdownTriggerEnabled, true)
   assert.equal(c.crashTriggerDailyMovePct, 2.5)
   assert.equal(c.crashTriggerDrawdownPct, 10)
   assert.deepEqual(c.crashTriggerBenchmark, { code: '399989.SZ', name: '中证医疗' })
+  assert.equal(c.deepResearchAnomalyTriggerEnabled, true)
+  assert.equal(c.deepResearchPortfolioDailyLossPct, 2.5)
+  assert.equal(c.deepResearchWorstHoldingDailyLossPct, 4.5)
+  assert.equal(c.deepResearchRiskBasketDailyLossPct, 2.2)
+  assert.deepEqual(c.deepResearchRiskBasket?.map(x => x.code), ['399006.SZ', '000688.SH'])
 })
 
 
@@ -317,6 +336,7 @@ test('loadWorldConfig 崩盘触发字段：agent-triggered 单指数策略自动
   const p = tmpCrashStrategyWorld('HSTECH.HI')
   const c = loadWorldConfig(p)
   assert.equal(c.crashTriggerEnabled, true)
+  assert.equal(c.accountDrawdownTriggerEnabled, true)
   assert.equal(c.crashTriggerDailyMovePct, 3)
   assert.equal(c.crashTriggerDrawdownPct, 8)
   assert.deepEqual(c.crashTriggerBenchmark, { code: 'HSTECH.HI', name: '恒生科技指数投资框架' })
@@ -327,6 +347,7 @@ test('loadWorldConfig 崩盘触发字段：显式关闭优先于自动推断', (
   const p = tmpCrashStrategyWorld('HSTECH.HI', ['crash_trigger_enabled: false'])
   const c = loadWorldConfig(p)
   assert.equal(c.crashTriggerEnabled, false)
+  assert.equal(c.accountDrawdownTriggerEnabled, false)
   rmSync(dirname(p), { recursive: true, force: true })
 })
 
@@ -334,7 +355,16 @@ test('loadWorldConfig 崩盘触发字段：buyable-pool 不自动开启', () => 
   const p = tmpCrashStrategyWorld('buyable-pool')
   const c = loadWorldConfig(p)
   assert.equal(c.crashTriggerEnabled, false)
+  assert.equal(c.accountDrawdownTriggerEnabled, true)
   assert.deepEqual(c.crashTriggerBenchmark, { code: '000300.SH', name: '沪深300' })
+  rmSync(dirname(p), { recursive: true, force: true })
+})
+
+test('loadWorldConfig 账户回撤触发可独立于目标行情显式关闭', () => {
+  const p = tmpCrashStrategyWorld('buyable-pool', ['account_drawdown_trigger_enabled: false'])
+  const c = loadWorldConfig(p)
+  assert.equal(c.crashTriggerEnabled, false)
+  assert.equal(c.accountDrawdownTriggerEnabled, false)
   rmSync(dirname(p), { recursive: true, force: true })
 })
 

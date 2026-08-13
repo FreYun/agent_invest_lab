@@ -896,7 +896,7 @@ test('requestStop on a paused run flips it straight to aborted (no STOP sentinel
 })
 
 
-test("runWorld 系统预读注入三份市场研报 for bot102，不再注入 skill", async () => {
+test("runWorld 系统预读注入三份市场研报 for bot102（rotation 走完整月度源），不再注入 skill", async () => {
   const { worldRoot, config, cleanup } = setupWorldDir({ bots: ["bot102"], dates: ["2024-03-14"] })
   // 即便 bot 仍带 skill 目录，也不该被注入（INJECT_PIPELINE_SKILLS 已清空）。
   const botRoot = join(dirname(worldRoot), "bots", "bot102")
@@ -912,7 +912,12 @@ test("runWorld 系统预读注入三份市场研报 for bot102，不再注入 sk
   mkdirSync(dirname(dbPath), { recursive: true })
   const ddl = "CREATE TABLE IF NOT EXISTS market_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, report_type TEXT, as_of_date TEXT, scope TEXT DEFAULT 'global', content_md TEXT, structured_json TEXT, agent_run_id TEXT, generated_at TEXT, UNIQUE(report_type, as_of_date, scope));"
   const ins = (rt: string, body: string) => `INSERT OR REPLACE INTO market_reports(report_type,as_of_date,scope,content_md) VALUES('${rt}','2024-03-01','global','${body}');`
+  // 额外种一行**更新**的 mainline_rotation_daily（2024-03-10 > 月度版的 2024-03-01）：
+  // 这是回归锚点——旧写法 `rotation_daily || rotation` 会命中这一行，而该表在真实库里是残缺回补
+  // （2025 全年只有 15 天），短路后月度版永不生效。注入必须仍然取月度版。
+  const insD = (rt: string, asOf: string, body: string) => `INSERT OR REPLACE INTO market_reports(report_type,as_of_date,scope,content_md) VALUES('${rt}','${asOf}','global','${body}');`
   const seed = ddl + ins("market_context", "CTX-REGIME-BODY") + ins("market_mainline", "MAINLINE-POOL-BODY") + ins("mainline_rotation", "ROTATION-SKELETON-BODY")
+    + insD("mainline_rotation_daily", "2024-03-10", "ROTATION-DAILY-STALE-TRAP")
   const r = spawnSync("sqlite3", [dbPath], { input: seed, encoding: "utf8" })
   assert.equal(r.status, 0, `seed fund.db failed: ${r.stderr}`)
 
@@ -923,7 +928,11 @@ test("runWorld 系统预读注入三份市场研报 for bot102，不再注入 sk
   assert.match(sent, /【市场研究报告（系统预生成/)
   assert.match(sent, /CTX-REGIME-BODY/)
   assert.match(sent, /MAINLINE-POOL-BODY/)
+  // 2026-08-04：rotation 必须来自**完整的月度** mainline_rotation。此前写法是
+  // `rotation_daily || rotation`，而 rotation_daily 只回补了 15 天，`||` 短路后月度版永不生效，
+  // 导致 2025 回测里 227/242 个交易日注入同一份 2025-01-22 快照。这里种入的正是月度版。
   assert.match(sent, /ROTATION-SKELETON-BODY/)
+  assert.doesNotMatch(sent, /ROTATION-DAILY-STALE-TRAP/)
   // 不再注入判断管线 skill 块
   assert.doesNotMatch(sent, /【判断管线 skill/)
   assert.doesNotMatch(sent, /────────── skill: market-context/)

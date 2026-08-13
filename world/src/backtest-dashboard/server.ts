@@ -12,6 +12,9 @@ import { requestPause, requestStop } from '../run-control.ts'
 import { buildHoldingsByDate, computeActionWeights } from './positions.ts'
 import { createBot101ChatEngine, type Bot101ChatEngine, type ChatMessage } from './bot101-chat.ts'
 import { fetchIntradayBoards } from '../intraday-boards.ts'
+import { loadExperienceLibraryCard, loadExperienceLibraryCatalog } from './experience-library-data.ts'
+import { loadBaseRates, loadCellDetail, loadCoverage, loadEdges, loadPitProof,
+  loadPredicateCards, loadSituationOverview } from './situation-data.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_DB = join(HERE, '../../../data/fund.db')
@@ -25,6 +28,25 @@ const DEFAULT_MARKET_REPORTS_HTML = join(HERE, 'market-reports.html')
 const DEFAULT_OOS_BOT101_HTML = join(HERE, 'oos-bot101.html')
 const DEFAULT_RUNS_HTML = join(HERE, 'runs.html')
 const DEFAULT_AGENTS_HTML = join(HERE, 'agents.html')
+const DEFAULT_EXPERIENCE_LIBRARY_HTML = join(HERE, 'experience-library.html')
+const DEFAULT_SITUATION_HTML = join(HERE, 'situation.html')
+
+/** 处境层里 decision_type 的全部合法取值。库里就这四类，少一类就有先例点不出来。 */
+const DECISION_TYPES = ['加仓', '减仓', '不动', '换仓']
+
+/**
+ * as-of 必须是**真实存在的**日期，不只是长得像日期。
+ * 只卡 `\d{4}-\d{2}-\d{2}` 的话，`2026-13-45`、`0000-00-00`、`9999-99-99` 全都放行；
+ * 这些值进到 SQL 的字符串比较里会静默按字典序生效——`9999-99-99` 等于把闸门整个打开。
+ * 闸门参数的校验必须是语义校验，不能是形状校验。
+ */
+function isRealDate(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return false
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const t = new Date(Date.UTC(y, mo - 1, d))
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d
+}
 
 interface DailyRow {
   trade_date: string
@@ -1344,6 +1366,8 @@ const OOS_BOTS = [
   { botId: 'bot101', runId: 'oos-bot101-daily' },
   { botId: 'bot102', runId: 'oos-bot102-daily' },
   { botId: 'bot103', runId: 'oos-bot103-daily' },
+  // 105d 的 OOS 段直接续在它自己的回测 run 上（账本/记忆/宪章都按 (bot,run) 存，换 run 就断）。
+  { botId: 'bot105d', runId: 'bot105d-daily-agenticdeep-charter-0424' },
 ] as const
 const OOS_BOT_IDS = new Set<string>(OOS_BOTS.map(b => b.botId))
 const OOS_HISTORY_START = '2026-04-01'
@@ -1351,6 +1375,19 @@ const OOS_BACKTEST_HISTORY_RUNS: Record<string, string> = {
   bot101: 'dash-2026-06-23T08-47-44',
   bot102: 'dash-2026-06-23T08-48-10',
   bot103: 'dash-2026-06-15T06-30-57',
+  // 同一个 run_id：历史段读 fund_bot_daily_snapshots，实盘段读 oos_bot_daily_snapshots，两张表不冲突。
+  bot105d: 'bot105d-daily-agenticdeep-charter-0424',
+}
+// 历史段起点默认跟 101/102/103 的 dash-* 回测同期。105d 的回测其实从 2025-01-02 起跑，
+// 但 stitchSeriesRows 把每条曲线首点归一到 1.0，起点越早跨度越大、在共享图上盖住其它 bot
+//（105d 380 点 vs bot101 81 点）。对齐到 2026-04-10 让几条曲线同期可比；完整的 15 个月
+// 回测净值仍在 fund.db 的 fund_bot_daily_snapshots 里，只是不进这张图。
+const OOS_HISTORY_STARTS: Record<string, string> = {
+  bot105d: '2026-04-10',
+}
+
+function oosHistoryStart(botId: string): string {
+  return OOS_HISTORY_STARTS[botId] ?? OOS_HISTORY_START
 }
 
 function defaultOosRunId(botId: string): string {
@@ -1600,7 +1637,7 @@ function loadOosExtendedSeries(dbPath: string, botId: string, runId: string, liv
     'max_drawdown_pct, equity_weight, bond_weight, gold_weight, cash_weight ' +
     'FROM fund_bot_daily_snapshots WHERE bot_id = ' + quoteSql(botId) +
     ' AND run_id = ' + quoteSql(historyRunId) +
-    ' AND trade_date >= ' + quoteSql(OOS_HISTORY_START) +
+    ' AND trade_date >= ' + quoteSql(oosHistoryStart(botId)) +
     (firstLiveDate ? ' AND trade_date < ' + quoteSql(firstLiveDate) : '') +
     ' ORDER BY trade_date ASC') : []
 
@@ -1619,9 +1656,18 @@ function loadOosBot(dbPath: string, botId = 'bot101', runId = defaultOosRunId(bo
   const dateRe = /^\d{4}-\d{2}-\d{2}$/
   const navMaxDate = latestFundNavDate(dbPath)
   const navMaxDateSql = navMaxDate ? quoteSql(navMaxDate) : quoteSql('0000-00-00')
-  const dates = queryRows<{ trade_date: string }>(dbPath,
+  const mirrorDates = queryRows<{ trade_date: string }>(dbPath,
     'SELECT trade_date FROM oos_bot_daily_snapshots WHERE live_run_id = ' + runIdSql +
     ' AND bot_id = ' + botIdSql + ' ORDER BY trade_date DESC').map(r => r.trade_date)
+  const mirrorMaxDate = mirrorDates[0] ?? ''
+  // 「已决策、但镜像还没同步」的日子：镜像由次日早晨的 cron 补，而决策当天盘中就定死了。
+  // 不把这些日期放进 dates，当天就选不中，看板会显示成"今天没跑"。
+  const pendingDates = queryRows<{ order_date: string }>(dbPath,
+    'SELECT DISTINCT order_date FROM fund_bot_orders WHERE order_run_id = ' + runIdSql +
+    ' AND bot_id = ' + botIdSql +
+    (mirrorMaxDate ? ' AND order_date > ' + quoteSql(mirrorMaxDate) : '') +
+    ' ORDER BY order_date DESC').map(r => r.order_date)
+  const dates = [...pendingDates, ...mirrorDates]
   const validDate = dateRe.test(requestedDate) ? requestedDate : ''
   const selectedDate = validDate || dates[0] || ''
   const dateSql = quoteSql(selectedDate)
@@ -1647,16 +1693,32 @@ function loadOosBot(dbPath: string, botId = 'bot101', runId = defaultOosRunId(bo
     'FROM oos_bot_position_snapshots p LEFT JOIN fund_info i ON i.fund_code = p.fund_code ' +
     'WHERE p.live_run_id = ' + runIdSql + ' AND p.bot_id = ' + botIdSql +
     ' AND p.trade_date = ' + accountDateSql + ' ORDER BY p.weight DESC, p.fund_code ASC') : []
-  const orders = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+  // 选中日尚未进镜像 → 直接读实时表，并把列名映射成镜像表的形状（前端不必区分两种来源）。
+  const pendingNav = !!selectedDate && (!mirrorMaxDate || selectedDate > mirrorMaxDate)
+  const orders = !selectedDate ? [] : pendingNav ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT o.order_run_id AS live_run_id, o.bot_id, o.order_date, o.order_id AS source_order_id, ' +
+    'o.fund_code, o.order_type, o.order_amount, o.reference_nav, o.status, o.confirm_date, ' +
+    'o.confirmed_amount, o.confirmed_shares, o.action_reason, ' +
+    'COALESCE(i.fund_name, o.fund_name, o.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
+    'FROM fund_bot_orders o LEFT JOIN fund_info i ON i.fund_code = o.fund_code ' +
+    'WHERE o.order_run_id = ' + runIdSql + ' AND o.bot_id = ' + botIdSql +
+    ' AND o.order_date = ' + dateSql + ' ORDER BY o.order_id ASC') : queryRows<Record<string, unknown>>(dbPath,
     'SELECT o.*, COALESCE(i.fund_name, o.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
     'FROM oos_bot_orders o LEFT JOIN fund_info i ON i.fund_code = o.fund_code ' +
     'WHERE o.live_run_id = ' + runIdSql + ' AND o.bot_id = ' + botIdSql +
-    ' AND o.order_date = ' + dateSql + ' ORDER BY o.source_order_id ASC') : []
-  const actions = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
+    ' AND o.order_date = ' + dateSql + ' ORDER BY o.source_order_id ASC')
+  const actions = !selectedDate ? [] : pendingNav ? queryRows<Record<string, unknown>>(dbPath,
+    'SELECT a.run_id AS live_run_id, a.bot_id, a.action_date, a.action_id AS source_action_id, ' +
+    'a.review_id, a.fund_code, a.action_type, a.before_weight, a.after_weight, a.nav_used, ' +
+    'a.amount, a.shares, a.fee, ' +
+    'COALESCE(i.fund_name, a.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
+    'FROM fund_bot_actions a LEFT JOIN fund_info i ON i.fund_code = a.fund_code ' +
+    'WHERE a.run_id = ' + runIdSql + ' AND a.bot_id = ' + botIdSql +
+    ' AND a.action_date = ' + dateSql + ' ORDER BY a.action_id ASC') : queryRows<Record<string, unknown>>(dbPath,
     'SELECT a.*, COALESCE(i.fund_name, a.fund_code) AS fund_name, COALESCE(i.theme, \'\') AS theme ' +
     'FROM oos_bot_actions a LEFT JOIN fund_info i ON i.fund_code = a.fund_code ' +
     'WHERE a.live_run_id = ' + runIdSql + ' AND a.bot_id = ' + botIdSql +
-    ' AND a.action_date = ' + dateSql + ' ORDER BY a.source_action_id ASC') : []
+    ' AND a.action_date = ' + dateSql + ' ORDER BY a.source_action_id ASC')
   const reports = selectedDate ? queryRows<Record<string, unknown>>(dbPath,
     'SELECT report_type, as_of_date, generated_at, chars FROM oos_market_report_status ' +
     'WHERE live_run_id = ' + runIdSql + ' AND as_of_date = ' + dateSql + ' ORDER BY report_type ASC') : []
@@ -1680,7 +1742,9 @@ function loadOosBot(dbPath: string, botId = 'bot101', runId = defaultOosRunId(bo
     holdingsByDate[d].push({ fund_code: r.fund_code, fund_name: r.fund_name, weight: r.weight })
   }
   const extendedSeries = loadOosExtendedSeries(dbPath, botId, runId, series)
-  return { runId, botId, selectedDate, accountDate, dates, navMaxDate, series, extendedSeries, historyStart: OOS_HISTORY_START, snapshot, positions, orders, actions, reports, actionsAll, holdingsByDate }
+  return { runId, botId, selectedDate, accountDate, dates, navMaxDate, mirrorMaxDate, pendingNav,
+    pendingNote: pendingNav ? '当日已决策，订单取自实时账本；收盘净值尚未公布，净值/市值/持仓快照要等次日镜像同步后才显示' : '',
+    series, extendedSeries, historyStart: oosHistoryStart(botId), snapshot, positions, orders, actions, reports, actionsAll, holdingsByDate }
 }
 
 /** 把当前选中日的「三份研报 + macro_news + bot101 账户/持仓」压成一段紧凑 markdown，
@@ -1828,23 +1892,30 @@ function readJsonBody(req: IncomingMessage, limitBytes = 64 * 1024): Promise<Rec
   })
 }
 
-function parseArgs(argv: string[]): { host: string; port: number; dbPath: string; worldRoot: string } {
+function parseArgs(argv: string[]): { host: string; port: number; dbPath: string; worldRoot: string; experienceDbPath: string; situationDbPath: string } {
   let host = '127.0.0.1'
   let port = 48080
   let dbPath = DEFAULT_DB
   let worldRoot = DEFAULT_WORLD_ROOT
+  let experienceDbPath = process.env.EXPERIENCE_LIBRARY_DB ?? ''
+  let situationDbPath = process.env.SITUATION_LIBRARY_DB ?? ''
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--host' && argv[i + 1]) host = argv[++i]
     else if (arg === '--port' && argv[i + 1]) port = Number(argv[++i])
     else if (arg === '--db' && argv[i + 1]) dbPath = argv[++i]
     else if (arg === '--world-root' && argv[i + 1]) worldRoot = resolve(argv[++i])
+    else if (arg === '--experience-db' && argv[i + 1]) experienceDbPath = resolve(argv[++i])
+    else if (arg === '--situation-db' && argv[i + 1]) situationDbPath = resolve(argv[++i])
   }
-  return { host, port, dbPath, worldRoot }
+  if (!experienceDbPath) experienceDbPath = join(worldRoot, 'experience-library', 'experience-library-v7.db')
+  // 处境层默认指 P1 副本：这些表只建在副本里，生产库没有也不该有。
+  if (!situationDbPath) situationDbPath = join(worldRoot, 'experience-library', 'experience-library-v7-p1.db')
+  return { host, port, dbPath, worldRoot, experienceDbPath, situationDbPath }
 }
 
 async function main(argv = process.argv.slice(2)): Promise<number> {
-  const { host, port, dbPath, worldRoot } = parseArgs(argv)
+  const { host, port, dbPath, worldRoot, experienceDbPath, situationDbPath } = parseArgs(argv)
   if (!existsSync(dbPath)) {
     process.stderr.write(`fund db not found: ${dbPath}
 `)
@@ -1883,8 +1954,98 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
         sendHtml(res, readFileSync(DEFAULT_AGENTS_HTML, 'utf8'))
         return
       }
+      if (req.method === 'GET' && (url.pathname === '/experience-library/' || url.pathname === '/experience-library.html')) {
+        sendHtml(res, readFileSync(DEFAULT_EXPERIENCE_LIBRARY_HTML, 'utf8'))
+        return
+      }
+      if (req.method === 'GET' && (url.pathname === '/situation/' || url.pathname === '/situation.html')) {
+        sendHtml(res, readFileSync(DEFAULT_SITUATION_HTML, 'utf8'))  // 按请求读盘，HTML 改动免重启
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/situation/overview') {
+        sendJson(res, 200, loadSituationOverview(situationDbPath))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/situation/base-rates') {
+        // as-of **必填**。这里不给默认值是故意的：一个能省略的 as-of 迟早会被省略，
+        // 然后就是未来信息。宁可返回 400 让调用方显式选一天。
+        const asof = url.searchParams.get('asof') ?? ''
+        if (!isRealDate(asof)) {
+          sendJson(res, 400, { error: 'asof 必填且须为真实存在的 YYYY-MM-DD；这一层没有默认 as-of 是故意的' })
+          return
+        }
+        const horizon = Number(url.searchParams.get('horizon') ?? '20')
+        if (![5, 10, 20].includes(horizon)) { sendJson(res, 400, { error: 'horizon 必须是 5/10/20' }); return }
+        const kind = url.searchParams.get('kind') ?? 'backtest_day'
+        if (kind !== 'backtest_day' && kind !== 'case') { sendJson(res, 400, { error: 'kind 必须是 backtest_day 或 case' }); return }
+        const dt = url.searchParams.get('decision_type') ?? ''
+        // 换仓 是库里真实存在的第四类（日级 14 例、案例 4 例）。它以前不在白名单里，
+        // 于是三个筛选项加起来 1453，而闸门内其实有 1464——差的 11 条谁也点不出来。
+        if (dt && !DECISION_TYPES.includes(dt)) { sendJson(res, 400, { error: 'decision_type 取值不合法' }); return }
+        sendJson(res, 200, loadBaseRates(situationDbPath, asof, horizon, kind, dt))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/situation/pit') {
+        const horizon = Number(url.searchParams.get('horizon') ?? '20')
+        if (![5, 10, 20].includes(horizon)) { sendJson(res, 400, { error: 'horizon 必须是 5/10/20' }); return }
+        const kind = url.searchParams.get('kind') ?? 'backtest_day'
+        if (kind !== 'backtest_day' && kind !== 'case') { sendJson(res, 400, { error: 'kind 不合法' }); return }
+        sendJson(res, 200, loadPitProof(situationDbPath, horizon, kind))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/situation/cards') {
+        sendJson(res, 200, loadPredicateCards(situationDbPath))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/situation/cell') {
+        const cellId = url.searchParams.get('cell_id') ?? ''
+        if (!/^[^|]{1,12}\|[^|]{1,12}$/.test(cellId)) { sendJson(res, 400, { error: 'cell_id 形如 平静|无' }); return }
+        const horizon = Number(url.searchParams.get('horizon') ?? '20')
+        if (![5, 10, 20].includes(horizon)) { sendJson(res, 400, { error: 'horizon 必须是 5/10/20' }); return }
+        const asof = url.searchParams.get('asof') ?? ''
+        // 这个端点也带结果值，所以 as-of 同样必填——和底率层一个规矩，不开后门。
+        if (!isRealDate(asof)) { sendJson(res, 400, { error: 'asof 必填且须为真实存在的 YYYY-MM-DD' }); return }
+        sendJson(res, 200, loadCellDetail(situationDbPath, cellId, horizon, asof))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/situation/edges') {
+        const t = url.searchParams.get('type') ?? ''
+        if (t && !/^[A-Z_]{1,32}$/.test(t)) { sendJson(res, 400, { error: 'type 不合法' }); return }
+        const payload = loadEdges(situationDbPath, t, Number(url.searchParams.get('limit') ?? '200'))
+        if (payload.unknownType) {
+          sendJson(res, 400, { error: `edge_type 不存在：${t}`, knownTypes: payload.knownTypes })
+          return
+        }
+        sendJson(res, 200, payload)
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/situation/coverage') {
+        const horizon = Number(url.searchParams.get('horizon') ?? '20')
+        if (![5, 10, 20].includes(horizon)) { sendJson(res, 400, { error: 'horizon 必须是 5/10/20' }); return }
+        sendJson(res, 200, loadCoverage(situationDbPath, horizon))
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/health') {
         sendJson(res, 200, { status: 'ok', dbPath })
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/experience-library') {
+        sendJson(res, 200, loadExperienceLibraryCatalog(experienceDbPath))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/experience-library/card') {
+        const cardId = url.searchParams.get('card_id') ?? ''
+        const version = Number(url.searchParams.get('version') ?? '1')
+        if (!new RegExp('^(?:exp|lesson)_[a-zA-Z0-9]+' + String.fromCharCode(36)).test(cardId) || !Number.isSafeInteger(version) || version < 1) {
+          sendJson(res, 400, { error: 'card_id and positive integer version are required' })
+          return
+        }
+        const card = loadExperienceLibraryCard(experienceDbPath, cardId, version)
+        if (!card) {
+          sendJson(res, 404, { error: 'experience card not found' })
+          return
+        }
+        sendJson(res, 200, card)
         return
       }
       if (req.method === 'GET' && url.pathname === '/api/backtest/data') {

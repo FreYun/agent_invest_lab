@@ -180,6 +180,24 @@ def test_submit_review_rejects_missing_holding(reload_server, tmp_db):
     assert r["success"] is False and "014881" in r["message"]
 
 
+def test_submit_review_ignores_dust_residue(reload_server, tmp_db):
+    """清仓后的份额零头不算卫星持仓，复评无需覆盖。
+
+    bot 的卖单份额照抄持仓展示值，常少卖零点几份（这里持 50000 份、卖 49999.6 份），
+    残留折算不到 ¥1。此前这种死仓会被要求逐只写 verdict，甚至卡住核心基金买单。
+    """
+    _setup_review_env(reload_server, tmp_db)
+    _seed_holding_actions(tmp_db, "bot105d", "runT", [
+        ("014881", "天弘机器人C", "REDUCE", 49999.6, 49999.6, 1.0, "2025-01-03"),
+    ])
+    only_alive = dict(VALID_REVIEW, holdings=[VALID_REVIEW["holdings"][0]])  # 只写 007818
+    r = json.loads(asyncio.run(reload_server.portfolio_submit_satellite_review(
+        bot_id="bot105d", review_json=json.dumps(only_alive),
+        trade_date="2025-01-03", run_id="runT")))
+    assert r["success"] is True, r
+    assert r["covered_holdings"] == ["007818"]
+
+
 def test_submit_review_rejects_few_candidates(reload_server, tmp_db):
     _setup_review_env(reload_server, tmp_db)
     bad = dict(VALID_REVIEW, candidates=[VALID_REVIEW["candidates"][0]])  # 只有 1 个候选

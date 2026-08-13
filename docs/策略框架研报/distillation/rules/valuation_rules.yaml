@@ -1,0 +1,140 @@
+# =====================================================================
+# valuation_rules —— PE/PB 分位 → 定性描述
+# =====================================================================
+# 蒸馏自 3 份招商证券 A 股周报的估值段（cms_20260705/12/19 §"数据·估值"）
+# 每条规则带 confidence 与 source。confidence:
+#   0.95+ = 3 份样本一致；0.80 = 2 份样本；0.60 = 1 份样本或跨源印证
+# 使用方式：由 data_analyst / chief_strategist 在生成估值段落时查表；
+# 输出 verdict 直接嵌入文本模板。
+#
+# 2026-07-30 修订：把 07-12 和 07-19 的估值数据互换（原稿把两份报告的
+# 电子/建材/综合 PE 分位数字错位了）。校对基准：
+#   cms_20260712 §数据·估值 在 p28（表 3），电子 PE 99.6%
+#   cms_20260719 §数据·估值 在 p36（表 8），电子 PE 98.4%
+# =====================================================================
+
+meta:
+  version: 0.2
+  distilled_at: 2026-07-29
+  revised_at: 2026-07-30
+  source_reports: [cms_20260705, cms_20260712, cms_20260719]
+
+rules:
+
+  # -------------------------------------------------------------------
+  # 单指数/行业 PE 分位 → 定性
+  # -------------------------------------------------------------------
+  - id: pe_percentile_extreme_high
+    when:
+      metric: PE_percentile
+      ge: 0.98
+    verdict: "接近历史极值，估值风险显著加大"
+    phrases:
+      - "处于历史估值水平的{{pct}}%分位数，接近历史极值区间"
+      - "估值已处于近十年前 2% 区间，需警惕估值回归"
+    confidence: 0.95
+    sources:
+      - {report: cms_20260705, page: 29, evidence: "电子 99.8%、建筑材料 99.8%"}
+      - {report: cms_20260712, page: 28, evidence: "电子 PE 99.6%、综合 97.4%、建筑材料 99.4%（表 3）"}
+      - {report: cms_20260719, page: 36, evidence: "电子 PE 98.4%、综合 97.2%、建筑材料 98.0%（表 8）"}
+
+  - id: pe_percentile_high
+    when:
+      metric: PE_percentile
+      ge: 0.80
+      lt: 0.98
+    verdict: "偏高位，估值消化压力上升"
+    phrases:
+      - "处于历史估值水平的{{pct}}%分位数，估值处于偏高水平"
+      - "较高分位区间，短期或需盈利兑现驱动"
+    confidence: 0.90
+    sources:
+      - {report: cms_20260705, page: 28, evidence: "万得全A 82.3%"}
+      - {report: cms_20260712, page: 28, evidence: "煤炭 87.8%（表 3）"}
+
+  - id: pe_percentile_mid
+    when:
+      metric: PE_percentile
+      ge: 0.30
+      lt: 0.80
+    verdict: "位于历史中枢附近"
+    phrases:
+      - "处于历史估值水平的{{pct}}%分位数，位于中枢附近"
+      - "估值中位区间，风险与机会相对均衡"
+    confidence: 0.95
+    sources:
+      - {report: cms_20260712, page: 28, evidence: "万得全A 65.7%（中枢附近，表 3）"}
+      - {report: cms_20260719, page: 35, evidence: "万得全A 76.6%（中枢偏上）"}
+
+  - id: pe_percentile_low
+    when:
+      metric: PE_percentile
+      ge: 0.05
+      lt: 0.30
+    verdict: "偏低位，有一定安全边际"
+    phrases:
+      - "处于历史估值水平的{{pct}}%分位数，估值处于偏低水平"
+      - "低分位区间，估值下行风险可控"
+    confidence: 0.80
+    sources:
+      - {report: cms_20260705, page: 29, evidence: "美容护理 18.5%、社会服务 25.6%"}
+
+  - id: pe_percentile_extreme_low
+    when:
+      metric: PE_percentile
+      lt: 0.05
+    verdict: "接近历史底部，估值支撑充分"
+    phrases:
+      - "处于历史估值水平的{{pct}}%分位数，接近近十年低位"
+      - "估值极低分位，具备较强安全边际"
+    confidence: 0.85
+    sources:
+      - {report: cms_20260705, page: 29, evidence: "食品饮料 0.9%、非银金融 1.9%"}
+      - {report: cms_20260719, page: 36, evidence: "食品饮料 1.1%、非银金融 1.1%"}
+
+  # -------------------------------------------------------------------
+  # PE 与 PB 分位背离 → 复合定性（招商体标志性套路）
+  # -------------------------------------------------------------------
+  - id: pe_high_pb_low_divergence
+    when:
+      metric_1: PE_percentile
+      ge_1: 0.70
+      metric_2: PB_percentile
+      lt_2: 0.30
+    verdict: "PE 高、PB 低——盈利尚未兑现的低估值资产"
+    phrases:
+      - "PE 分位{{pe_pct}}% 显著高于 PB 分位{{pb_pct}}%，反映盈利下行阶段的估值扩张，需等待业绩回补"
+    confidence: 0.70
+    sources:
+      - {report: cms_20260719, page: 36, evidence: "国防军工 PE 57.5% / PB 78.2%（部分板块存在类似结构）"}
+
+  # -------------------------------------------------------------------
+  # 结构性观察规则（跨行业排序）
+  # -------------------------------------------------------------------
+  - id: valuation_top5_call_out
+    when:
+      metric: PE_percentile_rank_top_5
+    verdict: "点名一级行业估值排名前五，作为'高位需警惕'名单"
+    phrases:
+      - "截至{{report_date}}收盘，一级行业估值排名前五的行业分别是{{top5_names}}"
+    confidence: 1.00       # 3 份样本雷打不动都有
+    usage: 必须出现在 §数据·估值 段末尾
+    sources:
+      - {report: cms_20260705, page: 28, evidence: "电子、国防军工、计算机、建筑材料、机械设备"}
+      - {report: cms_20260712, page: 28, evidence: "电子、国防军工、计算机、机械设备、建筑材料"}
+      - {report: cms_20260719, page: 35, evidence: "电子、国防军工、计算机、机械设备、建筑材料"}
+
+  - id: valuation_overall_direction
+    when:
+      metric: allA_pe_delta_wow
+    verdict: "整体 A 股估值{{overall_direction}}"
+    phrases:
+      - overall_direction_up: "整体 A 股估值较上周上行"
+      - overall_direction_down: "整体 A 股估值较上周下行"
+      - overall_direction_flat: "整体 A 股估值较上周基本持平"
+    confidence: 1.00
+    usage: 必须作为 §数据·估值 段副标题
+    sources:
+      - {report: cms_20260705, page: 28}
+      - {report: cms_20260712, page: 28}
+      - {report: cms_20260719, page: 35}

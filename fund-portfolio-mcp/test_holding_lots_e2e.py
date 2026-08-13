@@ -140,6 +140,9 @@ def test_two_buys_two_lots_sell_fifo_crosses_tiers(srv, tmp_db):
         # Second buy: 2026-04-21 nav 2.5, T+1 settle on 04-22
         _seed_nav(conn, fund, "2026-04-21", 2.5)
         _seed_nav(conn, fund, "2026-04-22", 2.5)
+        for d in ["2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28",
+                  "2026-04-29", "2026-04-30"]:
+            _seed_nav(conn, fund, d, 2.5)
         # Sell: 2026-05-01 nav 3.0 (10 days after second buy, 30 days after first buy)
         _seed_nav(conn, fund, "2026-05-01", 3.0)
         _seed_account(conn, bot_id, cash=100_000.0, run_id=run_id)
@@ -232,6 +235,9 @@ def test_partial_sell_preserves_newer_lot_and_invariants(srv, tmp_db):
         _seed_nav(conn, fund, "2026-03-02", 1.0)
         _seed_nav(conn, fund, "2026-04-20", 1.5)
         _seed_nav(conn, fund, "2026-04-21", 1.5)
+        for d in ["2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27",
+                  "2026-04-28", "2026-04-29", "2026-04-30"]:
+            _seed_nav(conn, fund, d, 1.5)
         _seed_nav(conn, fund, "2026-05-01", 2.0)
         _seed_account(conn, bot_id, cash=100_000.0, run_id=run_id)
         conn.commit()

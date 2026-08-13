@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>经验图书馆 · 经验提炼工作台</title>
+<style>
+:root{
+  --bg:#080d18;--panel:#0e1625;--panel2:#111c2e;--panel3:#162238;--line:#243451;
+  --text:#e8eef8;--muted:#8997af;--faint:#596983;--cyan:#66d9e8;--green:#69dfa8;
+  --amber:#ffbd73;--red:#ff718d;--violet:#a994ff;--radius:12px
+}
+*{box-sizing:border-box}html{color-scheme:dark}body{margin:0;background:radial-gradient(circle at 14% -10%,rgba(102,217,232,.12),transparent 30%),radial-gradient(circle at 85% 0,rgba(169,148,255,.08),transparent 28%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+button,input,select{font:inherit}button{color:inherit}a{color:var(--cyan);text-decoration:none}
+.shell{max-width:1920px;margin:auto;padding:20px}.top{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:18px}.crumb{font-size:12px;color:var(--muted);letter-spacing:.04em}.crumb a{color:var(--muted)}h1{font-size:27px;margin:5px 0 0;letter-spacing:-.03em}.db-state{display:flex;gap:8px;align-items:center;border:1px solid var(--line);background:rgba(14,22,37,.75);border-radius:999px;padding:7px 11px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+.notice{display:flex;align-items:flex-start;gap:12px;border:1px solid rgba(255,189,115,.32);background:rgba(255,189,115,.07);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.55}.notice strong{color:var(--amber)}.notice .icon{font-size:17px}
+.metrics{display:grid;grid-template-columns:repeat(6,minmax(100px,1fr));gap:9px;margin-bottom:14px}.metric{border:1px solid var(--line);background:linear-gradient(180deg,rgba(22,34,56,.9),rgba(14,22,37,.9));border-radius:10px;padding:12px}.metric .label{color:var(--muted);font-size:11px}.metric .value{font-size:23px;font-weight:730;margin-top:5px;font-variant-numeric:tabular-nums}.metric .hint{color:var(--faint);font-size:10px;margin-top:2px}.metric.warn .value{color:var(--amber)}.metric.safe .value{color:var(--green)}
+.toolbar{display:grid;grid-template-columns:minmax(260px,1.5fr) repeat(4,minmax(130px,.55fr));gap:8px;border:1px solid var(--line);background:rgba(14,22,37,.86);border-radius:var(--radius);padding:10px;margin-bottom:12px}.control{position:relative}.control input,.control select{width:100%;height:36px;border:1px solid var(--line);background:#0a1220;border-radius:8px;color:var(--text);padding:0 11px;font-size:12px;outline:none}.control input:focus,.control select:focus{border-color:var(--cyan)}.control input{padding-left:33px}.search-icon{position:absolute;left:11px;top:8px;color:var(--muted);pointer-events:none}
+.workspace{display:grid;grid-template-columns:250px minmax(370px,.9fr) minmax(460px,1.25fr);gap:12px;height:calc(100vh - 270px);min-height:570px}.pane{border:1px solid var(--line);background:rgba(14,22,37,.92);border-radius:var(--radius);min-height:0;overflow:hidden}.pane-head{height:48px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 13px}.pane-title{font-size:12px;font-weight:700;letter-spacing:.04em}.pane-count{font-size:10px;color:var(--muted);background:var(--panel3);border:1px solid var(--line);border-radius:99px;padding:3px 7px}.scroll{height:calc(100% - 48px);overflow:auto;scrollbar-color:#344664 transparent;scrollbar-width:thin}
+.nav-section{padding:13px 12px 8px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.12em}.nav-item{margin:0 7px 5px;border:1px solid transparent;border-radius:8px;padding:9px 10px;cursor:pointer;transition:.12s}.nav-item:hover{background:rgba(255,255,255,.035)}.nav-item.active{border-color:rgba(102,217,232,.45);background:rgba(102,217,232,.07)}.nav-main{font-size:12px;line-height:1.35}.nav-meta{font-size:10px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.persona{border-left:2px solid var(--violet)}
+.card-list{padding:8px}.knowledge-card{border:1px solid transparent;border-bottom-color:rgba(36,52,81,.85);padding:12px 11px;cursor:pointer;border-radius:8px;transition:.13s}.knowledge-card:hover{background:rgba(255,255,255,.025)}.knowledge-card.active{border-color:rgba(102,217,232,.52);background:linear-gradient(90deg,rgba(102,217,232,.08),rgba(102,217,232,.025))}.card-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.badges{display:flex;gap:5px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;border-radius:99px;padding:2px 7px;font-size:9px;letter-spacing:.035em;border:1px solid var(--line);color:var(--muted);white-space:nowrap}.badge.case{color:var(--amber);border-color:rgba(255,189,115,.38);background:rgba(255,189,115,.07)}.badge.valid{color:var(--green);border-color:rgba(105,223,168,.4);background:rgba(105,223,168,.07)}.badge.lock{color:var(--red);border-color:rgba(255,113,141,.36);background:rgba(255,113,141,.06)}.badge.topic{color:#aec3e4}.badge.conflict{color:var(--violet);border-color:rgba(169,148,255,.4)}.card-date{font:10px ui-monospace,monospace;color:var(--faint)}.card-title{font-size:13px;font-weight:670;line-height:1.45;margin:9px 0 5px}.card-claim{font-size:11px;color:var(--muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.card-foot{display:flex;justify-content:space-between;gap:8px;margin-top:9px;font-size:10px;color:var(--faint)}
+.detail-empty{height:100%;display:grid;place-items:center;color:var(--muted);text-align:center;padding:40px}.detail-empty .big{font-size:28px;opacity:.5;margin-bottom:8px}.detail{padding:15px 17px 30px}.detail-kicker{font:10px ui-monospace,monospace;color:var(--cyan);word-break:break-all}.detail h2{font-size:20px;line-height:1.4;margin:8px 0 11px}.verdict{border:1px solid rgba(255,189,115,.28);background:rgba(255,189,115,.06);border-radius:9px;padding:10px 11px;font-size:12px;color:#f4d8b2;line-height:1.5}.gate-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:12px 0}.gate{border:1px solid var(--line);background:#0a1220;border-radius:8px;padding:8px}.gate .g-name{font-size:9px;color:var(--muted)}.gate .g-value{font-size:11px;margin-top:4px}.gate.ok .g-value{color:var(--green)}.gate.no .g-value{color:var(--red)}
+.section{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}.section-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px}.claim-box{font-size:14px;line-height:1.7}.kv{display:grid;grid-template-columns:115px 1fr;gap:7px 10px;font-size:11px;line-height:1.55}.kv .k{color:var(--muted)}.kv .v{word-break:break-word}.pill-row{display:flex;flex-wrap:wrap;gap:5px}.list{margin:6px 0 0;padding-left:18px;font-size:11px;line-height:1.65;color:#cbd6e7}.source-card,.evidence-card,.conflict-card{border:1px solid var(--line);border-radius:9px;padding:10px 11px;background:rgba(10,18,32,.7);margin-top:7px}.source-head,.evidence-head{display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--muted)}.source-text{white-space:pre-wrap;font-size:11px;line-height:1.65;margin-top:8px;max-height:240px;overflow:auto;color:#cfdaea}.quality-lock{display:flex;justify-content:space-between;gap:12px;align-items:center;border:1px solid rgba(255,113,141,.3);border-radius:9px;padding:10px;background:rgba(255,113,141,.05)}.lock-number{font-size:20px;color:var(--red);font-weight:700}.lock-copy{font-size:10px;color:var(--muted);line-height:1.5}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.muted{color:var(--muted)}.raw{white-space:pre-wrap;font:10px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:340px;overflow:auto;background:#080e19;border:1px solid var(--line);border-radius:8px;padding:10px;color:#b9c7da}.empty{padding:35px 20px;text-align:center;color:var(--muted);font-size:12px}.error{border-color:rgba(255,113,141,.45)!important}.skeleton{height:88px;margin:8px;border-radius:8px;background:linear-gradient(90deg,#111b2c,#18253b,#111b2c);background-size:200% 100%;animation:shimmer 1.3s infinite}@keyframes shimmer{to{background-position:-200% 0}}
+details summary{cursor:pointer;color:var(--cyan);font-size:11px;margin:7px 0}details[open] summary{margin-bottom:8px}
+/* Detail pane is the primary reading surface; keep it legible on dense dashboards. */
+.detail{font-size:14px}.detail-kicker{font-size:12px}.detail h2{font-size:22px}.detail .badge{font-size:11px;padding:3px 8px}.detail .verdict{font-size:14px}.detail .gate .g-name{font-size:12px}.detail .gate .g-value{font-size:13px}.detail .section-title{font-size:12px}.detail .claim-box{font-size:15px}.detail .kv{font-size:13px}.detail .list{font-size:13px}.detail .source-head,.detail .evidence-head{font-size:12px}.detail .source-text{font-size:13px}.detail .lock-copy{font-size:12px}.detail .muted{font-size:12px!important;line-height:1.7!important}.detail .raw{font-size:13px;line-height:1.7;max-height:440px;padding:13px}.detail details summary{font-size:13px}
+@media(max-width:1250px){.metrics{grid-template-columns:repeat(3,1fr)}.workspace{grid-template-columns:220px minmax(330px,.85fr) minmax(430px,1.15fr);height:calc(100vh - 330px)}.toolbar{grid-template-columns:1.5fr repeat(2,1fr)}}
+@media(max-width:900px){.shell{padding:12px}.workspace{display:block;height:auto}.pane{margin-bottom:10px;max-height:520px}.pane:last-child{max-height:none}.scroll{height:auto;max-height:470px}.toolbar{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.top{align-items:flex-start}.db-state{display:none}.gate-grid{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div>
+      <div class="crumb"><a href="../">回测看板</a> / 经验图书馆 / 素材审计</div>
+      <h1>经验图书馆</h1>
+    </div>
+    <div class="db-state"><span class="dot" id="dbDot"></span><span id="dbState">正在读取只读数据库…</span></div>
+  </header>
+
+  <div class="notice" id="notice">
+    <div class="icon">⚠</div>
+    <div><strong>这里首先展示的是待提炼素材，不等于可复用经验。</strong> 市场观点和交易闸门只作为来源材料保存；只有补齐踩坑模式、改进流程、适用与失效条件、实际动作及后续结果后，才允许分发给 Agent。</div>
+  </div>
+
+  <section class="metrics" id="metrics">
+    <div class="metric"><div class="label">案例</div><div class="value">—</div></div>
+    <div class="metric"><div class="label">待提炼素材</div><div class="value">—</div></div>
+    <div class="metric safe"><div class="label">可分发经验</div><div class="value">—</div></div>
+    <div class="metric"><div class="label">证据记录</div><div class="value">—</div></div>
+    <div class="metric warn"><div class="label">未解决冲突</div><div class="value">—</div></div>
+    <div class="metric"><div class="label">人设快照</div><div class="value">—</div></div>
+  </section>
+
+  <section class="toolbar">
+    <label class="control"><span class="search-icon">⌕</span><input id="search" type="search" placeholder="搜索主张、标题、卡片 ID…"></label>
+    <label class="control"><select id="statusFilter"><option value="">全部状态</option></select></label>
+    <label class="control"><select id="typeFilter"><option value="">全部类型</option></select></label>
+    <label class="control"><select id="topicFilter"><option value="">全部主题</option></select></label>
+    <label class="control"><select id="qualityFilter"><option value="">全部质量状态</option><option value="pit_missing">PIT 未验证</option><option value="outcome_missing">结果未验证</option><option value="conflicted">存在潜在冲突</option><option value="zero_authority">仓位权限为 0</option></select></label>
+  </section>
+
+  <section class="workspace">
+    <aside class="pane">
+      <div class="pane-head"><span class="pane-title">来源导航</span><span class="pane-count" id="caseCount">—</span></div>
+      <div class="scroll" id="sourceNav"><div class="skeleton"></div><div class="skeleton"></div></div>
+    </aside>
+    <section class="pane">
+      <div class="pane-head"><span class="pane-title">待提炼素材</span><span class="pane-count" id="cardCount">—</span></div>
+      <div class="scroll card-list" id="cardList"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+    </section>
+    <article class="pane">
+      <div class="pane-head"><span class="pane-title">素材审计详情</span><span class="pane-count">只读</span></div>
+      <div class="scroll" id="detail"><div class="detail-empty"><div><div class="big">⌁</div>选择一条素材查看来源与经验准入状态</div></div></div>
+    </article>
+  </section>
+</main>
+<script>
+const state={data:null,cards:[],selectedCardKey:'',source:{kind:'all',id:''},requestSeq:0}
+const $=id=>document.getElementById(id)
+const h=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))
+const j=v=>h(JSON.stringify(v??null,null,2))
+const arr=v=>Array.isArray(v)?v:[]
+const obj=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{}
+const label={case_only:'未成经验',candidate:'候选经验',lesson_candidate:'候选经验',validated:'已验证',promoted:'已推广',active:'有效',market_hypothesis:'市场观察素材',decision_rule:'规则素材',risk_control:'风控素材',supporting:'支持',contradicting:'反对',inconclusive:'未定论',research_only:'仅研究',inspect:'检查',increase:'加仓',reduce:'减仓',hold:'持有'}
+const L=v=>label[v]||v||'—'
+const bool=(v,yes='已验证',no='未验证')=>v?yes:no
+const cardKey=c=>`${c.card_id}:${c.version}`
+
+function setOptions(id,values,prefix){const el=$(id);el.innerHTML=`<option value="">${h(prefix)}</option>`+values.map(v=>`<option value="${h(v)}">${h(L(v))}</option>`).join('')}
+function renderMetrics(s){
+  const items=[['案例',s.cases,'独立决策日'],['待提炼素材',s.cards,'尚未形成经验'],['可分发经验',s.verifiedCards,'通过经验准入'],['证据记录',s.evidence,'支持 / 反对 / 未定'],['未解决冲突',s.unresolvedConflicts,'仅为潜在冲突'],['人设快照',s.personas,'来源身份冻结']]
+  $('metrics').innerHTML=items.map((x,i)=>`<div class="metric ${i===2?'safe':i===4?'warn':''}"><div class="label">${h(x[0])}</div><div class="value">${h(x[1])}</div><div class="hint">${h(x[2])}</div></div>`).join('')
+}
+function renderSourceNav(){
+  const d=state.data,cases=d.cases||[],personas=d.personas||[]
+  const active=(kind,id)=>state.source.kind===kind&&state.source.id===id?' active':''
+  $('caseCount').textContent=`${cases.length} 案例`
+  $('sourceNav').innerHTML=`
+    <div class="nav-section">视图</div>
+    <div class="nav-item${active('all','')}" data-kind="all" data-id=""><div class="nav-main">全部待提炼素材</div><div class="nav-meta">跨来源查看 · ${d.cards.length} 张</div></div>
+    <div class="nav-section">Agent 人设快照</div>
+    ${personas.map(p=>`<div class="nav-item persona${active('persona',p.persona_snapshot_id)}" data-kind="persona" data-id="${h(p.persona_snapshot_id)}"><div class="nav-main">${h(p.persona_title)}</div><div class="nav-meta">${h(p.strategy_family)} · ${h(p.risk_profile)}风险 · ${h(p.card_count)} 卡</div></div>`).join('')||'<div class="empty">暂无人设快照</div>'}
+    <div class="nav-section">来源案例</div>
+    ${cases.map(c=>`<div class="nav-item${active('case',c.case_id)}" data-kind="case" data-id="${h(c.case_id)}"><div class="nav-main">${h(c.trade_date)} · ${h(c.bot_id)}</div><div class="nav-meta">${h(c.card_count)} 卡 · PIT ${c.pit_verified?'✓':'未验'} · 结果 ${c.outcome_verified?'✓':'未验'}</div></div>`).join('')||'<div class="empty">暂无案例</div>'}`
+  $('sourceNav').querySelectorAll('.nav-item').forEach(el=>el.addEventListener('click',()=>{state.source={kind:el.dataset.kind,id:el.dataset.id};renderSourceNav();applyFilters()}))
+}
+function matchesSource(c){
+  if(state.source.kind==='all')return true
+  const prov=obj(c.provenance),ids=arr(prov.source_case_ids)
+  if(state.source.kind==='case')return ids.includes(state.source.id)
+  if(state.source.kind==='persona')return obj(c.persona_scope).source_persona_snapshot_id===state.source.id
+  return true
+}
+function applyFilters(){
+  const q=$('search').value.trim().toLowerCase(),status=$('statusFilter').value,type=$('typeFilter').value,topic=$('topicFilter').value,quality=$('qualityFilter').value
+  state.cards=state.data.cards.filter(c=>{
+    const hay=`${c.card_id} ${c.title} ${c.claim} ${c.domain}`.toLowerCase(),topics=arr(obj(c.applicability).topics)
+    if(q&&!hay.includes(q))return false;if(status&&c.status!==status)return false;if(type&&c.card_type!==type)return false;if(topic&&!topics.includes(topic))return false;if(!matchesSource(c))return false
+    if(quality==='pit_missing'&&Number(c.pit_verified_evidence_count)>0)return false
+    if(quality==='outcome_missing'&&Number(c.outcome_verified_evidence_count)>0)return false
+    if(quality==='conflicted'&&Number(c.conflict_count)<1)return false
+    if(quality==='zero_authority'&&Number(obj(c.action_policy).max_position_impact_pct)!==0)return false
+    return true
+  })
+  renderCards()
+}
+function statusBadge(c){const valid=['validated','promoted','active'].includes(c.status);return `<span class="badge ${valid?'valid':'case'}">${h(L(c.status))}</span>`}
+function renderCards(){
+  $('cardCount').textContent=`${state.cards.length} / ${state.data.cards.length}`
+  if(!state.cards.length){$('cardList').innerHTML='<div class="empty">没有符合当前筛选条件的素材</div>';return}
+  $('cardList').innerHTML=state.cards.map(c=>{
+    const a=obj(c.applicability),p=obj(c.action_policy),topics=arr(a.topics).slice(0,3),active=cardKey(c)===state.selectedCardKey?' active':''
+    return `<article class="knowledge-card${active}" data-key="${h(cardKey(c))}" data-id="${h(c.card_id)}" data-version="${h(c.version)}">
+      <div class="card-top"><div class="badges">${statusBadge(c)}<span class="badge lock">影响 ${h(p.max_position_impact_pct??'—')}%</span>${Number(c.conflict_count)?`<span class="badge conflict">冲突 ${h(c.conflict_count)}</span>`:''}</div><span class="card-date">${h(c.source_date)}</span></div>
+      <div class="card-title">${h(c.title)}</div><div class="card-claim">${h(c.claim)}</div>
+      <div class="card-foot"><span>${topics.map(t=>`#${h(t)}`).join(' ')||'未分类'}</span><span>${h(c.source_bot_id)} · ${h(L(p.direction))}</span></div>
+    </article>`
+  }).join('')
+  $('cardList').querySelectorAll('.knowledge-card').forEach(el=>el.addEventListener('click',()=>selectCard(el.dataset.id,Number(el.dataset.version))))
+}
+function gate(name,value,ok){return `<div class="gate ${ok?'ok':'no'}"><div class="g-name">${h(name)}</div><div class="g-value">${h(value)}</div></div>`}
+function kv(rows){return `<div class="kv">${rows.map(([k,v])=>`<div class="k">${h(k)}</div><div class="v">${v}</div>`).join('')}</div>`}
+function list(items){return items.length?`<ul class="list">${items.map(x=>`<li>${h(x)}</li>`).join('')}</ul>`:'<span class="muted">无</span>'}
+function badges(items){return `<div class="pill-row">${items.map(x=>`<span class="badge topic">${h(x)}</span>`).join('')||'<span class="muted">无</span>'}</div>`}
+async function selectCard(id,version){
+  state.selectedCardKey=`${id}:${version}`;renderCards();const seq=++state.requestSeq
+  $('detail').innerHTML='<div class="detail"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>'
+  try{const res=await fetch(`../api/experience-library/card?card_id=${encodeURIComponent(id)}&version=${version}`);if(!res.ok)throw new Error(`HTTP ${res.status}`);const d=await res.json();if(seq!==state.requestSeq)return;renderDetail(d)}catch(e){$('detail').innerHTML=`<div class="empty">详情读取失败：${h(e.message)}</div>`}
+}
+function renderDetail(d){
+  const c=d.card,a=obj(c.applicability),ps=obj(c.persona_scope),ap=obj(c.action_policy),pv=obj(c.provenance),tm=obj(c.temporal),dp=obj(c.distribution_policy),gov=obj(c.governance),checks=obj(gov.ingestion_checks),src=d.sources[0]||{},persona=obj(src.persona),ev=d.evidence||[],conf=d.conflicts||[],agentPreview=obj(d.agent_payload_preview),dc=obj(c.decision_context),acct=obj(dc.source_account_state),sourceDecision=obj(dc.source_decision),agentProfile=obj(dc.source_agent_profile),mech=obj(c.mechanism),isLesson=c.card_type==='lesson_candidate',agentDelivered=agentPreview.delivery_state==='candidate_research_only'
+  const pit=ev.some(x=>x.pit_verified),outcome=ev.some(x=>x.outcome_verified),execution=ev.some(x=>x.execution_verified)||src.execution_verified,independent=ev.some(x=>x.counts_as_independent_episode)
+  const maxImpact=ap.max_position_impact_pct??'—',authority=ap.authority||'—'
+  const lessonBlock=isLesson?`<div class="section"><div class="section-title">候选经验 · 可迁移的踩坑与改进</div>${kv([['经验',h(mech.lesson)],['踩坑模式',h(mech.failure_pattern)],['下次怎么做',list(arr(mech.better_process))],['适用场景',list(arr(mech.applicable_when))],['失效条件',list(arr(mech.invalid_when))],['实际动作',h(mech.actual_action)],['后续观察',h(mech.later_outcome)]])}</div>`:`<div class="section"><div class="section-title">来源素材摘要（不是经验）</div><div class="claim-box">${h(c.claim)}</div></div>`
+  $('detail').innerHTML=`<div class="detail">
+    <div class="detail-kicker">${h(c.card_id)} · v${h(c.version)} · ${h(c.content_hash)}</div>
+    <h2>${h(c.title)}</h2>
+    <div class="badges">${statusBadge(c)}<span class="badge">${h(L(c.card_type))}</span><span class="badge">${h(c.domain)}</span>${conf.length?`<span class="badge conflict">${conf.length} 个潜在冲突</span>`:''}</div>
+    <div class="verdict"><strong>当前结论：</strong>${c.status==='case_only'?'这只是来源观点或规则素材，尚未形成“踩坑—改进—结果”的可迁移经验，不会分发给 Agent。':'请结合下方质量闸门判断可用范围。'}</div>
+    <div class="gate-grid">${gate('来源哈希',bool(src.source_verified),!!src.source_verified)}${gate('PIT 数据',bool(pit),pit)}${gate('执行事实',bool(execution),!!execution)}${gate('结果窗口',bool(outcome),outcome)}${gate('独立样本',bool(independent,'已计入','0 个'),independent)}${gate('条件结构化',bool(a.structured_conditions_verified),!!a.structured_conditions_verified)}${gate('冲突扫描',bool(checks.conflict_scan_completed,'已完成','未完成'),!!checks.conflict_scan_completed)}${gate('人设快照',bool(checks.persona_snapshot_present,'已冻结','缺失'),!!checks.persona_snapshot_present)}</div>
+    ${lessonBlock}
+    <div class="section"><div class="section-title">来源案例账户状态 · 同日快照（时序待核）</div><div class="gate-grid">${gate("权益仓位 %",h(acct.equity_weight_pct),acct.equity_weight_pct!=null)}${gate("现金仓位 %",h(acct.cash_weight_pct),acct.cash_weight_pct!=null)}${gate("累计收益 %",h(acct.cumulative_return_pct),acct.cumulative_return_pct!=null)}${gate("最大回撤 %",h(acct.max_drawdown_pct),acct.max_drawdown_pct!=null)}${gate("动作数量",h(sourceDecision.action_count),sourceDecision.action_count!=null)}${gate("订单数量",h(sourceDecision.order_count),sourceDecision.order_count!=null)}${gate("动作金额/资产 %",h(sourceDecision.gross_action_value_pct),sourceDecision.gross_action_value_pct!=null)}${gate("决策方向",h(arr(sourceDecision.directions).join(", ")||"无动作"),true)}</div><div class="muted" style="font-size:10px;line-height:1.6">这些是来源案例同日数据库快照中的客观账户比例，仅用于上下文匹配；不包含账户绝对金额、基金代码或来源身份。因果相关性当前仍标记为 descriptive_context_only。</div></div>
+    <div class="section"><div class="section-title">适用人设画像 · 来源身份已隐藏</div><div class="gate-grid">${gate("策略族",h(agentProfile.strategy_family),!!agentProfile.strategy_family)}${gate("风险偏好",h(agentProfile.risk_profile),!!agentProfile.risk_profile)}${gate("投资目标",h(agentProfile.objective),!!agentProfile.objective)}${gate("决策节奏",h(agentProfile.rebalance_cadence),!!agentProfile.rebalance_cadence)}</div><div class="muted" style="font-size:10px;line-height:1.6">${isLesson?'这是候选经验的来源审计上下文；不会覆盖或改变消费者 Agent 的人设。':'这是提炼人员判断迁移风险的审计上下文；当前素材未通过经验准入，不会发送给消费者 Agent。'}</div></div>
+    <div class="section"><div class="section-title">素材隔离状态</div><div class="quality-lock"><div><div class="lock-number">${h(maxImpact)}%</div><div class="lock-copy">最大仓位影响<br>${h(L(authority))}</div></div><div class="lock-copy">${isLesson?'候选经验仅可作为研究假设使用；不允许直接改变仓位。':'当前素材不会发送给 Agent；只有形成完整复盘经验后才会重新评估。'}<br>全体采用上限：${h(dp.max_fleet_adoption_pct??'—')}% · ${dp.requires_countercard?'必须同时检索反方卡':'未要求反方卡'}</div></div>${list(arr(ap.required_current_evidence))}</div>
+    <div class="section"><div class="section-title">Agent 分发检查</div><div class="source-card" style="border-color:rgba(102,217,232,.42)"><div class="source-head"><span style="color:var(--cyan)">${agentDelivered?'候选经验载荷':'经验准入闸门'}</span><span class="badge case">${agentDelivered?'仅研究 · 仓位影响 0':'默认拦截'}</span></div><p class="muted" style="font-size:11px;line-height:1.6">${agentDelivered?'这是一条单案例候选经验的实际研究载荷：可帮助 Agent 检查自己的推理，但不能直接生成交易动作。':'这里展示实际分发结果。当前素材缺少完整复盘链路时只返回拦截原因，不向 Agent 发送市场观点、账户快照或来源原文。'}</p><pre class="raw">${j(agentPreview)}</pre></div></div>
+    <div class="section"><div class="section-title">原抽取条件（仅供经验提炼）</div>${kv([['目标',h(a.target)],['期限',h(a.horizon)],['主题',badges(arr(a.topics))],['适用条件',h(a.applies_if_text)],['失效条件',list(arr(a.invalid_if))],['建议动作',h(`${L(ap.suggested_action)} / ${L(ap.direction)}`)]])}</div>
+    <div class="section"><div class="section-title">经验准入缺口</div>${badges(arr(gov.promotion_blockers))}</div>
+    <div class="section"><div class="section-title">来源 Agent 与人设</div>${kv([['提出者',h(`${obj(pv.claimant).id||src.bot_id||'—'} · ${obj(pv.claimant).source_section||src.source_section||'—'}`)],['人设标题',h(src.persona_title)],['策略族',h(src.strategy_family)],['风险偏好',h(src.risk_profile)],['目标 / 节奏',h(`${src.objective||'—'} / ${src.rebalance_cadence||'—'}`)],['Agent 谱系',`<span class="mono">${h(src.agent_lineage_id)}</span>`],['迁移风险',h(ps.transfer_risk)],['兼容策略',badges(arr(ps.compatible_strategy_families))]])}<details><summary>查看冻结人设原始结构</summary><pre class="raw">${j(persona)}</pre></details></div>
+    <div class="section"><div class="section-title">时间与未来信息隔离</div>${kv([['决策发生',h(tm.decision_at)],['市场数据截止',h(tm.market_data_cutoff)],['数据版本',h(tm.data_vintage)],['结果可用时间',h(tm.outcome_available_at)],['入库后可见',h(tm.available_from)],['抽取器盲化',h(obj(pv.extractor).blind_to_future_outcome?'是':'否 / 未知')]])}</div>
+    <div class="section"><div class="section-title">证据记录 · ${ev.length}</div>${ev.map(e=>`<div class="evidence-card"><div class="evidence-head"><span>${h(L(e.relation))} · ${h(e.trade_date)}</span><span>${e.counts_as_independent_episode?'独立样本':'同源样本'}</span></div>${kv([['PIT / 结果',h(`${bool(e.pit_verified)} / ${bool(e.outcome_verified)}`)],['效果',`<span class="mono">${h(obj(e.effect).utility_delta??'未计算')}</span>`],['限制',badges(arr(obj(e.review).limitations))]])}</div>`).join('')||'<div class="muted">无证据记录</div>'}</div>
+    <div class="section"><div class="section-title">潜在冲突 · ${conf.length}</div>${conf.map(x=>{const other=x.left_card_id===c.card_id?x.right_title:x.left_title;return `<div class="conflict-card"><div class="source-head"><span>${h(x.conflict_type)} · ${h(x.status)}</span><span class="mono">${h(x.conflict_id)}</span></div><div class="card-title">对向卡：${h(other)}</div><div class="muted" style="font-size:10px">区分所需证据</div>${list(arr(x.discriminating_evidence))}</div>`}).join('')||'<div class="muted">未检测到潜在冲突</div>'}</div>
+    <div class="section"><div class="section-title">替代解释</div>${list(arr(c.alternative_explanations))}</div>
+    <div class="section"><div class="section-title">原始来源 · ${d.sources.length}</div>${d.sources.map(s=>`<div class="source-card"><div class="source-head"><span>${h(s.trade_date)} · ${h(s.source_section)}</span><span>${h(s.source_role)}</span></div><div class="source-text">${h(s.source_text)}</div><details><summary>查看该日完整案例</summary>${kv([['Run',`<span class="mono">${h(s.run_id)}</span>`],['Case',`<span class="mono">${h(s.case_id)}</span>`],['摘要',h(s.summary)],['数据截止',h(s.market_data_cutoff)],['来源文件',`<span class="mono">${h(s.source_reply_path)}</span>`]])}<pre class="raw">${h(s.decision_text)}</pre></details></div>`).join('')}</div>
+    <div class="section"><div class="section-title">完整结构化记录</div><details><summary>查看卡片 JSON（已解析）</summary><pre class="raw">${j(c)}</pre></details></div>
+  </div>`
+}
+async function init(){
+  try{
+    const res=await fetch('../api/experience-library');if(!res.ok)throw new Error(`HTTP ${res.status}`);const d=await res.json();state.data=d
+    if(!d.available){throw new Error(d.reason||'经验库不可用')}
+    $('dbState').textContent=`${d.source.filename} · schema v${d.source.schemaVersion} · READ ONLY`
+    renderMetrics(d.summary);setOptions('statusFilter',d.filters.statuses,'全部状态');setOptions('typeFilter',d.filters.types,'全部类型');setOptions('topicFilter',d.filters.topics,'全部主题');renderSourceNav();applyFilters()
+    if(state.cards[0])selectCard(state.cards[0].card_id,state.cards[0].version)
+  }catch(e){$('dbDot').style.background='var(--red)';$('dbState').textContent='经验库不可用';$('notice').classList.add('error');$('notice').innerHTML=`<div class="icon">×</div><div><strong>无法读取经验库：</strong>${h(e.message)}。页面已安全降级，没有修改任何数据库。</div>`;$('metrics').innerHTML='';$('sourceNav').innerHTML='<div class="empty">数据库不可用</div>';$('cardList').innerHTML='<div class="empty">暂无数据</div>';$('detail').innerHTML='<div class="detail-empty">请检查经验库路径或先执行入库</div>'}
+}
+['search','statusFilter','typeFilter','topicFilter','qualityFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',applyFilters))
+init()
+</script>
+</body>
+</html>

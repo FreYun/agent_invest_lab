@@ -28,6 +28,12 @@ DB_PATH = os.environ.get(
     ),
 )
 
+# FUND_DB_READONLY=1：以 sqlite 只读模式打开，任何 INSERT/UPDATE/DDL 都会得到
+# "attempt to write a readonly database"。给「跟实盘共用同一个库、但一行都不许写」的
+# 消费方用（如 bot105d 聊天分身）。实测对 WAL 库有效：读正常，写在 sqlite 层就被拒，
+# 不依赖上层是否记得屏蔽写工具。
+READONLY = os.environ.get("FUND_DB_READONLY", "0") == "1"
+
 SCHEMA_SQL = """
 -- ============================================================
 -- 基金数据侧（刷新脚本写入，bot 只读）
@@ -613,6 +619,10 @@ def _migrate_run_id_columns(conn):
 
 def init_db():
     """创建数据库和所有表,并执行增量迁移。"""
+    if READONLY:
+        # 只读消费方共用的是别人已经建好的库，建表和迁移都轮不到它做（也做不了）。
+        print(f"FUND_DB_READONLY=1: skip init_db on {DB_PATH}")
+        return
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -631,7 +641,10 @@ def init_db():
 @contextmanager
 def get_conn():
     """获取数据库连接的上下文管理器"""
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    if READONLY:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30)
+    else:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")

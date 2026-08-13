@@ -3,8 +3,12 @@
 # Caller must define: DB_PATH, SQLITE3_BIN, OOS_TABLES_SQL, RUN_ID.
 # Optional: BOT_ID (default bot101).
 
+# fund.db 是 WAL，但 busy_timeout 默认 0，写锁一撞就立刻 SQLITE_BUSY。现在两批 OOS cron
+# 同在 14:30 起跑、fund MCP 又在旁边持续写，下面两个写路径必须自带重试窗口。
+OOS_SQLITE_TIMEOUT_MS="${OOS_SQLITE_TIMEOUT_MS:-30000}"
+
 ensure_oos_tables() {
-  "$SQLITE3_BIN" "$DB_PATH" < "$OOS_TABLES_SQL"
+  "$SQLITE3_BIN" -cmd ".timeout $OOS_SQLITE_TIMEOUT_MS" "$DB_PATH" < "$OOS_TABLES_SQL"
 }
 
 # mirror_oos_results_for_date <trade_date> [bot_id] [run_id]
@@ -16,7 +20,7 @@ mirror_oos_results_for_date() {
   local TRADE_DATE="$1"
   local MIRROR_BOT_ID="${2:-${BOT_ID:-bot101}}"
   local MIRROR_RUN_ID="${3:-$RUN_ID}"
-  "$SQLITE3_BIN" "$DB_PATH" <<SQL
+  "$SQLITE3_BIN" -cmd ".timeout $OOS_SQLITE_TIMEOUT_MS" "$DB_PATH" <<SQL
 BEGIN;
 DELETE FROM oos_market_report_status
  WHERE live_run_id='$MIRROR_RUN_ID' AND as_of_date='$TRADE_DATE';

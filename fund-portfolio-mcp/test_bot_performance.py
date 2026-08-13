@@ -317,6 +317,15 @@ def test_portfolio_get_my_performance_includes_interval_metrics(reload_server, t
     obj = json.loads(payload)
     assert obj["success"] is True
     assert abs(obj["summary"]["current_drawdown_pct"] - ((1.015 / 1.02 - 1) * 100)) < 1e-4
+    assert abs(obj["summary"]["rolling_20d_drawdown_pct"] - ((1.015 / 1.02 - 1) * 100)) < 1e-4
+    assert obj["summary"]["rolling_20d_peak_total_value"] == 1_020_000.0
+    assert obj["summary"]["rolling_20d_peak_total_value_date"] == "2024-01-04"
+    assert obj["summary"]["rolling_20d_observations"] == 5
+    assert obj["summary"]["peak_total_value"] == 1_020_000.0
+    assert obj["summary"]["peak_total_value_date"] == "2024-01-04"
+    assert obj["summary"]["profit_giveback_amount"] == 5_000.0
+    assert obj["summary"]["profit_giveback_pct_of_initial"] == 0.5
+    assert obj["summary"]["peak_profit_giveback_ratio_pct"] == 25.0
     assert "interval_metrics" in obj
     im = obj["interval_metrics"]
     assert im["rf_annual_pct"] == 1

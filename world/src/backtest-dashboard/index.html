@@ -900,7 +900,7 @@ async function toggleUserMd(botId, runId){
     ? (d.source === 'run-snapshot' ? '<div class="rfl-quote">来自本次回测 run 的工作区快照</div>' : '<div class="rfl-quote">来自 bots 目录当前版本（该 run 无快照）</div>') + mdLite(d.content)
     : '<div class="empty">该 bot 没有 USER.md</div>'
 }
-// 交易记忆窗口只保留 4 维度压缩笔记：碰到第一个"原样保留/在此之后新增…（原样）"分隔标题就截断,
+// 交易记忆窗口只保留 5 维度压缩笔记：碰到第一个"原样保留/在此之后新增…（原样）"分隔标题就截断,
 // 后面那些逐日 tool_call 流水(todo_write/sector_market…)不展示。建仓首日整段就是原样、没有压缩笔记,
 // 此时(截断点≤标题行)回退展示原文,免得截成空白。
 function clipMemoryWindow(txt){
@@ -908,7 +908,7 @@ function clipMemoryWindow(txt){
   const lines = txt.split('\n')
   const cut = lines.findIndex(l => /^###\s*(在此之后新增|最近).*原样/.test(l.trim()))
   if (cut <= 1) return txt
-  return lines.slice(0, cut).join('\n').replace(/\s+$/, '') + '\n\n> （已折叠最近"原样"交易日的逐日明细，仅保留 4 维度压缩笔记）'
+  return lines.slice(0, cut).join('\n').replace(/\s+$/, '') + '\n\n> （已折叠最近"原样"交易日的逐日明细，仅保留 5 维度压缩笔记）'
 }
 // 决策回复里 bot 常附一段 ```yaml ... ``` 的 belief 结构化输出(schema/horizons/evidence)——
 // 这是给 belief-context 打分用的,不是给人看的决策正文,在决策 tab 里剥掉。只删含 `belief:` 的代码块。

@@ -20,6 +20,8 @@ MAX_LOCK_AGE="${MAX_LOCK_AGE:-3600}"
 OOS_RESTART_FUND_MCP="${OOS_RESTART_FUND_MCP:-1}"
 FUND_MCP_BOT_ONLY_SERVICE="${FUND_MCP_BOT_ONLY_SERVICE:-lab-fund-bot-only.service}"
 FUND_MCP_BOT_ONLY_HEALTH="${FUND_MCP_BOT_ONLY_HEALTH:-}"
+# 服务在这个秒数内刚重启过就不再重启（见 restart_fund_mcp_bot_only 的说明）。
+FUND_MCP_RESTART_MIN_AGE="${FUND_MCP_RESTART_MIN_AGE:-1800}"
 CLI="$ROOT_DIR/fund-portfolio-mcp/cli_tools.py"
 VENV_PY="$ROOT_DIR/fund-portfolio-mcp/.venv/bin/python"
 PYTHON="${FUND_MCP_PYTHON:-}"
@@ -127,7 +129,14 @@ fi
 
 INTRADAY_TMP_DIR=""
 INTRADAY_CONFIG_FILES=""
-DRIVER_CONFIG="$WORLD_DIR/config/world-multi-fund-backtest.yaml"
+# 一次调用只服务一组共用同一份 config 的 bot；跑别的 bot（如 bot105d 有自己的
+# charter/research-loop config）就单独起一条 cron，用 OOS_DRIVER_CONFIG 指过去。
+DRIVER_CONFIG_BASE="${OOS_DRIVER_CONFIG:-$WORLD_DIR/config/world-multi-fund-backtest.yaml}"
+if [[ ! -f "$DRIVER_CONFIG_BASE" ]]; then
+  echo "driver config not found: $DRIVER_CONFIG_BASE" >&2
+  exit 2
+fi
+DRIVER_CONFIG="$DRIVER_CONFIG_BASE"
 PREPASS_CONFIG="config/world-market-reports.yaml"
 if [[ "$REQUIRE_TARGET_TRADING" == "1" ]] && ! is_trading_day "$TRADE_DATE"; then
   if [[ "$OOS_INTRADAY" == "1" ]]; then
@@ -138,7 +147,7 @@ if [[ "$REQUIRE_TARGET_TRADING" == "1" ]] && ! is_trading_day "$TRADE_DATE"; the
     INTRADAY_TMP_DIR="$(mktemp -d /tmp/oos-bots-intraday-calendar.XXXXXX)"
     trap '[[ -n "${INTRADAY_TMP_DIR:-}" ]] && rm -rf "$INTRADAY_TMP_DIR"; [[ -n "${INTRADAY_CONFIG_FILES:-}" ]] && rm -f $INTRADAY_CONFIG_FILES' EXIT
     INTRADAY_CALENDAR_PATH="$(make_intraday_calendar "$TRADE_DATE" "$INTRADAY_TMP_DIR")"
-    DRIVER_CONFIG="$(make_intraday_config "$INTRADAY_TMP_DIR" "$INTRADAY_CALENDAR_PATH" "$WORLD_DIR/config/world-multi-fund-backtest.yaml")"
+    DRIVER_CONFIG="$(make_intraday_config "$INTRADAY_TMP_DIR" "$INTRADAY_CALENDAR_PATH" "$DRIVER_CONFIG_BASE")"
     PREPASS_CONFIG="$(make_intraday_config "$INTRADAY_TMP_DIR" "$INTRADAY_CALENDAR_PATH" "$WORLD_DIR/config/world-market-reports.yaml")"
     INTRADAY_CONFIG_FILES="$DRIVER_CONFIG $PREPASS_CONFIG"
     echo "[$(date '+%F %T')] WARN: intraday target day $TRADE_DATE absent from close-data calendar; using temporary calendar $INTRADAY_CALENDAR_PATH"
@@ -206,6 +215,18 @@ restart_fund_mcp_bot_only() {
   if ! systemctl --user status "$FUND_MCP_BOT_ONLY_SERVICE" >/dev/null 2>&1; then
     echo "[$(date '+%F %T')] WARN: $FUND_MCP_BOT_ONLY_SERVICE not found/inactive; skip managed restart" >&2
     return 0
+  fi
+  # 现在有两批 OOS cron 前后脚跟着起（105d 14:20、bot101/102/103 14:30），后一批重启这个
+  # 服务时前一批很可能正在决策中途，MCP 一断它的下单/查询就全废。谁先到谁重启，后到的看到
+  # 服务刚起过就跳过——不用在 crontab 里硬编码「哪条负责重启」那种隐式依赖。
+  local entered age
+  entered="$(systemctl --user show "$FUND_MCP_BOT_ONLY_SERVICE" -p ActiveEnterTimestamp --value 2>/dev/null || true)"
+  if [[ -n "$entered" ]]; then
+    age=$(( $(date +%s) - $(date -d "$entered" +%s 2>/dev/null || echo 0) ))
+    if [[ "$age" -ge 0 && "$age" -lt "$FUND_MCP_RESTART_MIN_AGE" ]]; then
+      echo "[$(date '+%F %T')] $FUND_MCP_BOT_ONLY_SERVICE restarted ${age}s ago (< ${FUND_MCP_RESTART_MIN_AGE}s); skip restart"
+      return 0
+    fi
   fi
   echo "[$(date '+%F %T')] restarting $FUND_MCP_BOT_ONLY_SERVICE before bot decisions"
   systemctl --user restart "$FUND_MCP_BOT_ONLY_SERVICE"

@@ -26,18 +26,18 @@ test('tradingDaysBetween: 日期不在日历 / 次序颠倒 → MAX_SAFE_INTEGER
 
 const base = { every: 0, maxGapDays: 5, tradingDates: DATES }
 
-test('agent-triggered: Day1 未到间隔，不授权也不强制', () => {
+test('agent-triggered: Day1 未到间隔，授权自主判断但不强制', () => {
   const s = computeDeepResearchState({ ...base, mode: 'agent-triggered', ordinal: 1, todayDate: '2025-01-02', lastDeepDate: undefined })
-  assert.equal(s.authorized, false)
+  assert.equal(s.authorized, true)
   assert.equal(s.forced, false)
   assert.equal(s.gapDays, 0)
 })
 
 test('agent-triggered: 从未深研时第 5 个交易日（gap=4）才强制', () => {
-  // Day2..Day4 (gap 1..3) 不强制
+  // Day2..Day4 (gap 1..3) 允许自主判断，但不强制
   for (const [i, d] of [['2025-01-03', 1], ['2025-01-06', 2], ['2025-01-07', 3]].entries()) {
     const s = computeDeepResearchState({ ...base, mode: 'agent-triggered', ordinal: i + 2, todayDate: d[0] as string, lastDeepDate: undefined })
-    assert.equal(s.authorized, false, `day ${d[0]} 不应授权`)
+    assert.equal(s.authorized, true, `day ${d[0]} 应允许异常条件下自主深研`)
     assert.equal(s.forced, false, `day ${d[0]} 不应强制`)
     assert.equal(s.gapDays, d[1])
   }
@@ -51,7 +51,7 @@ test('agent-triggered: 从未深研时第 5 个交易日（gap=4）才强制', (
 test('agent-triggered: 深研后 gap 归零重新累积，再到 5 再强制', () => {
   // 01-06 深研过 → 01-07 gap=1 不强制
   const s1 = computeDeepResearchState({ ...base, mode: 'agent-triggered', ordinal: 4, todayDate: '2025-01-07', lastDeepDate: '2025-01-06' })
-  assert.equal(s1.authorized, false)
+  assert.equal(s1.authorized, true)
   assert.equal(s1.forced, false)
   assert.equal(s1.gapDays, 1)
   // 01-13 gap=5（06→07,08,09,10,13）→ 强制
@@ -67,10 +67,10 @@ test('agent-triggered: forced 日跳过后次日仍强制（gap 继续累加）'
   assert.equal(s.gapDays, 5)
 })
 
-test('agent-triggered: 配置 7 时 gap=6 禁止、gap=7 才授权并强制', () => {
+test('agent-triggered: 配置 7 时 gap=6 自主授权不强制、gap=7 强制', () => {
   const before = computeDeepResearchState({ ...base, maxGapDays: 7, mode: 'agent-triggered', ordinal: 7, todayDate: '2025-01-10', lastDeepDate: '2025-01-02' })
   assert.equal(before.gapDays, 6)
-  assert.equal(before.authorized, false)
+  assert.equal(before.authorized, true)
   assert.equal(before.forced, false)
   const due = computeDeepResearchState({ ...base, maxGapDays: 7, mode: 'agent-triggered', ordinal: 8, todayDate: '2025-01-13', lastDeepDate: '2025-01-02' })
   assert.equal(due.gapDays, 7)

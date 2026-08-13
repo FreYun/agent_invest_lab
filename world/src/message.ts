@@ -1,4 +1,4 @@
-import type { DailyContextData, AccountSnapshot, FundSeries, IndexQuote, PerformanceData, IntervalMetricRow, FundFee, BuyablePoolMeta, BuyablePoolMetaRow } from './daily-context.ts'
+import type { DailyContextData, AccountSnapshot, FundSeries, IndexQuote, PerformanceData, IntervalMetricRow, FundFee, BuyablePoolMeta, BuyablePoolMetaRow, BenchmarkSeries } from './daily-context.ts'
 
 export interface DailyMessageContext {
   worldRoot: string
@@ -73,7 +73,7 @@ export interface DailyMessageContext {
   // - deepResearchEnabled：run 级开关。research-loop 的工具集是进程级静态的——rl_config_base 放开
   //   deny 后 start_research 等工具**每天**都挂在工具列表里，只能靠 message 措辞门控使用时机。
   //   开了 → fullRules/briefRules 的"研究模式全部禁用"措辞换成"以尾部调度块为准"
-  //   （【深度研究日 · 强制】必须调；没有该标注则禁止）。
+  //   （【深度研究日 · 强制】必须调；【深研触发提示 · 授权可选】可按异常自主调；都没有才禁止）。
   // - deepResearchDay：本决策日是否深度研究日（第 N/2N/3N 个决策日）→ 注入【深度研究日】块。
   deepResearchEnabled?: boolean
   /** 老字段：ordinal 模式的日历强制日。等价于 deepResearchForced（老 caller 保持兼容）。 */
@@ -82,7 +82,7 @@ export interface DailyMessageContext {
   deepResearchMode?: 'ordinal' | 'agent-triggered'
   /** 系统强制：本决策日必须 start_research，跳过 = 违反调度纪律。 */
   deepResearchForced?: boolean
-  /** 系统授权：仅达到固定间隔或崩盘强制时允许 start_research。 */
+  /** 系统授权：agent-triggered 普通日也可按异常条件自主 start_research。 */
   deepResearchAuthorized?: boolean
   /** 距上次深研的交易日 gap（含今日的偏移；MAX_SAFE_INTEGER = 从未深研过）。 */
   deepResearchGapDays?: number
@@ -91,7 +91,7 @@ export interface DailyMessageContext {
   /** 上次深研日期（ISO），null/undefined = 从未。 */
   deepResearchLastDate?: string
   /** 本次强制深研的具体原因，由 run.ts 判定。 */
-  deepResearchReasons?: Array<'max-gap' | 'ordinal' | 'target-move' | 'account-drawdown'>
+  deepResearchReasons?: Array<'max-gap' | 'ordinal' | 'target-move' | 'account-drawdown' | 'portfolio-loss' | 'holding-drop' | 'risk-basket'>
   // 【配置宪章】提示块：宪章未声明（Day 1）→ 声明指引；卫星复评到期/过期 → 复评提醒。
   // 由 run.ts 每日调 cli charter_status 组装；空/缺省 → 跳过整块（宪章未启用的 run 即此）。
   charterBlock?: string
@@ -135,7 +135,7 @@ function fullRules(date: string, weekday: string, botId: string, tradingDaysTota
 【决策框架】请参考你的 **AGENTS.md**（已注入到 system prompt 的 \`## AGENTS.md\` section）——这是你的角色定位、决策风格和操作边界的总纲；再参考 **METHODOLOGY.md**（\`## METHODOLOGY.md\` section）——这是本轮 assignment 绑定的 active 产品策略，定义当前产品看什么信号、按什么规则下单。
 
 【可用工具范围】本会话开放：mem0_search / mem0_add、list_skills / load_skill，以及 simworld-data / fund-portfolio-mcp 的所有 mcp__* 工具——**全部已直接挂进工具列表**，看到就能调，无需任何激活步骤。注意：mem0_search / mem0_add / list_skills / load_skill 是裸名工具，**不带 mcp__ 前缀**（\`mcp__simworld_data__mem0_search\` 这种名字不存在，调了必报错）。${deepResearchEnabled
-    ? '文件读写、web_fetch、bash、子代理（spawn_skill_agent）全部禁用——调用会被直接拒。研究模式工具（start_research 等）虽在工具列表里，但使用时机以 message 尾部的调度块为准：标注【深度研究日 · 强制】= 今天必须调用一次；没有该标注 = 今天禁止调用。'
+    ? '文件读写、web_fetch、bash、子代理（spawn_skill_agent）全部禁用——调用会被直接拒。研究模式工具（start_research 等）虽在工具列表里，但使用时机以 message 尾部的调度块为准：【深度研究日 · 强制】= 今天必须调用一次；【深研触发提示 · 授权可选】= 可按异常条件自主调用；两种标注都没有 = 禁止调用。'
     : '文件读写、web_fetch、bash、子代理（spawn_skill_agent）、研究模式（start_research 等）全部禁用——调用会被直接拒。'}
 
 【skill 体系】list_skills 看本 bot 装了哪些可加载的研究/判断框架，load_skill <name>（参数名 \`skill_id\`，传 skill 目录名）把 skill 内容直接载入当前对话当思考脚手架。**如果你的 METHODOLOGY 顶部标了「技能驱动」判断管线，每个决策日必须先按它列的顺序 load_skill 把那几个 skill 读进来照做，再做判断和下单——没 load 就凭印象决策 = 没按流程。** 不确定本 bot 装了哪些就先 list_skills 确认。
@@ -151,7 +151,7 @@ function briefRules(date: string, weekday: string, botId: string, deepResearchEn
   return `当前世界日期：${date}（${weekday}）。
 牢记：你的终极目标是追求绝对收益，控制账户回撤（不是最大回撤，是绝对亏损）。
 你的 bot_id = **${botId}**——所有 portfolio_* / mcp__strategy_mcp__update_my_strategy 工具的 \`bot_id\` 参数都按字面量传 \`"${botId}"\`（proxy 不会自动注入，传 "me" / "self" / 空串都会被服务端按字符串匹配判成"无账户"）。
-可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。${deepResearchEnabled ? '研究模式工具（start_research 等）使用时机以 message 尾部调度块为准：【深度研究日 · 强制】= 必须调用一次；没有该标注 = 禁止调用。' : ''}
+可用 mcp__* / mem0_search / mem0_add / list_skills / load_skill（所有 mcp__* 已直接挂进工具列表，无需激活；mem0_* 和 list_skills / load_skill 是裸名，**不带 mcp__ 前缀**），文件读写和 bash 都被禁。${deepResearchEnabled ? '研究模式工具（start_research 等）使用时机以 message 尾部调度块为准：【深度研究日 · 强制】= 必须调用一次；【深研触发提示 · 授权可选】= 可按异常条件自主调用；都没有 = 禁止调用。' : ''}
 
 今天的节奏（按顺序）：
   ① **先看下方【...】数据块**：找出账户回撤 / NAV 变化 / 指数趋势 / 区间业绩相对你昨日 thesis 有没有 drift。
@@ -170,6 +170,10 @@ const FOOTER_FULL = `
 【记忆与连续性】每个世界日是独立会话，你不会自动记得昨天。
 - 决策前：用 mem0_search 调取相关的历史交易/复盘记忆。
 - 决策后：把今天的判断、操作、理由、要在下次想起的事用 mem0_add 落进记忆。
+
+【每日决策硬契约】
+- **第一轮先用正文写出当日计划**（\`todo_write\` / \`update_todo_status\` 已停用，不要去调）：列出“风险审计 / 持仓与候选核验 / 下单或明确 hold / 收尾复盘”四项，各一行写在正文里，然后在同一轮就开始拉数据。计划写成正文而不是待办工具，是因为正文会进入后续每一轮的上下文，待办工具则要额外烧掉一整轮往返。
+- 最后一条 assistant message 的买入侧、卖出侧必须按当日实际动作动态输出，不要每天固定写四项：有买入时只写 \`### 为什么买\` + \`### 买入动作\`；无买入时只写 \`### 为什么不买\`。有卖出时只写 \`### 为什么卖\` + \`### 卖出动作\`；无卖出时只写 \`### 为什么不卖\`。动作栏写标的、金额/份额与实际结果；不动作栏写被否决的候选、未满足的触发器或继续持有依据。
 
 【边界】这是一次交易回合，不是研究项目；下了单 + mem0_add 写完今天的判断，就可以结束。`
 
@@ -193,11 +197,13 @@ const FOOTER_FULL = `
 const FOOTER_BRIEF = `
 
 【结束之前必做】
+- **每一轮都要留下痕迹**：每次调用工具的那条消息里，同时用 2-4 行正文写清「本轮得出了什么结论 / 下一步要验证什么」。你的推理过程不会保留到下一轮，只有正文会——结论留在思考里等于没做，下一轮的你要从头再推一遍。风险审计、持仓比对、费率权衡这类算完就走的分析尤其要落到正文：把关键数字和结论写出来，哪怕只有三行。
+- **当日计划是每日必做，但写成正文、不要调待办工具**（\`todo_write\` / \`update_todo_status\` 已停用）：第一轮正文里列出“风险审计 / 持仓与候选核验 / 下单或明确 hold / 收尾复盘”四项，各一行；后续轮次在正文里顺带更新进度。不得以“今天任务简单”为由跳过计划。
 - **纯 mem0_search + mem0_add 不算完成一天**。今天必须至少 1 次调用非 mem0 的研究/行情/数据工具（mcp__* 任一，除 mcp__fund_portfolio_mcp__portfolio_get_my_history / mcp__fund_portfolio_mcp__portfolio_get_my_performance / mcp__fund_portfolio_mcp__portfolio_get_my_trades 外，那几个 dailyContext 已经灌好了）——验证 dailyContext 里某个数据点、拉一个 methodology 里今天还没覆盖的维度、或检验 thesis 是否破。不查就 mem0 落库 = 自欺欺人，下一日你 mem0_search 拉到的全是空想，回测就这么烂下去。
 - **今天的决策今天就发生**：研究结论是减仓 → 调 mcp__fund_portfolio_mcp__portfolio_place_sell_order；加仓 → 调 mcp__fund_portfolio_mcp__portfolio_place_buy_order；保持 → 明确说"今日维持 X% 仓位，不动，理由是 ..."。把"明天减仓至 Y%"写进 mem0 ≠ 执行——下一日是新会话，看不到今日规划，等于决策从未发生。
 - 如果你在思考里列出了"待办 / 要查的 / 要验证"，要么在结束前调工具做掉，要么明确说"这条今天先放下，理由是 X，明天再做"。列了不做 = 没列——明天的你会以为今天已经查过了。
 - 结束前一次 mem0_add：今天的判断 + 做了什么 / 没做什么 + 明天要带着什么进来。没 mem0_add 就结束，下一日的你看不到今天，整天的研究就白做。
-- **最后一条 assistant message = 结构化当日决策 markdown**。所有工具调用（下单 / mem0_add / update_my_strategy / update_methodology 等）全部结束之后，你还要再输出一段独立的最终回复，内容必须包含：**至少 1 个 markdown 表格**（持仓 / 动作 / 目标权重 任一），加上覆盖 **风险状态 / 市场环境 / 主线判断 / 今日动作 / 执行结果 / 总仓位 / 关键观察** 的分析要点。这条最终消息是外部 dashboard「当日思考」卡片唯一展示的入口——**不允许**把详细分析全写在中间轮然后最后只回一句"决策完成"/"methodology 已更新"/"mem0_add 已存"/一个孤立的 belief yaml 块。即便中间轮已经写过完整推理，收尾时也要把当日决策的**核心版本**再落一遍作为最后一条 reply，让复盘能看到你今天真正想了什么、做了什么。`
+- **最后一条 assistant message = 结构化当日决策 markdown**。所有工具调用（下单 / mem0_add / update_my_strategy / update_methodology 等）全部结束之后，你还要再输出一段独立的最终回复，内容必须包含：**至少 1 个 markdown 表格**（持仓 / 动作 / 目标权重 任一），加上覆盖 **风险状态 / 市场环境 / 主线判断 / 今日动作 / 执行结果 / 总仓位 / 关键观察** 的分析要点。决策栏目按实际动作二选一，**禁止每天固定写四项**：买入侧——有买入写 \`### 为什么买\` + \`### 买入动作\`，无买入只写 \`### 为什么不买\`；卖出侧——有卖出写 \`### 为什么卖\` + \`### 卖出动作\`，无卖出只写 \`### 为什么不卖\`。动作栏记录标的、金额/份额和实际结果；不动作栏说明候选为何被否决、触发器为何未满足或为何继续持有。这条最终消息是外部 dashboard「当日思考」卡片唯一展示的入口——**不允许**把详细分析全写在中间轮然后最后只回一句"决策完成"/"methodology 已更新"/"mem0_add 已存"/一个孤立的 belief yaml 块。即便中间轮已经写过完整推理，收尾时也要把当日决策的**核心版本**再落一遍作为最后一条 reply，让复盘能看到你今天真正想了什么、做了什么。`
 
 // 注意：这里**不再**注入 simworld-data 工具目录文本块。2026-06-10 起所有 mcp__simworld_data__*
 // 经 run.ts 的 tools.always_load 原生挂进工具列表——name + description（来自上游 docstring）+ 参数
@@ -402,6 +408,13 @@ function performanceBlock(perf: PerformanceData): string {
     lines.push(`  起始本金 ¥${fmtNum(s.initial_capital, 0)} → 最新 ¥${fmtNum(s.latest_total_value, 0)}（net_value ${fmtNum(s.latest_net_value, 4)}）`)
     lines.push(`  累计收益 ${fmtPct(s.total_return_pct)} ｜ 年化波动 ${fmtPct(s.volatility_pct_annualized)} ｜ Sharpe (rf=0) ${fmtNum(s.sharpe_ratio_rf0, 4)}`)
     lines.push(`  最大回撤 ${fmtPct(s.max_drawdown_pct)}${s.max_drawdown_date ? ` @ ${s.max_drawdown_date}` : ''}`)
+    lines.push(`  近20交易日高水位回撤 ${fmtPct(s.rolling_20d_drawdown_pct)} ｜ 20日峰值 ¥${fmtNum(s.rolling_20d_peak_total_value, 0)}${s.rolling_20d_peak_total_value_date ? ` @ ${s.rolling_20d_peak_total_value_date}` : ''} ｜ 样本 ${fmtNum(s.rolling_20d_observations, 0)} 日`)
+    lines.push('  规则口径：≥6% 降档只使用上一行“近20交易日高水位回撤”，禁止用全历史回撤代替。')
+    lines.push(`  全历史高水位回撤 ${fmtPct(s.current_drawdown_pct)} ｜ 历史峰值 ¥${fmtNum(s.peak_total_value, 0)}${s.peak_total_value_date ? ` @ ${s.peak_total_value_date}` : ''}`)
+    const givebackRatio = s.peak_profit_giveback_ratio_pct == null
+      ? 'n/a（历史峰值尚无利润垫）'
+      : fmtPct(s.peak_profit_giveback_ratio_pct)
+    lines.push(`  收益回吐 ${fmtPct(s.profit_giveback_pct_of_initial)}（占初始本金，¥${fmtNum(s.profit_giveback_amount, 0)}）｜ 峰值利润回吐率 ${givebackRatio}`)
   }
   if (t) {
     lines.push('')
@@ -427,21 +440,44 @@ ${lines.join('\n')}`
 // 年化收益/波动/Sharpe/Calmar 按 252 交易日年化——与 fund_bot_performance 的存储一致。
 // fallback=true 标识窗口数据不足、退化为 since_inception，bot 看到 fallback 标记
 // 就知道这一行别太当真。
-function intervalMetricsBlock(rows: IntervalMetricRow[], asOfPerfDate: string | null, rfAnnualPct: number): string {
+function intervalMetricsBlock(rows: IntervalMetricRow[], asOfPerfDate: string | null, rfAnnualPct: number, bm?: BenchmarkSeries): string {
   if (rows.length === 0) return ''
-  const header = '区间               收益%      年化收益%      MDD%      年化波动%     Sharpe       Calmar      样本数      备注'
+  // 滚动超额（躺平%/超额pp）：pointsByDate 是「相对 run 起点的累计 %」，取窗口两端换算成区间收益。
+  // 病根：只给「自 Day 1 累计超额」时，早期攒下的 alpha 会把后面连续数月的跑输掩盖住（实测滚动
+  // 1m 转负后 3 个月、滚动 3m 转负后 1 个月，累计口径才转负），bot 于是次次复盘选"方法论仍有效"。
+  // 对不上（无基准 / 日期错位 / 窗口不足）一律留 n/a，绝不外推。
+  const bmDates = bm ? Object.keys(bm.pointsByDate).sort() : []
+  let bmEnd = -1
+  for (let k = 0; k < bmDates.length; k++) {
+    if (!asOfPerfDate || bmDates[k] <= asOfPerfDate) bmEnd = k
+  }
+  const bmWindowRet = (r: IntervalMetricRow): number | null => {
+    if (!bm || bmEnd < 0) return null
+    const end = bm.pointsByDate[bmDates[bmEnd]]
+    if (end === undefined) return null
+    if (r.period === 'since_inception') return end
+    const startIdx = bmEnd - (r.data_points - 1)
+    if (startIdx < 0) return null
+    const start = bm.pointsByDate[bmDates[startIdx]]
+    if (start === undefined) return null
+    return ((1 + end / 100) / (1 + start / 100) - 1) * 100
+  }
+  const header = '区间               收益%      躺平%     超额pp      年化收益%      MDD%      年化波动%     Sharpe       Calmar      样本数      备注'
   const lineRows = rows.map(r => {
     const annRet = r.annualized_return_pct == null ? 'n/a' : fmtPct(r.annualized_return_pct)
     const calmar = r.calmar_ratio === null ? 'n/a' : fmtNum(r.calmar_ratio, 4)
     const note = r.fallback ? '⚠ 窗口数据不足，退化 since_inception' : ''
-    return `  ${r.period.padEnd(16)} ${fmtPct(r.return_pct).padStart(8)}   ${annRet.padStart(9)}   ${fmtPct(r.max_drawdown_pct).padStart(8)}   ${fmtPct(r.volatility_pct).padStart(9)}   ${fmtNum(r.sharpe_ratio, 4).padStart(8)}   ${calmar.padStart(8)}   ${String(r.data_points).padStart(6)}   ${note}`
+    const bmRet = bmWindowRet(r)
+    const bmCell = bmRet === null ? 'n/a' : fmtPct(bmRet)
+    const exCell = bmRet === null ? 'n/a' : fmtSignedPP(r.return_pct - bmRet)
+    return `  ${r.period.padEnd(16)} ${fmtPct(r.return_pct).padStart(8)}  ${bmCell.padStart(8)}  ${exCell.padStart(8)}   ${annRet.padStart(9)}   ${fmtPct(r.max_drawdown_pct).padStart(8)}   ${fmtPct(r.volatility_pct).padStart(9)}   ${fmtNum(r.sharpe_ratio, 4).padStart(8)}   ${calmar.padStart(8)}   ${String(r.data_points).padStart(6)}   ${note}`
   })
   const asOf = asOfPerfDate ? `截至 ${asOfPerfDate}` : ''
   return `
 
-【区间业绩（${asOf}，年化收益/波动/Sharpe/Calmar 按252交易日年化，rf=${fmtPct(rfAnnualPct, 2)} 年化）】
+【区间业绩（${asOf}，年化收益/波动/Sharpe/Calmar 按252交易日年化，rf=${fmtPct(rfAnnualPct, 2)} 年化）${bm ? `｜躺平 = ${bm.name}，超额 = 你 − 躺平` : ''}】
 ${header}
-${lineRows.join('\n')}`
+${lineRows.join('\n')}${bm ? '\n  ↑ 判断"这一段择时在不在创造价值"，看【超额pp】那一列的 1m/3m/6m——不是看收益% 那列的绝对数。绝对收益为正但超额为负 = 大盘抬着你、你在减损。since_inception 的超额会被早期战果长期掩盖，它转负时通常已经连续跑输好几个月了。' : ''}`
 }
 
 function indexBlock(indices: IndexQuote[]): string {
@@ -514,7 +550,7 @@ function dailyContextBlocks(dc: DailyContextData | undefined): string {
   if (dc.account) parts.push(accountSnapshotBlock(dc.account))
   if (dc.performance) parts.push(performanceBlock(dc.performance))
   if (dc.performance?.intervals) {
-    parts.push(intervalMetricsBlock(dc.performance.intervals.rows, dc.performance.intervals.as_of_perf_date, dc.performance.intervals.rf_annual_pct))
+    parts.push(intervalMetricsBlock(dc.performance.intervals.rows, dc.performance.intervals.as_of_perf_date, dc.performance.intervals.rf_annual_pct, dc.benchmark))
   }
   if (dc.fundSeries && dc.fundSeries.length) parts.push(fundSeriesBlock(dc.fundSeries))
   if (dc.indices && dc.indices.length) parts.push(indexBlock(dc.indices))
@@ -551,6 +587,19 @@ const METHODOLOGY_DAYN_HINT = `
 
 【你的 active methodology】已在 system prompt 的 \`## METHODOLOGY.md\` section 里——这是本轮 assignment 绑定的当前产品策略，按它决策。
 发现 thesis 失效 / 风控漏洞 → \`mcp__strategy_mcp__update_my_strategy(bot_id, strategy, reason)\` 完整重写（不是 diff，整篇新版本），reason 写清为什么改，下一日 system prompt 注入新版。不轻易改——但该改就改。`
+
+function authorityChainReminder(botId: string): string {
+  if (botId !== 'bot105g') return ''
+  return `
+
+【bot105g 控制变量 · 系统风险报警器】
+日常买卖、regime、主线、仓位与深研纠偏只按 active METHODOLOGY 的老 run 基线执行。新增的 CB20 / VIX 风险模块只负责异常报警，不成为新的日常决策层：
+
+- \`normal\` 只表示报警器没有响，不是市场安全、risk_on、允许加仓或必须 hold 的证据；不得用它抵消 active METHODOLOGY 已有的情绪、主线、流动性、趋势、资金与深研判断。
+- \`warning/hard\` 单独出现时只强制立即复核市场与组合、允许异常深研并在总结中显著报警；它本身不直接产生买卖单。
+- 唯一联动动作沿用 bot105gr 账户风控口径：因子为 \`warning/hard\`，并且整个账户满足 \`DD_account <= -10%\`，或同时满足 \`GB_pp >= 10pp\` 且 \`GB_profit >= 20%\`，才触发联合强制降险；一次性降低当前权益风险敞口 35%–50%，且总权益绝对降幅不少于 20pp。同一基金/指数方向卖出后 7 个交易日内不得反向买回。
+- 15 日最小持有期是独立硬约束：未满 15 个交易日的仓位，只有绝对生命线/重大证伪、市场风险 high/extreme 或账户回撤闸门触发时才允许提前卖；报警器本身、普通状态机剔除、一般技术波动或深研均不能单独突破。`
+}
 
 // ============================================================================
 // 策略强制复盘条款（每 REVIEW_CADENCE_DAYS 个交易日触发一次）
@@ -729,19 +778,18 @@ function beliefPositionCoherenceBlock(
   const p5txt = typeof p5 === 'number' && Number.isFinite(p5) ? p5.toFixed(2) : 'n/a'
   const posPct = fmtNum(posWeight * 100, 1)
   const lines: string[] = []
-  lines.push('【⚖ 言行一致核对（belief ↔ 仓位）· 今天必须消除矛盾】')
+  lines.push('【⚖ 言行一致核对（belief ↔ 仓位）】')
   if (bullishFlat) {
     lines.push(`你上一条 standing belief：t+20 上涨概率 p_up=${p20.toFixed(2)}（>${COHERENCE_BULL_P} = 净看多），t+5=${p5txt}；但你当前仓位 ${posPct}%（基本空仓）。`)
-    lines.push('**这是言行不一**——嘴上看多、仓位却押注不涨，正是"把保守偷换成永久空仓"的踏空。今天二选一，不许两头都占：')
-    lines.push('  ① 你其实不看多了 → 今天的 belief 把 t+20 p_up 诚实下调到 <0.5，并在 evidence 里写明"什么变了"让你转空。注意：你没法靠把 p_up 写低来给空仓开脱——看空看错了 t+20 一样扣 Brier 分，假装看空会在校准里露馅。')
-    lines.push(`  ② 你仍看多 → 按投资层（读 USER.md 定力度）把仓位建到 ≥40% 底仓，兑现你的判断。再保守，净看多 + ${posPct}% 仓位也是踏空。`)
   } else {
     lines.push(`你上一条 standing belief：t+20 上涨概率 p_up=${p20.toFixed(2)}（<${COHERENCE_BEAR_P} = 净看空），t+5=${p5txt}；但你当前仓位 ${posPct}%（重仓）。`)
-    lines.push('**这是言行不一**——嘴上看空、仓位却满载下行风险，正是"信号走坏却不撤"的做错。今天二选一：')
-    lines.push('  ① 你其实没那么空 → 今天的 belief 把 t+20 p_up 上调到 >0.5 并给出支撑证据；')
-    lines.push('  ② 你确实看空 → 按投资层把仓位降到与看空一致的水平（该清就清），别扛。')
   }
-  lines.push('（铁律：仓位必须与信念同向——净看多→在场，净看空→空仓；每天核对，不只复盘日。这不替你做方向判断，只禁止"想的"和"做的"打架。）')
+  // 只报「方向不一致」这个事实，不给具体调仓处方：仓位纪律（目标权重表 / B4 权益带 /
+  // 四个 override 口子）在 METHODOLOGY 里已经定死，提示词再开一条"建到 ≥40%／该清就清"
+  // 会绕过那套纪律、且与 B4 下限的数值直接打架。这里只要求它把矛盾说清楚。
+  lines.push('这两者方向不一致。今天的决策里请显式交代一句：是 **belief 该更新**（写明什么变了，并在 evidence 里给出依据），还是 **仓位该调整**。')
+  lines.push('**仓位怎么动、动多少，一律按 METHODOLOGY 的目标权重表 / B4 权益带 / 四个 override 口子判断**——本提示不替你定方向、不给仓位数字，只负责让"想的"和"做的"不要不声不响地打架。')
+  lines.push('（提醒：把 p_up 往空仓方向写低并不能给踏空开脱——看空看错了 t+20 一样扣 Brier 分，假装看空会在校准里露馅。）')
   return `\n\n${lines.join('\n')}`
 }
 
@@ -812,7 +860,7 @@ function mainPositionLadderBlock(
   const detail = mains.map(h => `${h.fund_code}（${h.fund_name ?? ''}）${fmtNum(h.weight * 100, 1)}%`).join('、')
   const over = mainW > hi + 1e-9
   const verdict = over
-    ? `**超出上限 ${fmtNum((mainW - hi) * 100, 1)}pct → 应退坡**：本次卖出主仓位 10%-15%（豁免"最小步长20%"），只动免赎回费份额（持有≥7日档；仍在收费期则顺延至最近免费日并在 mem0 写明）；释放资金等额置换到未建仓 / 未达标准档的主线载体（见上方载体核对表 ✗/△ 行），属等权益结构替换，**不受 sentiment 加仓闸门约束**——主线成熟、主仓位让位，这就是轮动。需要腾槽 / 补资金时也**可以直接清掉你最不看好的卫星**（不必等状态机剔除），只受零费窗口与最小持有期约束。`
+    ? `**超出上限 ${fmtNum((mainW - hi) * 100, 1)}pct → 应退坡**：本次卖出主仓位 10%-15%（豁免"最小步长20%"），只动**赎回费 ≤0.5% 的份额**（不必等 0 费档——0.5% 是可接受的退坡摩擦）；只有命中费率 **>0.5%** 时（典型是 <7 日的 1.5% 超短线档）才允许顺延到费率降到 ≤0.5% 的最近日期，并在 mem0 写明顺延决定。释放资金等额置换到未建仓 / 未达标准档的主线载体（见上方载体核对表 ✗/△ 行），属等权益结构替换，**不受 sentiment 加仓闸门约束**——主线成熟、主仓位让位，这就是轮动。需要腾槽 / 补资金时也**可以直接清掉你最不看好的卫星**（不必等状态机剔除），只受 ≤0.5% 赎回费窗口与最小持有期约束。`
     : `在档内（≤${fmtNum(hi * 100, 0)}%），无需退坡。`
   return `\n\n────────── 主仓位阶梯核对（系统核算 · METHODOLOGY「主仓位（阶梯退坡）」） ──────────
 - 主仓位判定（单只 >40% 且非主线载体）：${detail}，合计 **${fmtNum(mainW * 100, 1)}%**
@@ -1098,7 +1146,7 @@ ${rows.join('\n')}${note}${capLine}`
 }
 
 // 系统预读注入三份市场研报（PIT）。bot101/102/103 用：主线/regime/组合骨架已由系统预生成，
-// bot 直接消费报告结论做仓位与下单决策，不自己跑主线识别。三类全缺 → 空串（跳过整块）。
+// bot 直接消费报告结论做仓位与下单决策，不自己跑主线识别。全缺 → 空串（跳过整块）。
 function marketReportsBlock(reports?: {
   context: string; mainline: string; rotation: string; macroNews?: string
   res?: { market_strategy: string; policy_analysis: string; intl_relations: string; cross_market_linkage: string }
@@ -1109,9 +1157,13 @@ function marketReportsBlock(reports?: {
   const part = (label: string, body: string): string =>
     `────────── ${label} ──────────\n${body && body.trim() ? body.trim() : '（截至今日暂无该报告——按 METHODOLOGY 保守处理）'}`
   const hasMacro = !!(reports.macroNews && reports.macroNews.trim())
+  // rotation 块保留，但 run.ts 已把它的来源从残缺的 mainline_rotation_daily 改成完整的月度
+  // mainline_rotation（详见 run.ts readMarketReportsForInjection 的 2026-08-04 注释）。
+  // 2025 回测里这块曾连续 227 个交易日注入 2025-01-22 的同一份快照，与同一 prompt 里新鲜的
+  // market_mainline 直接矛盾；下面三个子块的入参一直是 reports.mainline，不受影响。
   const bodies = [
     part('market_context（行情 / regime / risk_state）', reports.context),
-    part('market_mainline（主线板块 + 可投基金池）', reports.mainline),
+    part('market_mainline（主线板块 + 组合状态机 + 可投基金池）', reports.mainline),
     part('mainline_rotation（核心/卫星组合骨架 + 今日动作）', reports.rotation)
       + vehicleCheckBlock(reports.mainline, holdings, cooldowns)
       + mainPositionLadderBlock(reports.mainline, holdings)
@@ -1139,7 +1191,7 @@ ${resShown.map(([label, body]) => part(label, body)).join('\n\n')}`
   return `\n\n【市场研究报告（系统预生成 · PIT · 全市场共享）】
 下面${n}份报告是系统预生成的当期市场判断与资讯，**是你今天 regime / 主线 / 组合骨架的权威结论，直接采用**：
 - **不要**自己再调 \`sector_search\`/\`sector_factor\`/\`market_temperature\` 去重跑主线识别或 regime 判断——那套流程系统已替你做完；
-- mainline_rotation 已给出核心/卫星组合骨架与每板块双测度选好的基金（fund_pool），照它执行即可；
+- market_mainline 给出主线板块、组合状态机与当日 top5 候选的触发距离；mainline_rotation 给出核心/卫星组合骨架与每板块双测度选好的基金（fund_pool），照它执行即可；
 - **macro_news 是当期宏观 / 政策 / 事件资讯**：决策前必读，判断有没有重大政策面 / 事件面催化或冲击。**尤其遇到大跌：用它分清「一次性外部冲击（如关税 / 地缘黑天鹅，不可外推）」还是「可持续的基本面恶化」——一次性冲击扛住别恐慌转防守、更别把它写进长期记忆当永久教训；只有可持续恶化才真正降风险预算**；
 - 你的职责 = 基于这${n}份报告 + 你的 METHODOLOGY（仓位/风险闸门/配置区间/回撤纪律）做**目标仓位与下单**决策。
 
@@ -1158,7 +1210,10 @@ function deepResearchBlock(forced: boolean | undefined, gapDays?: number, lastDa
     : (gapFinite ? `本 run 已进入第 ${gapDays + 1} 个交易日，达到首次深研调度上限——` : '本 run 尚未做过深研，已达调度硬上限——')
   const events = [
     reasons.includes('target-move') ? '投资目标上一交易日出现大幅涨跌' : '',
-    reasons.includes('account-drawdown') ? '账户当前净值回撤首次跌破阈值' : '',
+    reasons.includes('account-drawdown') ? '账户当前净值回撤跨入更深的阈值倍数档位' : '',
+    reasons.includes('portfolio-loss') ? '组合上一可得交易日出现异常单日损失' : '',
+    reasons.includes('holding-drop') ? '最差持仓/板块载体出现异常单日下跌' : '',
+    reasons.includes('risk-basket') ? '多指数风险篮子出现异常单日下跌' : '',
   ].filter(Boolean)
   const triggerNote = events.length > 0 ? `触发原因：${events.join('；')}。${reasons.includes('max-gap') || reasons.includes('ordinal') ? gapNote : ''}` : gapNote
   return `
@@ -1198,15 +1253,16 @@ function deepResearchTriggerBlock(ctx: {
 **顺序铁律：先判断是否深研 → 若深研，先研究后下单。** 读完当日数据后第一件事就是过一遍下方触发条件，决定今天研不研究；一旦决定深研，必须在**任何下单之前**完成研究，让结论直接进当天的仓位决策。先下单再研究 = 结论没机会影响今天的动作，研究白做、预算白烧。
 
 **建议触发条件（软规则，任一命中即建议深研，多条共振更强）**：
-1. HS300 或组合基准**单日涨跌 ≥ ±2%**（或 ≥ ±2σ 短横异动）
-2. 组合从 **20 日高点回撤 ≥ 5%**
-3. 任一持仓 **5 日跌幅 ≥ 8%**（急跌需要检视）
-4. 状态机 top5 **变动 ≥ 2 席**（主线切换嫌疑）
-5. 上次深研 **p_up ≤ 0.35 或 ≥ 0.65** 的 T+1~T+3 跟进（强信号复核）
-6. 你综合判断的其他值得深研的情形（例如政策/消息面突变、方法论某条规则连错 2 次需要复盘）
+1. 组合**单日损失 ≥ 2%**，或组合从 **20 日高点回撤 ≥ 5%**
+2. 任一持仓/板块载体**单日跌幅 ≥ 4%**或 **5 日跌幅 ≥ 8%**
+3. 多指数风险篮子（沪深300、创业板、科创50、中证1000）任一**单日跌幅 ≥ 2%**，或出现 ≥2σ 异动
+4. 上下行波动同时放大、相关性骤升，或量价/波动结构明显变档
+5. 状态机 top5 **变动 ≥ 2 席**（主线切换嫌疑）
+6. 上次深研 **p_up ≤ 0.35 或 ≥ 0.65** 的 T+1~T+3 跟进（强信号复核）
+7. 你综合判断的其他值得深研的情形（例如政策/消息面突变、方法论某条规则连错 2 次需要复盘）
 
 **判定要点**：
-- **数据你已经有**——上方 dailyContext / 市场研报块已经给了 HS300、组合 20d 回撤、持仓涨跌，自查即可，不必再拉。
+- **数据你已经有**——上方 dailyContext / 市场研报块已经给了组合日收益、组合回撤、持仓 NAV 与多指数风险篮子，自查即可，不必再重复拉。
 - **无异常就不发**——常规日按正常节奏做 settle 复核 + 状态机审阅 + 必要下单即可，不必为凑深研强上一课；系统会在 gap 达 ${max} 交易日时切换到"强制"档兜底。
 - **强度选择**：真触发就按【深度研究日】的四点纪律执行（只研究一个命题、数据边界、结论落地、不挤掉决策）。**单日硬上限=1 次**——第 2 次 \`start_research\` 会被系统拒绝，值得研究的第二个命题请留到下个交易日。`
 }
@@ -1298,7 +1354,8 @@ export function renderDailyMessage(ctx: DailyMessageContext): string {
   // 放在 review 之前——复盘日时 review（更大的"方法论是否失效"硬契约）压在最末尾保持最高 recency；
   // 非复盘日 review 为空串，本块即收尾的最后一条硬约束。无 latestBelief / 无账户 → 空串。
   const coherence = beliefPositionCoherenceBlock(ctx.dailyContext, ctx.latestBelief)
+  const authorityReminder = authorityChainReminder(ctx.botId)
   // 周期块放在数据块之前——先把"这是跨 N 日的周期再平衡、下方数据是整段区间"的框架立住，bot 再读数据。
   const period = periodBlock(ctx.periodInfo)
-  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${holdCommit}${deepCommit}${beliefStr}${charterPart}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${drUsage}${coherence}${review}\n`
+  return `${history}${briefRules(ctx.date, weekday, ctx.botId, ctx.deepResearchEnabled)}${CHAT_BOUNDARY}${buyable}${pipelineBlock}${briefing}${intraday}${period}${contextBlocks}${holdCommit}${deepCommit}${beliefStr}${charterPart}${METHODOLOGY_DAYN_HINT}${FOOTER_BRIEF}${deepResearch}${deepResearchTrigger}${drUsage}${coherence}${review}${authorityReminder}\n`
 }

@@ -6,7 +6,7 @@ bots:
   - bot105d
 replay:
   from: '2025-01-01'
-  to: '2026-07-17'
+  to: '2026-07-29'
 calendar: ../runtime/calendar.json
 concurrency: 1
 per_bot_timeout_seconds: 900

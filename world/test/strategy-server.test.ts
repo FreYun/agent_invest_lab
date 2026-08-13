@@ -513,30 +513,36 @@ test('get_market_report report_type=all returns all three, with placeholder for 
   assert.match(g.content[0].text, /\[mainline_rotation\] 暂无报告/)
 })
 
-test('get_market_report daily-alias: bot 优先拿日度主线/rotation、缺失回退月度、reporter 豁免只读月度', async (t) => {
+test('get_market_report daily-alias: 主线走日度、rotation 只读月度真源（日度别名已移除）', async (t) => {
   const { s, fundDbPath } = await freshServer(t, { day: () => '2024-03-20' })
   const esc = (v: string): string => `'${v.replace(/'/g, "''")}'`
   const insert = (type: string, asOf: string, md: string): void => {
     runSqlite(fundDbPath, `INSERT INTO market_reports (report_type, as_of_date, scope, content_md) VALUES (${esc(type)}, ${esc(asOf)}, 'global', ${esc(md)});`)
   }
-  // 月度 rotation + 日度 rotation 都有 → bot 拿日度、reporter 拿月度
+  // 2026-08-04：mainline_rotation 的日度别名已移除。别名语义是「日度更好，优先用」，但取数是
+  // 「命中即 break」——日度表哪怕只有一行远古记录，月度回退也永不执行。实测 2025 回测里
+  // mainline_rotation_daily 只有 15 天数据，却让这条路径整年返回 2025-01-22 的快照。
+  // 现在 rotation 直读月度真源；日度视角的组合状态机已并入 market_mainline_daily。
   insert('mainline_rotation', '2024-03-15', '月度rotation正文')
   insert('mainline_rotation_daily', '2024-03-19', '日度rotation正文')
-  // 主线只有月度 → bot 回退月度
   insert('market_mainline', '2024-03-15', '月度主线正文')
+  insert('market_mainline_daily', '2024-03-19', '日度主线正文')
 
+  // rotation：日度表里即便有更新的一行，也必须拿月度（这正是回归点）
   const bot = toolResult(await callTool(s.url, 1, 'get_market_report', { bot_id: 'bot101', report_type: 'mainline_rotation' }))
-  assert.match(bot.content[0].text, /日度rotation正文/)
-  assert.match(bot.content[0].text, /report_type=mainline_rotation_daily as_of=2024-03-19/)
-  assert.doesNotMatch(bot.content[0].text, /月度rotation正文/)
+  assert.match(bot.content[0].text, /月度rotation正文/)
+  assert.match(bot.content[0].text, /report_type=mainline_rotation as_of=2024-03-15/)
+  assert.doesNotMatch(bot.content[0].text, /日度rotation正文/)
 
-  const fallback = toolResult(await callTool(s.url, 2, 'get_market_report', { bot_id: 'bot101', report_type: 'market_mainline' }))
-  assert.match(fallback.content[0].text, /月度主线正文/)
-  assert.match(fallback.content[0].text, /report_type=market_mainline as_of=2024-03-15/)
+  // 主线：日度别名保留，bot 拿日度
+  const mainline = toolResult(await callTool(s.url, 2, 'get_market_report', { bot_id: 'bot101', report_type: 'market_mainline' }))
+  assert.match(mainline.content[0].text, /日度主线正文/)
+  assert.match(mainline.content[0].text, /report_type=market_mainline_daily as_of=2024-03-19/)
 
-  const reporter = toolResult(await callTool(s.url, 3, 'get_market_report', { bot_id: 'reporter-rotation', report_type: 'mainline_rotation' }))
-  assert.match(reporter.content[0].text, /月度rotation正文/)
-  assert.doesNotMatch(reporter.content[0].text, /日度rotation正文/)
+  // reporter-* 仍只读月度真源（月度管线不能被日度结果污染）
+  const reporter = toolResult(await callTool(s.url, 3, 'get_market_report', { bot_id: 'reporter-rotation', report_type: 'market_mainline' }))
+  assert.match(reporter.content[0].text, /月度主线正文/)
+  assert.doesNotMatch(reporter.content[0].text, /日度主线正文/)
 })
 
 test('submit_market_report rejects non-reporter bot_id, bad report_type, bad json', async (t) => {

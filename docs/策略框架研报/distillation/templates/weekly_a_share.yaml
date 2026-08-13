@@ -1,0 +1,418 @@
+# =====================================================================
+# 招商证券 A 股投资策略周报 —— 模板（v0.1）
+# =====================================================================
+# 距离蒸馏日期：2026-07-29
+# 蒸馏样本（3 份，首席分析师 李昊阳/杨晨）：
+#   - 2026-07-05 「短期冲击后关注科技修复与中报业绩双主线」
+#   - 2026-07-12 「海外科技波动加大 关注国产算力机会」
+#   - 2026-07-19 「本轮市场回调的原因、时间、空间及调整之后的方向选择」
+# 骨架命中率：3/3 报告均按下列 6 段固定顺序展开，仅"主题·风向"焦点主题周度切换。
+# 使用方式：由 chief_strategist Agent 载入本文件，按 sections[] 顺序委派子 Agent。
+# =====================================================================
+
+meta:
+  name: 招商证券 A 股投资策略周报
+  code: weekly_a_share
+  version: 0.1
+  distilled_at: 2026-07-29
+  distilled_from:
+    - id: cms_20260705
+      title: 短期冲击后关注科技修复与中报业绩双主线
+      publish_date: 2026-07-05
+    - id: cms_20260712
+      title: 海外科技波动加大 关注国产算力机会
+      publish_date: 2026-07-12
+    - id: cms_20260719
+      title: 本轮市场回调的原因、时间、空间及调整之后的方向选择
+      publish_date: 2026-07-19
+  publish_schedule: 每周日 20:00（覆盖下一周首日）
+  typical_length_pages: [20, 40]
+  typical_charts: 20
+  typical_tables: 4
+  author_role: chief_strategist
+
+# ---------------------------------------------------------------------
+# 六段骨架
+# ---------------------------------------------------------------------
+sections:
+
+  - id: thesis
+    order: 1
+    name: 观策·论市
+    role: chief_strategist
+    length_ratio: 0.40         # 3 份样本这一段均约占正文四成
+    subtitle_pattern: "「{{main_view_short}}」"
+    required: true
+    intro:
+      pattern: |
+        本周 A 股主要指数{{trend_desc}}。展望后市，我们认为{{main_view}}。
+      slots:
+        trend_desc:
+          hint: "涨少跌多 / 震荡走弱 / 反弹上行 / 分化明显 —— 用一个短语"
+          source: ttjj.get_index_weekly(codes=BROAD, week_end=simulated_today)
+        main_view:
+          hint: "配置方向 + 时间窗判断 + 主线，1~2 句"
+    body:
+      style: "3~5 个分点论证"
+      subsection_types:
+        - id: overseas_transmission
+          用于: "海外风险如何向 A 股传导（日韩杠杆/美股 AI 定价）"
+          样本: [cms_20260705§1, cms_20260712§1, cms_20260719§1]
+        - id: correction_reason
+          用于: "回调归因（融资 + ETF + 强势板块补跌）"
+          样本: [cms_20260719§1]
+        - id: time_space_prediction
+          用于: "调整时间/空间预判（定性/融资出清速度/情绪极致背离）"
+          样本: [cms_20260719§2]
+        - id: direction_selection
+          用于: "底部布局方向（中报改善 + 产业趋势）"
+          样本: [cms_20260705§2, cms_20260719§3]
+        - id: policy_catalyst
+          用于: "政策/事件催化解读（WAIC / 十五五 / Meta 出售算力）"
+          样本: [cms_20260705§1, cms_20260712§3]
+      pick_rule: "按当周主线自适应选 3~4 项；每分项配 1~2 张图"
+    closing:
+      pattern: "综上，{{summary}}。风险提示：{{risks}}"
+      slots:
+        risks:
+          hint: "3~5 条，从常见池挑：海外冲击/政策低于预期/业绩不达预期/地缘扰动"
+    charts_required:
+      typical_count: 3          # 常配 3 张图：主要传导链、情绪/融资走势、方向框架
+    rules_ref:
+      - rules/narrative_rules.yaml
+
+  - id: recap
+    order: 2
+    name: 复盘·内观
+    role: market_analyst
+    length_ratio: 0.10
+    subtitle_pattern: "A 股市场主要指数{{trend_verb}}，{{best_style}}表现较好"
+    required: true
+    subsections:
+
+      - id: index_recap
+        pattern: |
+          本周（{{start_date}}-{{end_date}}）A 股市场主要指数{{trend_verb}}。主要指数中，
+          {{best_indices_desc}}；{{worst_indices_desc}}。本周日均成交额{{avg_daily_amount}}亿元，
+          {{amount_delta_desc}}。
+        required_data:
+          - tool: ttjj.get_index_weekly
+            args: {codes: MAJOR_INDICES, week_end: simulated_today}
+            fields: [close, pct_chg_week, avg_daily_amount]
+        constants:
+          MAJOR_INDICES:
+            [大盘价值, 消费龙头, 上证50, 中证100, 沪深300, 上证指数,
+             大盘成长, 中小100, 创业板指, 北证50]
+
+      - id: reason_analysis
+        pattern: |
+          本周 A 股市场整体{{summary_verb}}，主要原因包括：（1）{{reason_1}}；
+          （2）{{reason_2}}；（3）{{reason_3}}。
+        picking_rule: "从 3 类固定归因中挑：市场风险偏好、海外市场同步、地缘/大宗"
+        rules_ref: rules/flow_rules.yaml#market_sentiment
+
+      - id: industry_recap
+        pattern: |
+          从行业上看，本周申万一级行业{{action_desc}}，{{top_industries_with_pct}}
+          等表现相对较好；{{bottom_industries_with_pct}}等表现相对较弱。从涨跌较大的板块
+          及主要原因看，{{industry_1_name}}（{{industry_1_reason}}）、
+          {{industry_2_name}}（{{industry_2_reason}}）……
+        required_data:
+          - tool: ttjj.get_industry_weekly
+            args: {taxonomy: SW1, week_end: simulated_today}
+
+    charts_required:
+      - id: chart_major_indices
+        caption: 本周重要指数涨跌幅
+        type: bar
+      - id: chart_style_indices
+        caption: 本周风格指数涨跌幅
+        type: bar
+        风格集: [必选, 金融, 医药生物, 可选, 周期, TMT]
+      - id: chart_sw1_industries
+        caption: 本周申万一级行业涨跌幅
+        type: bar
+
+  - id: prosperity
+    order: 3
+    name: 中观·景气
+    role: industry_analyst
+    length_ratio: 0.15
+    subtitle_pattern: "{{month}}月{{key_prosperity_signals}}"
+    required: true
+    picking_rule: |
+      每周不必覆盖全部指标，按"上月新公布 + 与本周主线呼应"挑 4~6 项。
+      3 份样本中稳定出现的指标见 core_indicators。
+    core_indicators:
+      - name: 智能手机产量
+        freq: M
+        chart: 3 个月滚动同比 + 当月值 双轴
+      - name: 集成电路产量
+      - name: 集成电路进出口金额
+      - name: 工业机器人产量
+      - name: 金属切削机床产量
+      - name: 汽车产量销量
+      - name: 商品房销售额面积
+    section_pattern: |
+      {{month}}月{{indicator_name}}同比{{direction}}{{pct}}%，
+      三个月滚动同比{{trend_direction}}{{trend_pct}}个百分点至{{trend_pct_new}}%。
+    required_data:
+      - tool: macro.get_industry_output
+        args: {indicator: "<name>", freq: M, asof: simulated_today}
+    charts_required:
+      typical_count: 8         # 每个指标 1~2 张，通常 6~8 张
+    rules_ref:
+      - rules/macro_rules.yaml#industry_output
+
+  - id: capital
+    order: 4
+    name: 资金·众寡
+    role: fund_flow_analyst
+    length_ratio: 0.10
+    subtitle_pattern: "{{main_capital_flow_desc}}"    # 例：ETF 净申购对冲融资净流出，基金发行回升
+    required: true
+    subsections:
+
+      - id: overall_flow
+        pattern: |
+          从全周资金流动的情况来看，本周{{trend_summary}}。具体来看，融资资金
+          前四个交易日{{margin_net_flow_desc}}{{margin_amount}}亿元；新成立偏股类
+          公募基金{{new_fund_shares}}亿份，较前期{{fund_delta_direction}}
+          {{fund_delta_amount}}亿份；ETF{{etf_flow_direction}}，对应{{etf_amount}}亿元。
+        required_data:
+          - tool: macro.get_margin_flow
+            args: {week_end: simulated_today}
+          - tool: ttjj.get_etf_flow
+            args: {week_end: simulated_today, split_by: broad_and_industry}
+          - tool: macro.get_new_fund_issuance
+            args: {week_end: simulated_today, type: equity}
+        rules_ref: rules/flow_rules.yaml#overall
+
+      - id: etf_detail
+        pattern: |
+          从 ETF 净申赎来看，ETF{{etf_direction}}，宽基 ETF{{broad_etf_direction}}，
+          其中{{top_broad_etf}}申购最多。行业 ETF 申购参半，其中{{top_industry_etf_in}}
+          申购较多，{{top_industry_etf_out}}赎回较多。
+        required_data:
+          - tool: ttjj.get_etf_flow
+            args: {week_end: simulated_today, split_by: broad_and_industry, top_n: 5}
+
+      - id: shareholder_flow
+        pattern: |
+          从资金需求来看，重要股东净{{shareholder_direction}}规模{{shareholder_delta}}。
+          本周重要股东二级市场增持{{inc_amt}}亿元，减持{{dec_amt}}亿元，净{{shareholder_direction}}
+          {{net_amt}}亿元。本周公告的计划减持规模{{planned_reduction}}亿元，较前期
+          {{planned_delta}}。
+        required_data:
+          - tool: macro.get_shareholder_change
+            args: {week_end: simulated_today}
+
+    charts_required:
+      - caption: ETF/融资/新发累计净流入曲线（2025 以来）
+      - caption: 融资资金每周净买入柱状图
+      - caption: 融资资金周度各行业净买入额
+      - caption: 各行业估值与交易集中度周度变化（象限图）
+      - caption: 新成立公募基金发行份额
+      - caption: 各行业和宽基 ETF 净申购份额
+      - caption: 重要股东净增持规模
+      - caption: 计划减持规模
+    tables_required:
+      - id: table_capital_by_industry
+        caption: 各类资金分行业当周净流入规模
+        columns: [行业, 融资资金, ETF, 重要股东净增持, 合计]
+        rows: 30
+
+  - id: theme
+    order: 5
+    name: 主题·风向
+    role: theme_analyst
+    length_ratio: 0.20
+    subtitle_pattern: "{{primary_theme_headline}}"
+    required: true
+    subsections:
+
+      - id: primary_theme_deepdive
+        length_words: [1500, 3000]
+        pick_rule: |
+          每周聚焦 1~2 个热门主题。从池子里挑：AI/算力（国产/海外）、商业航天、
+          新能源材料（如氟化工）、创新药/CXO、半导体、机器人。
+          选择信号：news.rank_hot_topics(window=7) 前 3 名 + 首席 override。
+        pattern: |
+          （子标题：主题名 + 一句话结论）
+          （小节 1：产业趋势/技术拐点 —— 数据 + 图表）
+          （小节 2：产业链拆解 —— 上/中/下游 + 关键产品）
+          （小节 3：投资机会 —— 短期/中长期 + 关联标的方向，不做个股推荐）
+        样本主题:
+          - {report: cms_20260705, theme: 氟化工, pages: [21, 22, 23]}
+          - {report: cms_20260712, theme: 商业航天, pages: [20, 21, 22, 23]}
+          - {report: cms_20260719, theme: Kimi K3 登顶全球开源模型第一, pages: [27, 28, 29]}
+        required_data:
+          - tool: news.get_hot_topics
+            args: {window: 7d, asof: simulated_today, top_n: 10}
+          - when: 主题涉及 AI
+            tool: ai_industry.get_arena_rank
+            args: {asof: simulated_today, categories: [text, frontend_code, vision]}
+          - when: 主题涉及 AI
+            tool: ai_industry.get_eci_history
+            args: {asof: simulated_today}
+          - when: 主题涉及 AI
+            tool: ai_industry.get_openrouter_share
+            args: {asof: simulated_today, window: 7d}
+        rules_ref: rules/narrative_rules.yaml
+
+      - id: domestic_news_list
+        pattern: |
+          国内重要资讯与产业政策
+          （1）{{cat_1}}—{{title_1}}
+              {{body_1}}
+              新闻来源：{{url_1}}
+          … 依次编号 1-10
+        picking_rule: "10 条，按'政策 > 产业事件 > 宏观数据 > IPO/融资'排序"
+        required_data:
+          - tool: news.search_news
+            args: {days_back: 7, region: cn, top_n: 15, asof: simulated_today}
+        categories_observed_in_samples:
+          - IPO
+          - 商业航天
+          - CPI/PPI/GDP/PMI
+          - 人工智能
+          - 汽车
+          - 储能
+          - 新型零售
+          - 算力基建
+          - 创新药
+          - 设备更新
+          - 十五五
+
+      - id: overseas_news_list
+        pattern: |
+          国外重要资讯与产业政策
+          （1）{{cat_1}}—{{title_1}}
+              {{body_1}}
+              新闻来源：{{url_1}}
+          … 依次编号 1-10
+        required_data:
+          - tool: news.search_news
+            args: {days_back: 7, region: overseas, top_n: 15, asof: simulated_today}
+        categories_observed_in_samples:
+          - 美联储
+          - 美伊冲突
+          - 半导体（三星/SK/台积电/阿斯麦）
+          - 人工智能（OpenAI/Meta/Anthropic/Google）
+          - 存储/DRAM
+          - 韩国杠杆 ETF
+          - 汇率（日元）
+          - 政治（英国首相/美国政策）
+
+    validation:
+      - news_lists_must_be_10_and_10   # 3 份样本雷打不动 10+10 条
+
+  - id: valuation
+    order: 6
+    name: 数据·估值
+    role: data_analyst
+    length_ratio: 0.05
+    subtitle_pattern: "整体 A 股估值{{overall_direction}}"
+    required: true
+    subsections:
+
+      - id: broad_index_valuation
+        pattern: |
+          本周整体 A 股估值水平{{overall_direction}}。截至 {{report_date}} 收盘，
+          万得全 A 指数 PE(TTM) 为{{allA_pe}}，处于历史估值水平（10 年以来）的
+          {{allA_pct}}%分位数。创业板指 PE(TTM){{cyb_direction}}{{cyb_delta}}至
+          {{cyb_pe}}，处于历史估值水平的{{cyb_pct}}%分位数。代表大盘股的沪深 300
+          指数 PE(TTM){{hs300_direction}}{{hs300_delta}}至{{hs300_pe}}，处于历史
+          估值水平的{{hs300_pct}}%分位数。代表中小盘股的中证 500 指数 PE(TTM)
+          {{zz500_direction}}{{zz500_delta}}至{{zz500_pe}}，处于历史估值水平的
+          {{zz500_pct}}%分位数。
+        required_data:
+          - tool: ttjj.get_index_pe
+            args:
+              codes: [万得全A, 创业板指, 沪深300, 中证500]
+              asof: simulated_today
+              lookback_years: 10
+        charts_required:
+          - {id: allA_pe_history, caption: "本周万得全 A 指数 PE(TTM){{direction}}{{delta}}至{{value}}"}
+          - {id: cyb_pe_history,  caption: "本周创业板指 PE(TTM){{direction}}{{delta}}至{{value}}"}
+          - {id: hs300_pe_history, caption: "本周沪深 300 指数 PE(TTM){{direction}}{{delta}}至{{value}}"}
+          - {id: zz500_pe_history, caption: "本周中证 500 指数 PE(TTM){{direction}}{{delta}}至{{value}}"}
+
+      - id: industry_valuation
+        pattern: |
+          在行业估值方面，本周指数估值{{overall_delta_desc}}，其中，
+          {{top_up_industries_with_pct}}等涨幅居前，
+          {{top_down_industries_with_pct}}等跌幅居前。
+          {{per_industry_details}}
+          截至 {{report_date}} 收盘，一级行业估值排名前五的行业分别是
+          {{top5_industries_by_pe_pct}}。
+        required_data:
+          - tool: ttjj.get_industry_pe_pct
+            args: {taxonomy: SW1, asof: simulated_today, lookback_years: 10, metrics: [PE, PB, PS]}
+        tables_required:
+          - id: table_sw1_valuation
+            caption: 一级行业估值(PE、PB、PS)及对应分位数
+            columns:
+              - 行业
+              - PE(TTM,剔除负值)_现值
+              - PE_分位数
+              - PB(LF,内地)_现值
+              - PB_分位数
+              - PS(TTM)_现值
+              - PS_分位数
+            rows: 30
+
+    rules_ref:
+      - rules/valuation_rules.yaml
+
+# ---------------------------------------------------------------------
+# Agent 每周固定要拉的数据（供 orchestrator 预热缓存）
+# ---------------------------------------------------------------------
+weekly_data_prefetch:
+  ttjj_data_pit:
+    - get_index_weekly(codes=BROAD+STYLE, week_end)
+    - get_industry_weekly(taxonomy=SW1, week_end)
+    - get_style_index_weekly(week_end)
+    - get_index_pe(codes=BROAD+CYB, asof, lookback_years=10)
+    - get_industry_pe_pct(taxonomy=SW1, asof, lookback_years=10, metrics=[PE,PB,PS])
+    - get_etf_flow(week_end, split_by=broad_and_industry)
+  macro_data_pit:                       # 见 §4.1.1 待建
+    - get_margin_flow(week_end)
+    - get_new_fund_issuance(week_end, type=equity)
+    - get_shareholder_change(week_end)
+    - get_industry_output(indicator, freq=M)
+    - get_macro_indicator(name=[CPI, PPI, GDP, PMI, 社融, LPR])
+    - get_us_macro(name=[非农, CPI, 联邦基金利率])
+  ai_industry_pit:                      # 见 §4.1.1 待建
+    - get_arena_rank(asof, categories=[text, frontend_code, vision])
+    - get_eci_history(asof)
+    - get_openrouter_share(asof, window=7d)
+    - get_silicon_data_token_index(asof)   # 招商 7-12 明确引用
+    - list_new_models(since, until)
+  news_pit:                             # 见 §4.1.1 待建
+    - search_news(days_back=7, region=[cn, overseas], top_n=30)
+    - get_hot_topics(window=7d, top_n=10)
+    - get_policy_docs(days_back=30, agency=any)
+
+# ---------------------------------------------------------------------
+# 生成期校验（editor Agent 一票否决线）
+# ---------------------------------------------------------------------
+validation:
+  numeric_source_required: true         # 每个数字必须挂 sources
+  pit_check: true                       # 所有数据日期 <= simulated_today
+  section_completeness: 6               # 6 段全部产出
+  chief_view_min_data_refs: 3           # 首席论点至少引用 3 个数据点
+  primary_theme_min_words: 1500
+  news_lists_10_and_10: true            # 国内 10 + 国外 10 条
+  broad_indices_pe_all_present: true    # 万得全 A/创业板/沪深 300/中证 500 缺一不可
+  sw1_valuation_rows: 30                # 申万一级 30 个必须齐
+
+# ---------------------------------------------------------------------
+# few-shot 语料库引用
+# ---------------------------------------------------------------------
+examples_refs:
+  good_openings: examples/good_openings.md
+  transition_phrases: examples/transition_phrases.md
+  valuation_narratives: examples/valuation_narratives.md
+  conclusion_patterns: examples/conclusion_patterns.md
+  # TODO: 从 3 份样本 PDF 里逐段抽 200 条以上开篇句/衔接词/结论套话

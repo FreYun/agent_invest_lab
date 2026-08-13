@@ -15,7 +15,7 @@ strategies:
   a500:
     title: 中证A500指数投资框架
     methodology: a500.md
-    target_index: "000510.SH"
+    target_index: "000510.CSI"
     default_buyable_fund_codes: ["022431"]
 
   zz500:
@@ -96,7 +96,7 @@ strategies:
   dividend:
     title: 中证红利投资框架
     methodology: dividend.md
-    target_index: "000922.CSI"
+    target_index: "000922.SH"
     default_buyable_fund_codes: ["012644"]
 
   innodrug:
